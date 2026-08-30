@@ -89,6 +89,9 @@ pub struct ChatCompletionChunk {
 /// A single streamed choice carrying an incremental [`ChunkDeltaWire`].
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct ChunkChoiceWire {
+    /// Choice index; streaming and unary paths both consume index zero.
+    #[serde(default)]
+    pub index: u32,
     /// The incremental delta for this choice.
     #[serde(default)]
     pub delta: ChunkDeltaWire,

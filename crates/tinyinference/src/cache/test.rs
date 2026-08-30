@@ -61,6 +61,28 @@ fn cache_key_is_deterministic() {
 }
 
 #[test]
+fn prompt_layout_detects_changed_content_with_stable_ids() {
+    let segment = PromptSegment {
+        id: "system".into(),
+        role: SegmentRole::System,
+        content: "same declared segment".into(),
+        cacheable: true,
+    };
+    let before = PromptCacheLayout::from_request(
+        &ModelRequest::new(vec![])
+            .with_cache_segment(segment.clone())
+            .with_prompt_fingerprint("before"),
+    );
+    let after = PromptCacheLayout::from_request(
+        &ModelRequest::new(vec![])
+            .with_cache_segment(segment)
+            .with_prompt_fingerprint("after"),
+    );
+    assert!(!before.is_prefix_stable_against(&after));
+    assert!(CacheLayoutEvent::new(&before, &after).changed_prefix);
+}
+
+#[test]
 fn cache_key_differs_for_different_requests() {
     let r1 = ModelRequest::new(vec![]).with_model("gpt-4");
     let r2 = ModelRequest::new(vec![]).with_model("claude-3");

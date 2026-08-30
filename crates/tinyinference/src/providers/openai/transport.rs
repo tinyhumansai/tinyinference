@@ -110,10 +110,15 @@ pub struct OpenAiModel {
 
 impl std::fmt::Debug for OpenAiModel {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let extra_header_names: Vec<&str> = self
+            .extra_headers
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect();
         formatter
             .debug_struct("OpenAiModel")
             .field("auth", &self.auth)
-            .field("extra_headers", &self.extra_headers)
+            .field("extra_header_names", &extra_header_names)
             .field("model", &self.model)
             .field("provider", &self.provider)
             .field("base_url", &self.base_url)
@@ -827,11 +832,25 @@ impl OpenAiModel {
         // handed tools gets the tool protocol embedded in its system prompt and no
         // native `tools` on the wire (many local runtimes 400 on `tools`). The
         // model's `<tool_call>` blocks are parsed back in [`Self::invoke`]/stream.
-        let prompt_guided_tools = !self.profile.tool_calling && !request.tools.is_empty();
+        let prompt_guided_tools = !self.profile.tool_calling
+            && !request.tools.is_empty()
+            && request.tool_choice != ToolChoice::None;
+        let prompt_tool_schemas = match &request.tool_choice {
+            ToolChoice::Tool(name) => request
+                .tools
+                .iter()
+                .filter(|tool| tool.name == *name)
+                .cloned()
+                .collect::<Vec<_>>(),
+            _ => request.tools.clone(),
+        };
         let instructed_messages;
         let base_messages: &[Message] = if prompt_guided_tools {
-            instructed_messages =
-                prompt_tools::with_tool_instructions(&request.messages, &request.tools);
+            instructed_messages = prompt_tools::with_tool_instructions(
+                &request.messages,
+                &prompt_tool_schemas,
+                &request.tool_choice,
+            );
             &instructed_messages
         } else {
             &request.messages
@@ -972,22 +991,30 @@ impl OpenAiModel {
     }
 
     /// Builds the `/v1/responses` request body from a provider-neutral request.
-    fn translate_responses_request(&self, request: &ModelRequest) -> responses::ResponsesRequest {
+    fn translate_responses_request(
+        &self,
+        request: &ModelRequest,
+    ) -> Result<responses::ResponsesRequest> {
         let model = request.model.clone().unwrap_or_else(|| self.model.clone());
-        let (instructions, input) = responses::build_responses_input(&request.messages);
+        let (instructions, input) = responses::build_responses_input(&request.messages)?;
         let max_output_tokens = if self.responses_omit_max_output_tokens {
             None
         } else {
             request.max_tokens
         };
-        responses::ResponsesRequest {
+        Ok(responses::ResponsesRequest {
             model,
             input,
             instructions,
             stream: None,
             store: Some(false),
             max_output_tokens,
-        }
+            tools: responses::responses_tools(&request.tools),
+            tool_choice: responses::responses_tool_choice(
+                &request.tool_choice,
+                !request.tools.is_empty(),
+            ),
+        })
     }
 
     /// Issues a `POST` to the Responses endpoint and maps the body onto a
@@ -996,7 +1023,7 @@ impl OpenAiModel {
     /// reject the cap outright).
     async fn invoke_responses(&self, request: &ModelRequest) -> Result<ModelResponse> {
         let url = self.responses_url();
-        let body = self.translate_responses_request(request);
+        let body = self.translate_responses_request(request)?;
         let response = match self.send_responses(&body, request.timeout_ms, &url).await {
             Ok(r) => r,
             Err(Error::Provider(err))
@@ -1019,7 +1046,7 @@ impl OpenAiModel {
             .await
             .map_err(|e| Error::Model(format!("openai responses body read failed: {e}")))?;
         let value: Value = serde_json::from_str(&text)?;
-        Ok(responses::parse_responses_response(value))
+        responses::parse_responses_response(value)
     }
 
     /// Shared `POST {responses_url}` with auth, query params, and timeout, mapped
@@ -1364,7 +1391,10 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
         let response = parse_chat_response(value, self.effective_reasoning_tags())?;
         // Prompt-guided tools: recover the model's `<tool_call>` blocks into
         // `message.tool_calls` when native tool calling was suppressed.
-        if !self.profile.tool_calling && !request.tools.is_empty() {
+        if !self.profile.tool_calling
+            && !request.tools.is_empty()
+            && request.tool_choice != ToolChoice::None
+        {
             return Ok(prompt_tools::apply_to_response(response));
         }
         Ok(response)
@@ -1430,7 +1460,10 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
             })?;
             let value: Value = serde_json::from_str(&text)?;
             let mut parsed = parse_chat_response(value, self.effective_reasoning_tags())?;
-            if !self.profile.tool_calling && !request.tools.is_empty() {
+            if !self.profile.tool_calling
+                && !request.tools.is_empty()
+                && request.tool_choice != ToolChoice::None
+            {
                 parsed = prompt_tools::apply_to_response(parsed);
             }
             let delta = crate::message::MessageDelta {
@@ -1470,7 +1503,10 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
         // Prompt-guided tools: recover `<tool_call>` blocks from the terminal
         // `Completed` response into `message.tool_calls` (the streamed text deltas
         // still carry the raw markup — cleaning them mid-stream is a follow-up).
-        if !self.profile.tool_calling && !request.tools.is_empty() {
+        if !self.profile.tool_calling
+            && !request.tools.is_empty()
+            && request.tool_choice != ToolChoice::None
+        {
             return Ok(Box::pin(stream.map(|item| match item {
                 ModelStreamItem::Completed(response) => {
                     ModelStreamItem::Completed(prompt_tools::apply_to_response(response))

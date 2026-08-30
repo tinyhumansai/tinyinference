@@ -6,6 +6,27 @@ use serde_json::json;
 
 use super::*;
 
+struct ShortEmbeddingModel;
+
+#[async_trait::async_trait]
+impl EmbeddingModel for ShortEmbeddingModel {
+    fn name(&self) -> &str {
+        "short"
+    }
+
+    fn model_id(&self) -> &str {
+        "short"
+    }
+
+    async fn embed(&self, _texts: &[String]) -> crate::Result<Vec<Vec<f32>>> {
+        Ok(vec![vec![1.0, 0.0]])
+    }
+
+    fn dimensions(&self) -> usize {
+        2
+    }
+}
+
 #[test]
 fn cosine_similarity_identical_is_one() {
     assert_eq!(cosine_similarity(&[1.0, 0.0, 0.0], &[1.0, 0.0, 0.0]), 1.0);
@@ -232,6 +253,65 @@ async fn retriever_empty_index_is_noop() {
     );
     retriever.index(vec![]).await.unwrap();
     assert!(retriever.retrieve("anything", 5).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn retriever_rejects_short_batches_before_writing() {
+    let store = Arc::new(InMemoryVectorStore::new());
+    let retriever = Retriever::new(Arc::new(ShortEmbeddingModel), store.clone());
+    let error = retriever
+        .index(vec![
+            ("one".into(), "one".into(), json!({})),
+            ("two".into(), "two".into(), json!({})),
+        ])
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("1 vectors for 2 documents"));
+    assert!(store.is_empty(), "partial batches must not mutate the store");
+}
+
+#[tokio::test]
+async fn noop_retriever_disables_semantic_index_and_query() {
+    let store = Arc::new(InMemoryVectorStore::new());
+    let retriever = Retriever::new(Arc::new(NoopEmbeddingModel), store.clone());
+    retriever
+        .index(vec![("one".into(), "one".into(), json!({}))])
+        .await
+        .unwrap();
+    assert!(store.is_empty());
+    assert!(retriever.retrieve("one", 1).await.unwrap().is_empty());
+}
+
+#[test]
+fn embedding_debug_output_redacts_credentials() {
+    for output in [
+        format!("{:?}", OpenAiEmbeddingModel::new("openai-secret")),
+        format!("{:?}", CohereEmbeddingModel::new("cohere-secret")),
+        format!("{:?}", VoyageEmbeddingModel::new("voyage-secret")),
+    ] {
+        assert!(output.contains("[REDACTED]"), "{output}");
+        assert!(!output.contains("secret"), "{output}");
+    }
+}
+
+#[test]
+fn openai_embeddings_follow_response_indices() {
+    let value = json!({
+        "data": [
+            {"index": 1, "embedding": [0.0, 1.0]},
+            {"index": 0, "embedding": [1.0, 0.0]}
+        ]
+    });
+    let vectors = super::openai::parse_vectors(&value, 2, 2).unwrap();
+    assert_eq!(vectors, vec![vec![1.0, 0.0], vec![0.0, 1.0]]);
+
+    let duplicate = json!({
+        "data": [
+            {"index": 0, "embedding": [1.0, 0.0]},
+            {"index": 0, "embedding": [0.0, 1.0]}
+        ]
+    });
+    assert!(super::openai::parse_vectors(&duplicate, 2, 2).is_err());
 }
 
 #[tokio::test]

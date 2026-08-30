@@ -1,45 +1,12 @@
 //! Tests for the harness model layer: `ModelRequest`/`ModelResponse` builders
-//! and accessors, `ModelProfile`/`CapabilitySet` matching, `ModelRegistry`
-//! resolution precedence (override, state reuse, hints, agent/registry
-//! default), and `StreamAccumulator`/`collect_model_stream` folding of streamed
+//! and accessors, `ModelProfile`/`CapabilitySet` matching, and
+//! `StreamAccumulator`/`collect_model_stream` folding of streamed
 //! items (deltas, usage, terminal `Completed`/`Failed`) into a response.
 
 use super::*;
 use crate::message::Message;
 use crate::usage::Usage;
-use async_trait::async_trait;
-use futures::StreamExt;
 use serde_json::json;
-
-struct StaticModel;
-
-#[async_trait]
-impl ChatModel<()> for StaticModel {
-    async fn invoke(&self, _state: &(), _request: ModelRequest) -> crate::Result<ModelResponse> {
-        Ok(ModelResponse::assistant("hello").with_usage(Usage::new(3, 1)))
-    }
-}
-
-struct ProfiledModel {
-    profile: ModelProfile,
-}
-
-impl ProfiledModel {
-    fn new(profile: ModelProfile) -> Self {
-        Self { profile }
-    }
-}
-
-#[async_trait]
-impl ChatModel<()> for ProfiledModel {
-    fn profile(&self) -> Option<&ModelProfile> {
-        Some(&self.profile)
-    }
-
-    async fn invoke(&self, _state: &(), _request: ModelRequest) -> crate::Result<ModelResponse> {
-        Ok(ModelResponse::assistant("profiled"))
-    }
-}
 
 #[test]
 fn request_builder_sets_fields() {
@@ -306,322 +273,7 @@ fn response_helpers() {
     assert_eq!(resp.resolved_model.unwrap().name, "fast");
 }
 
-#[tokio::test]
-async fn registry_register_get_default_and_stream() {
-    let mut registry: ModelRegistry<()> = ModelRegistry::new();
-    registry.register("default", Arc::new(StaticModel));
-    assert_eq!(registry.default_name(), Some("default"));
-    assert!(registry.get("default").is_some());
-    assert_eq!(registry.names(), vec!["default".to_string()]);
-
-    let model = registry.default_model().unwrap();
-    let resp = model.invoke(&(), ModelRequest::default()).await.unwrap();
-    assert_eq!(resp.text(), "hello");
-    assert_eq!(resp.usage.unwrap().total_tokens, 4);
-
-    let stream = model.stream(&(), ModelRequest::default()).await.unwrap();
-    let items: Vec<ModelStreamItem> = stream.collect().await;
-    // Default stream impl: Started + one MessageDelta + Completed.
-    assert!(matches!(items.first(), Some(ModelStreamItem::Started)));
-    assert!(matches!(items.last(), Some(ModelStreamItem::Completed(_))));
-    let text: String = items
-        .iter()
-        .filter_map(|item| match item {
-            ModelStreamItem::MessageDelta(delta) => Some(delta.text.clone()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(text, "hello");
-
-    let merged = crate::model::collect_model_stream(
-        model.stream(&(), ModelRequest::default()).await.unwrap(),
-    )
-    .await
-    .unwrap();
-    assert_eq!(merged.text(), "hello");
-}
-
-#[tokio::test]
-async fn registry_resolves_request_override_first() {
-    let mut registry: ModelRegistry<()> = ModelRegistry::new();
-    registry
-        .register("default", Arc::new(StaticModel))
-        .register("explicit", Arc::new(StaticModel));
-
-    let request = ModelRequest::default()
-        .with_model("explicit")
-        .with_model_hint(ModelHint {
-            model: "default".into(),
-            priority: 100,
-            reason: None,
-        });
-
-    let resolved = registry
-        .resolve_request(&request, Some("default"), None)
-        .unwrap()
-        .resolved;
-
-    assert_eq!(resolved.name, "explicit");
-    assert_eq!(resolved.source, ModelResolutionSource::RequestOverride);
-}
-
-#[tokio::test]
-async fn registry_reuses_previous_before_hints() {
-    let mut registry: ModelRegistry<()> = ModelRegistry::new();
-    registry
-        .register("default", Arc::new(StaticModel))
-        .register("previous", Arc::new(StaticModel))
-        .register("hint", Arc::new(StaticModel));
-
-    let request = ModelRequest::default()
-        .with_reuse_previous_model(true)
-        .with_model_hint(ModelHint {
-            model: "hint".into(),
-            priority: 100,
-            reason: None,
-        });
-
-    let previous = ResolvedModel {
-        name: "previous".into(),
-        requested: Some("previous".into()),
-        source: ModelResolutionSource::AgentDefault,
-    };
-
-    let resolved = registry
-        .resolve_request(&request, Some("default"), Some(previous))
-        .unwrap()
-        .resolved;
-
-    assert_eq!(resolved.name, "previous");
-    assert_eq!(resolved.source, ModelResolutionSource::StateReuse);
-}
-
-#[tokio::test]
-async fn registry_tries_hints_by_priority_then_agent_default_then_registry_default() {
-    let mut registry: ModelRegistry<()> = ModelRegistry::new();
-    registry
-        .register("registry_default", Arc::new(StaticModel))
-        .register("agent_default", Arc::new(StaticModel))
-        .register("strong_hint", Arc::new(StaticModel));
-
-    let request = ModelRequest::default()
-        .with_model_hint(ModelHint {
-            model: "missing".into(),
-            priority: 100,
-            reason: None,
-        })
-        .with_model_hint(ModelHint {
-            model: "strong_hint".into(),
-            priority: 10,
-            reason: None,
-        });
-
-    let resolved = registry
-        .resolve_request(&request, Some("agent_default"), None)
-        .unwrap()
-        .resolved;
-
-    assert_eq!(resolved.name, "strong_hint");
-    assert_eq!(resolved.source, ModelResolutionSource::Hint);
-
-    let resolved = registry
-        .resolve_request(&ModelRequest::default(), Some("agent_default"), None)
-        .unwrap()
-        .resolved;
-
-    assert_eq!(resolved.name, "agent_default");
-    assert_eq!(resolved.source, ModelResolutionSource::AgentDefault);
-
-    let resolved = registry
-        .resolve_request(&ModelRequest::default(), Some("missing"), None)
-        .unwrap()
-        .resolved;
-
-    assert_eq!(resolved.name, "registry_default");
-    assert_eq!(resolved.source, ModelResolutionSource::RegistryDefault);
-}
-
-#[tokio::test]
-async fn registry_filters_request_override_by_required_capabilities() {
-    let mut registry: ModelRegistry<()> = ModelRegistry::new();
-    registry
-        .register(
-            "plain",
-            Arc::new(ProfiledModel::new(ModelProfile::default())),
-        )
-        .register(
-            "tool_capable",
-            Arc::new(ProfiledModel::new(ModelProfile {
-                tool_calling: true,
-                ..ModelProfile::default()
-            })),
-        );
-
-    let request = ModelRequest::default()
-        .with_model("plain")
-        .with_model_hint(ModelHint {
-            model: "tool_capable".into(),
-            priority: 1,
-            reason: None,
-        })
-        .with_required_capabilities(CapabilitySet {
-            tool_calling: true,
-            ..CapabilitySet::default()
-        });
-
-    let resolved = registry
-        .resolve_request(&request, None, None)
-        .unwrap()
-        .resolved;
-    assert_eq!(resolved.name, "tool_capable");
-    assert_eq!(resolved.source, ModelResolutionSource::Hint);
-}
-
-#[tokio::test]
-async fn registry_filters_previous_hints_and_defaults_by_required_capabilities() {
-    let mut registry: ModelRegistry<()> = ModelRegistry::new();
-    registry
-        .register(
-            "registry_default",
-            Arc::new(ProfiledModel::new(ModelProfile::default())),
-        )
-        .register(
-            "previous",
-            Arc::new(ProfiledModel::new(ModelProfile::default())),
-        )
-        .register(
-            "weak_hint",
-            Arc::new(ProfiledModel::new(ModelProfile::default())),
-        )
-        .register(
-            "strong_hint",
-            Arc::new(ProfiledModel::new(ModelProfile {
-                streaming: true,
-                ..ModelProfile::default()
-            })),
-        )
-        .register(
-            "agent_default",
-            Arc::new(ProfiledModel::new(ModelProfile {
-                streaming: true,
-                ..ModelProfile::default()
-            })),
-        );
-
-    let previous = ResolvedModel {
-        name: "previous".into(),
-        requested: Some("previous".into()),
-        source: ModelResolutionSource::StateReuse,
-    };
-    let required = CapabilitySet {
-        streaming: true,
-        ..CapabilitySet::default()
-    };
-
-    let request = ModelRequest::default()
-        .with_reuse_previous_model(true)
-        .with_model_hint(ModelHint {
-            model: "weak_hint".into(),
-            priority: 100,
-            reason: None,
-        })
-        .with_model_hint(ModelHint {
-            model: "strong_hint".into(),
-            priority: 1,
-            reason: None,
-        })
-        .with_required_capabilities(required.clone());
-
-    let resolved = registry
-        .resolve_request(&request, Some("agent_default"), Some(previous))
-        .unwrap()
-        .resolved;
-    assert_eq!(resolved.name, "strong_hint");
-    assert_eq!(resolved.source, ModelResolutionSource::Hint);
-
-    let request = ModelRequest::default().with_required_capabilities(required);
-    let resolved = registry
-        .resolve_request(&request, Some("agent_default"), None)
-        .unwrap()
-        .resolved;
-    assert_eq!(resolved.name, "agent_default");
-    assert_eq!(resolved.source, ModelResolutionSource::AgentDefault);
-}
-
-#[tokio::test]
-async fn registry_rejects_unknown_profiles_when_capabilities_are_required() {
-    let mut registry: ModelRegistry<()> = ModelRegistry::new();
-    registry.register("unknown", Arc::new(StaticModel));
-
-    let request = ModelRequest::default().with_required_capabilities(CapabilitySet {
-        json_schema: true,
-        ..CapabilitySet::default()
-    });
-
-    assert!(registry.resolve_request(&request, None, None).is_none());
-}
-
-#[tokio::test]
-async fn registry_skips_retired_models_across_every_resolution_path() {
-    let retired = || {
-        Arc::new(ProfiledModel::new(ModelProfile {
-            status: ModelStatus::Retired,
-            ..ModelProfile::default()
-        }))
-    };
-    let mut registry: ModelRegistry<()> = ModelRegistry::new();
-    registry
-        .register("retired_default", retired())
-        .register("retired_override", retired())
-        .register("retired_hint", retired())
-        .register(
-            "stable_hint",
-            Arc::new(ProfiledModel::new(ModelProfile::default())),
-        )
-        .set_default("retired_default");
-
-    // Explicit override of a retired model is rejected.
-    let override_req = ModelRequest::default().with_model("retired_override");
-    assert!(
-        registry
-            .resolve_request(&override_req, None, None)
-            .is_none(),
-        "a retired override must not resolve"
-    );
-
-    // Fallback skips a higher-priority retired hint for a live one, and never
-    // falls through to the retired registry default.
-    let hint_req = ModelRequest::default()
-        .with_model_hint(ModelHint {
-            model: "retired_hint".into(),
-            priority: 100,
-            reason: None,
-        })
-        .with_model_hint(ModelHint {
-            model: "stable_hint".into(),
-            priority: 1,
-            reason: None,
-        });
-    let resolved = registry
-        .resolve_request(&hint_req, None, None)
-        .expect("live hint should resolve")
-        .resolved;
-    assert_eq!(resolved.name, "stable_hint");
-
-    // With only retired candidates, resolution yields nothing.
-    let bare = ModelRequest::default().with_model("retired_override");
-    assert!(registry.resolve_request(&bare, None, None).is_none());
-
-    // Opting in via `allow_retired` lets the retired model resolve again.
-    let allowed = registry.resolve(ModelSelection {
-        requested: Some("retired_override".into()),
-        allow_retired: true,
-        ..ModelSelection::default()
-    });
-    assert_eq!(allowed.unwrap().resolved.name, "retired_override");
-}
-
-#[test]
+ #[test]
 fn stream_accumulator_collects_reasoning_side_channel() {
     use crate::message::MessageDelta;
 
@@ -766,6 +418,20 @@ fn finish_names_reconstructed_tool_call_from_the_call_opening_delta_name() {
     assert_eq!(call.id, "call-1");
     assert_eq!(call.name, "search", "name carried from the opening delta");
     assert_eq!(call.arguments, serde_json::json!({ "q": "rust" }));
+}
+
+#[test]
+fn finish_marks_malformed_reconstructed_tool_arguments_invalid() {
+    let mut accumulator = StreamAccumulator::new();
+    accumulator.push(&ModelStreamItem::ToolCallDelta(crate::tool::ToolDelta {
+        call_id: "call-1".into(),
+        content: "{broken".into(),
+        tool_name: Some("search".into()),
+    }));
+    let response = accumulator.finish().unwrap();
+    let call = &response.message.tool_calls[0];
+    assert!(call.is_invalid());
+    assert_eq!(call.arguments, serde_json::Value::String("{broken".into()));
 }
 
 /// Round-trips a [`ModelStreamItem`] through JSON and asserts the re-serialized

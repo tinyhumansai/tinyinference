@@ -244,11 +244,18 @@ impl Retriever {
     /// metadata in stores that support in-place update (such as
     /// [`InMemoryVectorStore`]).
     pub async fn index(&self, docs: Vec<(String, String, Value)>) -> Result<()> {
-        if docs.is_empty() {
+        if docs.is_empty() || self.model.dimensions() == 0 {
             return Ok(());
         }
         let texts: Vec<String> = docs.iter().map(|(_, text, _)| text.clone()).collect();
         let vectors = self.model.embed(&texts).await?;
+        if vectors.len() != docs.len() {
+            return Err(crate::Error::Embedding(format!(
+                "embedding model returned {} vectors for {} documents",
+                vectors.len(),
+                docs.len()
+            )));
+        }
         for ((id, _text, metadata), vector) in docs.into_iter().zip(vectors) {
             self.store.add(id, vector, metadata).await?;
         }
@@ -267,6 +274,9 @@ impl Retriever {
     /// with a different embedding model. An empty store never errors: it
     /// answers every query with no hits.
     pub async fn retrieve(&self, query: &str, top_k: usize) -> Result<Vec<ScoredDoc>> {
+        if self.model.dimensions() == 0 {
+            return Ok(Vec::new());
+        }
         let query_vector = self.model.embed_query(query).await?;
         self.store.query(&query_vector, top_k).await
     }

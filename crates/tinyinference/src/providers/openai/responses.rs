@@ -19,8 +19,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::message::{AssistantMessage, ContentBlock, Message};
-use crate::model::ModelResponse;
+use crate::model::{ModelResponse, ToolChoice};
+use crate::tool::{ToolCall, ToolSchema};
 use crate::usage::Usage;
+use crate::{Error, Result};
 
 /// The `/v1/responses` request body.
 #[derive(Debug, Serialize)]
@@ -37,6 +39,10 @@ pub(super) struct ResponsesRequest {
     /// `max_tokens`. Omitted for the Codex OAuth backend, which rejects it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) max_output_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) tools: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) tool_choice: Option<Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -49,7 +55,10 @@ pub(super) struct ResponsesInput {
 pub(super) struct ResponsesContentPart {
     #[serde(rename = "type")]
     pub(super) kind: String,
-    pub(super) text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) image_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -64,8 +73,16 @@ pub(super) struct ResponsesResponse {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ResponsesOutput {
+    #[serde(rename = "type", default)]
+    pub(super) kind: Option<String>,
     #[serde(default)]
     pub(super) content: Vec<ResponsesContent>,
+    #[serde(default)]
+    pub(super) call_id: Option<String>,
+    #[serde(default)]
+    pub(super) name: Option<String>,
+    #[serde(default)]
+    pub(super) arguments: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -93,6 +110,61 @@ fn message_text(content: &[ContentBlock]) -> String {
         .join("")
 }
 
+fn input_parts(message: &Message) -> Result<Vec<ResponsesContentPart>> {
+    let role = normalize_role(message);
+    let content = match message {
+        Message::System(message) => &message.content,
+        Message::User(message) => &message.content,
+        Message::Assistant(message) => &message.content,
+        Message::Tool(message) => &message.content,
+    };
+    let mut parts = Vec::new();
+    for block in content {
+        match block {
+            ContentBlock::Text(text) if !text.trim().is_empty() => {
+                parts.push(ResponsesContentPart {
+                    kind: if role == "assistant" {
+                        "output_text".into()
+                    } else {
+                        "input_text".into()
+                    },
+                    text: Some(text.clone()),
+                    image_url: None,
+                });
+            }
+            ContentBlock::Json(value) => parts.push(ResponsesContentPart {
+                kind: if role == "assistant" {
+                    "output_text".into()
+                } else {
+                    "input_text".into()
+                },
+                text: Some(value.to_string()),
+                image_url: None,
+            }),
+            ContentBlock::Image(image) if matches!(message, Message::User(_)) => {
+                parts.push(ResponsesContentPart {
+                    kind: "input_image".into(),
+                    text: None,
+                    image_url: Some(image.url.clone()),
+                });
+            }
+            ContentBlock::Image(_) => {
+                return Err(Error::Validation(
+                    "Responses API images are supported only in user messages".into(),
+                ));
+            }
+            ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => {}
+            ContentBlock::ProviderExtension(_) => {
+                return Err(Error::Validation(
+                    "provider extension content cannot be represented by the Responses API".into(),
+                ));
+            }
+            ContentBlock::Text(_) => {}
+        }
+    }
+    Ok(parts)
+}
+
 /// Normalizes a message role for the Responses API: assistant + tool turns fold
 /// into `assistant` (which the API keys to `output_text`), everything else to
 /// `user` (`input_text`). Mirrors the host `normalize_responses_role`.
@@ -108,12 +180,14 @@ fn normalize_role(message: &Message) -> &'static str {
 /// the content-part `kind` tracks the *normalized* role (`output_text` for
 /// assistant/tool, `input_text` otherwise) — the API rejects `input_text` on an
 /// assistant item.
-pub(super) fn build_responses_input(messages: &[Message]) -> (Option<String>, Vec<ResponsesInput>) {
+pub(super) fn build_responses_input(
+    messages: &[Message],
+) -> Result<(Option<String>, Vec<ResponsesInput>)> {
     let mut instructions_parts = Vec::new();
     let mut input = Vec::new();
 
     for message in messages {
-        let text = match message {
+        match message {
             Message::System(m) => {
                 let t = message_text(&m.content);
                 if !t.trim().is_empty() {
@@ -121,29 +195,47 @@ pub(super) fn build_responses_input(messages: &[Message]) -> (Option<String>, Ve
                 }
                 continue;
             }
-            Message::User(m) => message_text(&m.content),
-            Message::Assistant(m) => message_text(&m.content),
-            Message::Tool(m) => message_text(&m.content),
-        };
-        if text.trim().is_empty() {
+            Message::User(_) | Message::Assistant(_) | Message::Tool(_) => {}
+        }
+        let content = input_parts(message)?;
+        if content.is_empty() {
             continue;
         }
         let role = normalize_role(message);
         input.push(ResponsesInput {
             role: role.to_string(),
-            content: vec![ResponsesContentPart {
-                kind: if role == "assistant" {
-                    "output_text".to_string()
-                } else {
-                    "input_text".to_string()
-                },
-                text,
-            }],
+            content,
         });
     }
 
     let instructions = (!instructions_parts.is_empty()).then(|| instructions_parts.join("\n\n"));
-    (instructions, input)
+    Ok((instructions, input))
+}
+
+pub(super) fn responses_tools(tools: &[ToolSchema]) -> Vec<Value> {
+    tools
+        .iter()
+        .map(|tool| {
+            serde_json::json!({
+                "type": "function",
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.parameters,
+            })
+        })
+        .collect()
+}
+
+pub(super) fn responses_tool_choice(choice: &ToolChoice, has_tools: bool) -> Option<Value> {
+    if !has_tools {
+        return None;
+    }
+    Some(match choice {
+        ToolChoice::Auto => Value::String("auto".into()),
+        ToolChoice::None => Value::String("none".into()),
+        ToolChoice::Required => Value::String("required".into()),
+        ToolChoice::Tool(name) => serde_json::json!({"type": "function", "name": name}),
+    })
 }
 
 /// Extracts the assistant text from a Responses body: the convenience
@@ -174,14 +266,33 @@ pub(super) fn extract_responses_text(response: &ResponsesResponse) -> Option<Str
 }
 
 /// Parses a raw `/v1/responses` JSON body into a [`ModelResponse`] (text reply).
-pub(super) fn parse_responses_response(value: Value) -> ModelResponse {
-    let parsed: ResponsesResponse =
-        serde_json::from_value(value.clone()).unwrap_or(ResponsesResponse {
-            output: Vec::new(),
-            output_text: None,
-            usage: None,
-        });
+pub(super) fn parse_responses_response(value: Value) -> Result<ModelResponse> {
+    let parsed: ResponsesResponse = serde_json::from_value(value.clone())?;
     let text = extract_responses_text(&parsed).unwrap_or_default();
+    let tool_calls = parsed
+        .output
+        .iter()
+        .filter(|item| item.kind.as_deref() == Some("function_call"))
+        .map(|item| {
+            let id = item.call_id.clone().ok_or_else(|| {
+                Error::Serialization(serde_json::Error::io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Responses function_call missing call_id",
+                )))
+            })?;
+            let name = item.name.clone().ok_or_else(|| {
+                Error::Serialization(serde_json::Error::io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Responses function_call missing name",
+                )))
+            })?;
+            let raw = item.arguments.clone().unwrap_or_else(|| "{}".into());
+            Ok(match serde_json::from_str(&raw) {
+                Ok(arguments) => ToolCall::new(id, name, arguments),
+                Err(error) => ToolCall::invalid(id, name, raw, error.to_string()),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
     let usage = parsed.usage.as_ref().map(|u| Usage {
         input_tokens: u.input_tokens.unwrap_or(0),
         output_tokens: u.output_tokens.unwrap_or(0),
@@ -192,14 +303,22 @@ pub(super) fn parse_responses_response(value: Value) -> ModelResponse {
         message: AssistantMessage {
             id: None,
             content: vec![ContentBlock::Text(text)],
-            tool_calls: Vec::new(),
+            tool_calls,
             usage,
         },
         usage,
-        finish_reason: Some("stop".to_string()),
+        finish_reason: Some(if parsed
+            .output
+            .iter()
+            .any(|item| item.kind.as_deref() == Some("function_call"))
+        {
+            "tool_calls".to_string()
+        } else {
+            "stop".to_string()
+        }),
         raw: Some(value),
         resolved_model: None,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -217,16 +336,16 @@ mod tests {
             Message::assistant("hello"),
             Message::user("  "), // empty → skipped
         ];
-        let (instructions, input) = build_responses_input(&messages);
+        let (instructions, input) = build_responses_input(&messages).unwrap();
         assert_eq!(instructions.as_deref(), Some("be terse\n\nand correct"));
         assert_eq!(input.len(), 2);
         assert_eq!(input[0].role, "user");
         assert_eq!(input[0].content[0].kind, "input_text");
-        assert_eq!(input[0].content[0].text, "hi");
+        assert_eq!(input[0].content[0].text.as_deref(), Some("hi"));
         // Assistant items must use `output_text`, not `input_text`.
         assert_eq!(input[1].role, "assistant");
         assert_eq!(input[1].content[0].kind, "output_text");
-        assert_eq!(input[1].content[0].text, "hello");
+        assert_eq!(input[1].content[0].text.as_deref(), Some("hello"));
     }
 
     #[test]
@@ -243,6 +362,7 @@ mod tests {
 
         let via_content = ResponsesResponse {
             output: vec![ResponsesOutput {
+                kind: Some("message".into()),
                 content: vec![
                     ResponsesContent {
                         kind: Some("reasoning".into()),
@@ -253,6 +373,9 @@ mod tests {
                         text: Some("answer".into()),
                     },
                 ],
+                call_id: None,
+                name: None,
+                arguments: None,
             }],
             output_text: None,
             usage: None,
@@ -276,7 +399,7 @@ mod tests {
             "output_text": "the answer",
             "usage": { "input_tokens": 12, "output_tokens": 5 }
         });
-        let resp = parse_responses_response(body);
+        let resp = parse_responses_response(body).unwrap();
         assert_eq!(resp.text(), "the answer");
         assert_eq!(resp.finish_reason.as_deref(), Some("stop"));
         let usage = resp.usage.expect("usage mapped");
@@ -287,7 +410,48 @@ mod tests {
 
     #[test]
     fn parse_tolerates_a_body_without_output() {
-        let resp = parse_responses_response(json!({ "id": "resp_1" }));
+        let resp = parse_responses_response(json!({ "id": "resp_1" })).unwrap();
         assert_eq!(resp.text(), "");
+    }
+
+    #[test]
+    fn parse_rejects_incompatible_output_shape() {
+        assert!(parse_responses_response(json!({"output": "not-an-array"})).is_err());
+    }
+
+    #[test]
+    fn build_input_preserves_user_images() {
+        use crate::message::{ImageRef, UserMessage};
+
+        let message = Message::User(UserMessage {
+            content: vec![
+                ContentBlock::Text("inspect".into()),
+                ContentBlock::Image(ImageRef {
+                    url: "https://example.test/image.png".into(),
+                    mime_type: Some("image/png".into()),
+                }),
+            ],
+        });
+        let (_, input) = build_responses_input(&[message]).unwrap();
+        assert_eq!(input[0].content.len(), 2);
+        assert_eq!(input[0].content[1].kind, "input_image");
+        assert_eq!(
+            input[0].content[1].image_url.as_deref(),
+            Some("https://example.test/image.png")
+        );
+    }
+
+    #[test]
+    fn responses_request_preserves_tools_and_choice() {
+        let tools = vec![ToolSchema::new(
+            "lookup",
+            "Look up a value",
+            json!({"type": "object"}),
+        )];
+        assert_eq!(responses_tools(&tools)[0]["name"], "lookup");
+        assert_eq!(
+            responses_tool_choice(&ToolChoice::Tool("lookup".into()), true).unwrap()["name"],
+            "lookup"
+        );
     }
 }

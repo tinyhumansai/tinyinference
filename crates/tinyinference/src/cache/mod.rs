@@ -245,10 +245,18 @@ impl PromptCacheLayout {
     /// full request hash.
     pub fn from_request(request: &ModelRequest) -> Self {
         let prefix_ids: Vec<String> = request.cacheable_prefix_ids();
-        let fingerprint = fnv1a_hex(prefix_ids.join(",").as_bytes());
+        let fingerprint = fnv1a_hex(
+            format!(
+                "{}\0{}",
+                prefix_ids.join(","),
+                request.prompt_fingerprint.as_deref().unwrap_or_default()
+            )
+            .as_bytes(),
+        );
         Self {
             prefix_ids,
             fingerprint,
+            content_fingerprint: request.prompt_fingerprint.clone(),
         }
     }
 
@@ -269,6 +277,7 @@ impl PromptCacheLayout {
     /// across the two requests.
     pub fn is_prefix_stable_against(&self, other: &PromptCacheLayout) -> bool {
         self.prefix_ids == other.prefix_ids
+            && self.content_fingerprint == other.content_fingerprint
     }
 }
 

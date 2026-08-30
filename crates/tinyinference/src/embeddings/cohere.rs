@@ -15,7 +15,6 @@ pub const COHERE_DEFAULT_MODEL: &str = "embed-english-v3.0";
 pub const COHERE_DEFAULT_DIMENSIONS: usize = 1024;
 
 /// Native Cohere `/v2/embed` client.
-#[derive(Debug)]
 pub struct CohereEmbeddingModel {
     client: reqwest::Client,
     api_key: String,
@@ -23,6 +22,19 @@ pub struct CohereEmbeddingModel {
     dimensions: usize,
     base_url: String,
     query_mode: bool,
+}
+
+impl std::fmt::Debug for CohereEmbeddingModel {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CohereEmbeddingModel")
+            .field("api_key", &"[REDACTED]")
+            .field("model", &self.model)
+            .field("dimensions", &self.dimensions)
+            .field("base_url", &self.base_url)
+            .field("query_mode", &self.query_mode)
+            .finish_non_exhaustive()
+    }
 }
 
 impl CohereEmbeddingModel {
@@ -137,16 +149,8 @@ impl EmbeddingModel for CohereEmbeddingModel {
                     .get(reqwest::header::RETRY_AFTER)
                     .and_then(|value| value.to_str().ok())
                     .map(str::to_owned);
-                let status = current.status();
                 let _ = current.text().await;
                 let delay_ms = backoff_ms_for_attempt(attempt, retry_after.as_deref());
-                tracing::debug!(
-                    target: "tinyagents::embeddings::cohere",
-                    %status,
-                    attempt,
-                    delay_ms,
-                    "[embeddings] retrying transient Cohere response"
-                );
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                 continue;
             }

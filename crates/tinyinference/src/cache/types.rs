@@ -90,6 +90,8 @@ pub struct PromptCacheLayout {
     pub(crate) prefix_ids: Vec<String>,
     /// Deterministic fingerprint of the ordered prefix ids.
     pub(crate) fingerprint: String,
+    /// Caller-computed stable-prefix content fingerprint, when available.
+    pub(crate) content_fingerprint: Option<String>,
 }
 
 // ── CacheLayoutEvent ──────────────────────────────────────────────────────────

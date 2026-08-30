@@ -95,11 +95,6 @@ impl OllamaEmbeddingModel {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             if status.as_u16() == 500 && is_nan_encode_error(&body) {
-                tracing::warn!(
-                    target: "tinyagents::embeddings::ollama",
-                    model = self.model,
-                    "[embeddings] Ollama input produced NaN"
-                );
                 return Err(Error::Embedding(
                     "Ollama could not encode input without NaN values".into(),
                 ));
@@ -269,12 +264,13 @@ impl EmbeddingModel for OllamaEmbeddingModel {
             .iter()
             .enumerate()
             .filter_map(|(index, text)| {
-                let text = text.trim();
-                (!text.is_empty()).then(|| (index, text.to_owned()))
+                (!text.trim().is_empty()).then(|| (index, text.clone()))
             })
             .collect::<Vec<_>>();
         if live.is_empty() {
-            return Ok(vec![Vec::new(); texts.len()]);
+            return Err(Error::Validation(
+                "Ollama embedding batches must not contain blank inputs".into(),
+            ));
         }
         if live.len() != texts.len() {
             return Err(Error::Validation(
@@ -290,12 +286,6 @@ impl EmbeddingModel for OllamaEmbeddingModel {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             if status.as_u16() == 500 && is_nan_encode_error(&body) {
-                tracing::warn!(
-                    target: "tinyagents::embeddings::ollama",
-                    batch = live.len(),
-                    model = self.model,
-                    "[embeddings] recovering Ollama NaN batch per text"
-                );
                 if live.len() == 1 {
                     return Err(Error::Embedding(
                         "Ollama could not encode input without NaN values".into(),
@@ -346,10 +336,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn blank_inputs_preserve_positions_without_network() {
+    async fn blank_inputs_are_rejected_without_network() {
         let model = OllamaEmbeddingModel::default();
-        let vectors = model.embed(&[" ".into(), "\n".into()]).await.unwrap();
-        assert_eq!(vectors, vec![Vec::<f32>::new(), Vec::new()]);
+        let error = model.embed(&[" ".into(), "\n".into()]).await.unwrap_err();
+        assert!(matches!(error, Error::Validation(_)));
     }
 
     #[test]

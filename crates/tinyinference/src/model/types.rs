@@ -11,9 +11,7 @@
 //! profiles ([`ModelProfile`]/[`CapabilitySet`]), model-resolution inputs, and
 //! prompt-cache layout metadata.
 
-use std::collections::HashMap;
 use std::pin::Pin;
-use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::Stream;
@@ -472,8 +470,9 @@ pub struct ProviderError {
 /// more [`ModelStreamItem::MessageDelta`] / [`ModelStreamItem::ToolCallDelta`] /
 /// [`ModelStreamItem::UsageDelta`] items as the provider produces output, and
 /// terminates with exactly one of [`ModelStreamItem::Completed`] (carrying the
-/// fully merged response) or [`ModelStreamItem::Failed`] (carrying an error
-/// message). Providers that can build an authoritative final response — such as
+/// fully merged response), [`ModelStreamItem::Failed`] (carrying an error
+/// message), or [`ModelStreamItem::ProviderFailed`] (carrying normalized
+/// provider details). Providers that can build an authoritative final response — such as
 /// the OpenAI adapter — emit it via [`ModelStreamItem::Completed`] so the
 /// merged response preserves tool-call names and ids that individual deltas may
 /// omit.
@@ -554,41 +553,6 @@ pub trait ChatModel<State: Send + Sync>: Send + Sync {
             ModelStreamItem::Completed(response),
         ];
         Ok(Box::pin(futures::stream::iter(items)))
-    }
-}
-
-/// A name-keyed registry of chat models with an optional default selection.
-pub struct ModelRegistry<State: Send + Sync> {
-    pub(crate) models: HashMap<String, Arc<dyn ChatModel<State>>>,
-    pub(crate) default: Option<String>,
-}
-
-impl<State: Send + Sync> std::fmt::Debug for ModelRegistry<State> {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut names: Vec<&str> = self.models.keys().map(String::as_str).collect();
-        names.sort_unstable();
-        formatter
-            .debug_struct("ModelRegistry")
-            .field("models", &names)
-            .field("default", &self.default)
-            .finish()
-    }
-}
-
-/// Executable model plus durable resolution metadata.
-pub struct ResolvedModelBinding<State: Send + Sync> {
-    /// Durable selected-model record.
-    pub resolved: ResolvedModel,
-    /// Executable model handle.
-    pub model: Arc<dyn ChatModel<State>>,
-}
-
-impl<State: Send + Sync> std::fmt::Debug for ResolvedModelBinding<State> {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("ResolvedModelBinding")
-            .field("resolved", &self.resolved)
-            .finish_non_exhaustive()
     }
 }
 

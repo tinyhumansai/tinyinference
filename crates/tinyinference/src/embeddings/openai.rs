@@ -38,7 +38,6 @@ const DEFAULT_DIMENSIONS: usize = 1536;
 /// # Ok(())
 /// # }
 /// ```
-#[derive(Debug)]
 pub struct OpenAiEmbeddingModel {
     client: reqwest::Client,
     api_key: String,
@@ -47,6 +46,20 @@ pub struct OpenAiEmbeddingModel {
     dimensions: usize,
     send_dimensions: bool,
     requires_api_key: bool,
+}
+
+impl std::fmt::Debug for OpenAiEmbeddingModel {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OpenAiEmbeddingModel")
+            .field("api_key", &"[REDACTED]")
+            .field("model", &self.model)
+            .field("base_url", &self.base_url)
+            .field("dimensions", &self.dimensions)
+            .field("send_dimensions", &self.send_dimensions)
+            .field("requires_api_key", &self.requires_api_key)
+            .finish_non_exhaustive()
+    }
 }
 
 impl OpenAiEmbeddingModel {
@@ -201,16 +214,8 @@ impl EmbeddingModel for OpenAiEmbeddingModel {
                     .get(reqwest::header::RETRY_AFTER)
                     .and_then(|value| value.to_str().ok())
                     .map(str::to_owned);
-                let status = current.status();
                 let _ = current.text().await;
                 let delay_ms = backoff_ms_for_attempt(attempt, retry_after.as_deref());
-                tracing::debug!(
-                    target: "tinyagents::embeddings::openai",
-                    %status,
-                    attempt,
-                    delay_ms,
-                    "[embeddings] retrying transient OpenAI-compatible response"
-                );
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                 continue;
             }
@@ -231,52 +236,82 @@ impl EmbeddingModel for OpenAiEmbeddingModel {
         }
 
         let value: Value = serde_json::from_str(&text)?;
-        let data = value
-            .get("data")
-            .and_then(|d| d.as_array())
-            .ok_or_else(|| {
-                Error::Embedding("openai embeddings response missing `data` array".into())
-            })?;
-        let mut vectors = Vec::with_capacity(data.len());
-        for item in data {
-            let embedding = item
-                .get("embedding")
-                .and_then(|e| e.as_array())
-                .ok_or_else(|| {
-                    Error::Embedding("openai embeddings response missing `embedding` array".into())
-                })?;
-            let vector = embedding
-                .iter()
-                .map(|n| {
-                    n.as_f64().map(|value| value as f32).ok_or_else(|| {
-                        Error::Embedding(
-                            "openai embeddings response contains a non-numeric value".into(),
-                        )
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
-            if self.dimensions > 0 && vector.len() != self.dimensions {
-                return Err(Error::Embedding(format!(
-                    "openai embed dimension mismatch: expected {}, got {}",
-                    self.dimensions,
-                    vector.len()
-                )));
-            }
-            vectors.push(vector);
-        }
-        if vectors.len() != texts.len() {
-            return Err(Error::Embedding(format!(
-                "openai embed count mismatch: sent {} texts, got {} embeddings",
-                texts.len(),
-                vectors.len()
-            )));
-        }
-        Ok(vectors)
+        parse_vectors(&value, texts.len(), self.dimensions)
     }
 
     fn dimensions(&self) -> usize {
         self.dimensions
     }
+}
+
+pub(super) fn parse_vectors(
+    value: &Value,
+    expected_count: usize,
+    dimensions: usize,
+) -> Result<Vec<Vec<f32>>> {
+    let data = value
+        .get("data")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::Embedding("openai embeddings response missing `data` array".into()))?;
+    if data.len() != expected_count {
+        return Err(Error::Embedding(format!(
+            "openai embed count mismatch: sent {expected_count} texts, got {} embeddings",
+            data.len()
+        )));
+    }
+
+    let mut vectors: Vec<Option<Vec<f32>>> = vec![None; expected_count];
+    for item in data {
+        let index = item
+            .get("index")
+            .and_then(Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok())
+            .ok_or_else(|| Error::Embedding("openai embedding is missing a valid `index`".into()))?;
+        if index >= expected_count {
+            return Err(Error::Embedding(format!(
+                "openai embedding index {index} is out of range for {expected_count} inputs"
+            )));
+        }
+        if vectors[index].is_some() {
+            return Err(Error::Embedding(format!(
+                "openai embeddings response contains duplicate index {index}"
+            )));
+        }
+        let embedding = item
+            .get("embedding")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                Error::Embedding("openai embeddings response missing `embedding` array".into())
+            })?;
+        let vector = embedding
+            .iter()
+            .map(|number| {
+                number.as_f64().map(|value| value as f32).ok_or_else(|| {
+                    Error::Embedding(
+                        "openai embeddings response contains a non-numeric value".into(),
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if dimensions > 0 && vector.len() != dimensions {
+            return Err(Error::Embedding(format!(
+                "openai embed dimension mismatch: expected {dimensions}, got {}",
+                vector.len()
+            )));
+        }
+        vectors[index] = Some(vector);
+    }
+    vectors
+        .into_iter()
+        .enumerate()
+        .map(|(index, vector)| {
+            vector.ok_or_else(|| {
+                Error::Embedding(format!(
+                    "openai embeddings response is missing index {index}"
+                ))
+            })
+        })
+        .collect()
 }
 
 fn embeddings_url(base_url: &str) -> String {

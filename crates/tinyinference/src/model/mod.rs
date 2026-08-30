@@ -5,17 +5,15 @@
 //! or a node inside a subgraph — ultimately bottoms out in a [`ChatModel`] call
 //! routed through this provider-neutral request/response shape. Because the
 //! shapes are uniform, "a model calling a model" is the same typed surface at
-//! every depth, with the [`ModelRegistry`] resolving *which* model answers each
-//! nested call.
+//! every depth, while the consuming runtime decides which configured model
+//! answers each call.
 //!
 //! The private `types` module holds definitions. This module provides builder methods on
-//! [`ModelRequest`], accessors on [`ModelResponse`], the [`ModelRegistry`]
-//! resolution logic, and the [`StreamAccumulator`] that folds a real
+//! [`ModelRequest`], accessors on [`ModelResponse`], and the
+//! [`StreamAccumulator`] that folds a real
 //! [`ModelStream`] back into a single [`ModelResponse`].
 
 mod types;
-
-use std::sync::Arc;
 
 use futures::StreamExt;
 use serde_json::Value;
@@ -416,205 +414,6 @@ impl ModelResponse {
     }
 }
 
-impl<State: Send + Sync> ModelRegistry<State> {
-    /// Creates an empty registry.
-    pub fn new() -> Self {
-        Self {
-            models: std::collections::HashMap::new(),
-            default: None,
-        }
-    }
-
-    /// Registers a model under `name`. The first registered model becomes the
-    /// default unless one is already set.
-    pub fn register(
-        &mut self,
-        name: impl Into<String>,
-        model: Arc<dyn ChatModel<State>>,
-    ) -> &mut Self {
-        let name = name.into();
-        if self.default.is_none() {
-            self.default = Some(name.clone());
-        }
-        self.models.insert(name, model);
-        self
-    }
-
-    /// Sets the default model name.
-    pub fn set_default(&mut self, name: impl Into<String>) -> &mut Self {
-        self.default = Some(name.into());
-        self
-    }
-
-    /// Looks up a model by name.
-    pub fn get(&self, name: &str) -> Option<Arc<dyn ChatModel<State>>> {
-        self.models.get(name).cloned()
-    }
-
-    /// Returns the default model, if one is configured.
-    pub fn default_model(&self) -> Option<Arc<dyn ChatModel<State>>> {
-        self.default.as_deref().and_then(|name| self.get(name))
-    }
-
-    /// Returns the configured default model name.
-    pub fn default_name(&self) -> Option<&str> {
-        self.default.as_deref()
-    }
-
-    /// Resolves a model using request override, previous state, hints,
-    /// agent default, and finally registry default.
-    pub fn resolve(&self, selection: ModelSelection) -> Option<ResolvedModelBinding<State>> {
-        let required = selection.required_capabilities.as_ref();
-        let allow_retired = selection.allow_retired;
-        if let Some(requested) = selection.requested
-            && let Some(model) = self.get(&requested)
-            && model_eligible(model.as_ref(), required, allow_retired)
-        {
-            return Some(ResolvedModelBinding {
-                resolved: ResolvedModel {
-                    name: requested.clone(),
-                    requested: Some(requested),
-                    source: ModelResolutionSource::RequestOverride,
-                },
-                model,
-            });
-        }
-
-        if selection.reuse_previous
-            && let Some(previous) = selection.previous
-            && let Some(model) = self.get(&previous.name)
-            && model_eligible(model.as_ref(), required, allow_retired)
-        {
-            return Some(ResolvedModelBinding {
-                resolved: ResolvedModel {
-                    name: previous.name,
-                    requested: previous.requested,
-                    source: ModelResolutionSource::StateReuse,
-                },
-                model,
-            });
-        }
-
-        let mut hints: Vec<(usize, ModelHint)> = selection.hints.into_iter().enumerate().collect();
-        hints.sort_by(|(left_index, left), (right_index, right)| {
-            right
-                .priority
-                .cmp(&left.priority)
-                .then_with(|| left_index.cmp(right_index))
-        });
-
-        for (_, hint) in hints {
-            if let Some(model) = self.get(&hint.model)
-                && model_eligible(model.as_ref(), required, allow_retired)
-            {
-                return Some(ResolvedModelBinding {
-                    resolved: ResolvedModel {
-                        name: hint.model.clone(),
-                        requested: Some(hint.model),
-                        source: ModelResolutionSource::Hint,
-                    },
-                    model,
-                });
-            }
-        }
-
-        if let Some(agent_default) = selection.agent_default
-            && let Some(model) = self.get(&agent_default)
-            && model_eligible(model.as_ref(), required, allow_retired)
-        {
-            return Some(ResolvedModelBinding {
-                resolved: ResolvedModel {
-                    name: agent_default.clone(),
-                    requested: Some(agent_default),
-                    source: ModelResolutionSource::AgentDefault,
-                },
-                model,
-            });
-        }
-
-        let name = self.default_name()?.to_string();
-        self.default_model()
-            .filter(|model| model_eligible(model.as_ref(), required, allow_retired))
-            .map(|model| ResolvedModelBinding {
-                resolved: ResolvedModel {
-                    name,
-                    requested: None,
-                    source: ModelResolutionSource::RegistryDefault,
-                },
-                model,
-            })
-    }
-
-    /// Resolves a model for one request with optional agent and previous-state
-    /// context.
-    pub fn resolve_request(
-        &self,
-        request: &ModelRequest,
-        agent_default: Option<&str>,
-        previous: Option<ResolvedModel>,
-    ) -> Option<ResolvedModelBinding<State>> {
-        self.resolve(ModelSelection {
-            requested: request.model.clone(),
-            previous,
-            reuse_previous: request.reuse_previous_model,
-            hints: request.model_hints.clone(),
-            agent_default: agent_default.map(ToOwned::to_owned),
-            required_capabilities: request.required_capabilities.clone(),
-            allow_retired: false,
-        })
-    }
-
-    /// Returns registered model names in sorted order.
-    pub fn names(&self) -> Vec<String> {
-        let mut names: Vec<String> = self.models.keys().cloned().collect();
-        names.sort();
-        names
-    }
-}
-
-fn model_satisfies<State: Send + Sync>(
-    model: &dyn ChatModel<State>,
-    required: Option<&CapabilitySet>,
-) -> bool {
-    match required {
-        None => true,
-        Some(required) if required == &CapabilitySet::default() => true,
-        Some(required) => model
-            .profile()
-            .is_some_and(|profile| profile.satisfies(required)),
-    }
-}
-
-/// A model is eligible for resolution when it satisfies the required
-/// capabilities *and* is not lifecycle-excluded. Unless `allow_retired` is set,
-/// a model whose profile reports [`ModelStatus::Retired`] is rejected so a
-/// provider-retired model is never selected. A model with no profile carries no
-/// lifecycle facts, so it is treated as usable (consistent with capability
-/// gating, which only rejects a model when a profile is present and fails).
-///
-/// Agent runtimes use this to apply the same lifecycle and capability gate to
-/// fallback candidates that [`ModelRegistry::resolve`] applies to a primary
-/// selection.
-pub fn model_eligible<State: Send + Sync>(
-    model: &dyn ChatModel<State>,
-    required: Option<&CapabilitySet>,
-    allow_retired: bool,
-) -> bool {
-    if !model_satisfies(model, required) {
-        return false;
-    }
-    if allow_retired {
-        return true;
-    }
-    model.profile().is_none_or(ModelProfile::is_usable)
-}
-
-impl<State: Send + Sync> Default for ModelRegistry<State> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 // ---------------------------------------------------------------------------
 // StreamAccumulator
 // ---------------------------------------------------------------------------
@@ -790,11 +589,12 @@ impl StreamAccumulator {
         let tool_calls = self
             .tool_chunks
             .into_iter()
-            .map(|(id, args, name)| ToolCall {
-                name: name.unwrap_or_default(),
-                arguments: serde_json::from_str(&args).unwrap_or(Value::Null),
-                id,
-                invalid: None,
+            .map(|(id, args, name)| {
+                let name = name.unwrap_or_default();
+                match serde_json::from_str(&args) {
+                    Ok(arguments) => ToolCall::new(id, name, arguments),
+                    Err(error) => ToolCall::invalid(id, name, args, error.to_string()),
+                }
             })
             .collect();
         let message = AssistantMessage {

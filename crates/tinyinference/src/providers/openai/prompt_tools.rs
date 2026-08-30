@@ -17,7 +17,7 @@ use std::fmt::Write as _;
 use serde_json::{Map, Value};
 
 use crate::message::{ContentBlock, Message};
-use crate::model::ModelResponse;
+use crate::model::{ModelResponse, ToolChoice};
 use crate::tool::{ToolCall, ToolSchema};
 
 /// Opening / closing delimiters for a text-mode tool call.
@@ -27,7 +27,7 @@ const CLOSE_TAG: &str = "</tool_call>";
 /// Build the tool-use protocol block appended to the system prompt when native
 /// tool calling is unavailable. Describes the `<tool_call>` convention and lists
 /// each tool's name, description, and JSON-Schema parameters.
-pub(super) fn tool_instructions(tools: &[ToolSchema]) -> String {
+pub(super) fn tool_instructions(tools: &[ToolSchema], choice: &ToolChoice) -> String {
     let mut out = String::new();
     out.push_str("## Tool Use Protocol\n\n");
     out.push_str("To use a tool, wrap a JSON object in <tool_call></tool_call> tags:\n\n");
@@ -37,6 +37,14 @@ pub(super) fn tool_instructions(tools: &[ToolSchema]) -> String {
     out.push('\n');
     out.push_str(CLOSE_TAG);
     out.push_str("\n\n");
+    match choice {
+        ToolChoice::Required => out.push_str("You must emit at least one tool call. "),
+        ToolChoice::Tool(name) => {
+            let _ = write!(out, "You must call the `{name}` tool. ");
+        }
+        ToolChoice::Auto => out.push_str("Tool use is optional. "),
+        ToolChoice::None => return String::new(),
+    }
     out.push_str("You may emit multiple tool calls in a single response. ");
     out.push_str("After execution, results appear in <tool_result> tags. ");
     out.push_str("Continue reasoning with the results until you can give a final answer.\n\n");
@@ -54,11 +62,15 @@ pub(super) fn tool_instructions(tools: &[ToolSchema]) -> String {
 /// the instructions are added as a trailing block on the first system message, or
 /// a new leading system message when the request carries none. `tools` empty →
 /// `messages` is returned unchanged (cloned).
-pub(super) fn with_tool_instructions(messages: &[Message], tools: &[ToolSchema]) -> Vec<Message> {
+pub(super) fn with_tool_instructions(
+    messages: &[Message],
+    tools: &[ToolSchema],
+    choice: &ToolChoice,
+) -> Vec<Message> {
     if tools.is_empty() {
         return messages.to_vec();
     }
-    let block = tool_instructions(tools);
+    let block = tool_instructions(tools, choice);
     let mut out = messages.to_vec();
     if let Some(Message::System(system)) = out.iter_mut().find(|m| matches!(m, Message::System(_)))
     {
@@ -114,11 +126,13 @@ pub(super) fn apply_to_response(mut response: ModelResponse) -> ModelResponse {
         return response;
     }
     response.message.tool_calls.extend(calls);
-    response.message.content = if cleaned.is_empty() {
-        Vec::new()
-    } else {
-        vec![ContentBlock::Text(cleaned)]
-    };
+    response
+        .message
+        .content
+        .retain(|block| !matches!(block, ContentBlock::Text(_)));
+    if !cleaned.is_empty() {
+        response.message.content.push(ContentBlock::Text(cleaned));
+    }
     response
 }
 
@@ -153,7 +167,10 @@ mod test {
 
     #[test]
     fn instructions_list_each_tool() {
-        let text = tool_instructions(&[schema("read_file"), schema("write_file")]);
+        let text = tool_instructions(
+            &[schema("read_file"), schema("write_file")],
+            &ToolChoice::Auto,
+        );
         assert!(text.contains("## Tool Use Protocol"));
         assert!(text.contains("<tool_call>"));
         assert!(text.contains("**read_file**"));
@@ -163,7 +180,7 @@ mod test {
     #[test]
     fn with_tool_instructions_appends_to_system() {
         let msgs = vec![Message::system("You are helpful."), Message::user("hi")];
-        let out = with_tool_instructions(&msgs, &[schema("read_file")]);
+        let out = with_tool_instructions(&msgs, &[schema("read_file")], &ToolChoice::Auto);
         assert_eq!(out.len(), 2);
         let Message::System(sys) = &out[0] else {
             panic!("first message should stay system")
@@ -184,7 +201,7 @@ mod test {
     #[test]
     fn with_tool_instructions_inserts_system_when_absent() {
         let msgs = vec![Message::user("hi")];
-        let out = with_tool_instructions(&msgs, &[schema("read_file")]);
+        let out = with_tool_instructions(&msgs, &[schema("read_file")], &ToolChoice::Auto);
         assert_eq!(out.len(), 2);
         assert!(matches!(out[0], Message::System(_)));
     }
@@ -192,7 +209,10 @@ mod test {
     #[test]
     fn empty_tools_leaves_messages_unchanged() {
         let msgs = vec![Message::user("hi")];
-        assert_eq!(with_tool_instructions(&msgs, &[]), msgs);
+        assert_eq!(
+            with_tool_instructions(&msgs, &[], &ToolChoice::Auto),
+            msgs
+        );
     }
 
     #[test]
@@ -247,5 +267,23 @@ mod test {
         let (cleaned, calls) = parse_tool_calls_from_text("just a normal answer");
         assert!(calls.is_empty());
         assert_eq!(cleaned, "just a normal answer");
+    }
+
+    #[test]
+    fn applying_prompt_tool_calls_preserves_reasoning_blocks() {
+        let mut response = ModelResponse::assistant(
+            "answer <tool_call>{\"name\":\"lookup\",\"arguments\":{}}</tool_call>",
+        );
+        response
+            .message
+            .content
+            .insert(0, ContentBlock::thinking("reasoning"));
+        let response = apply_to_response(response);
+        assert!(matches!(
+            response.message.content.first(),
+            Some(ContentBlock::Thinking { text, .. }) if text == "reasoning"
+        ));
+        assert_eq!(response.text(), "answer");
+        assert_eq!(response.tool_calls().len(), 1);
     }
 }

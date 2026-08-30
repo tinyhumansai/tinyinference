@@ -59,12 +59,29 @@ pub(super) fn translate_message(message: &Message) -> Result<ChatMessageWire> {
         }
         Message::Tool(tool) => ChatMessageWire {
             role: "tool".to_string(),
-            content: Some(MessageContentWire::Text(message.text())),
+            content: Some(MessageContentWire::Text(translate_tool_content(
+                &tool.content,
+            )?)),
             tool_calls: Vec::new(),
             tool_call_id: Some(tool.tool_call_id.clone()),
         },
     };
     Ok(wire)
+}
+
+fn translate_tool_content(blocks: &[ContentBlock]) -> Result<String> {
+    let mut text = String::new();
+    for block in blocks {
+        match block {
+            ContentBlock::Text(value) => text.push_str(value),
+            ContentBlock::Json(value) => text.push_str(&value.to_string()),
+            ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => {}
+            ContentBlock::Image(_) | ContentBlock::ProviderExtension(_) => {
+                return Err(unrepresentable_block_error());
+            }
+        }
+    }
+    Ok(text)
 }
 
 /// Renders user-message content blocks into OpenAI message content.

@@ -226,6 +226,19 @@ fn translates_assistant_tool_calls_to_stringified_arguments() {
 }
 
 #[test]
+fn translates_structured_tool_result_content() {
+    let request = ModelRequest::new(vec![Message::Tool(crate::message::ToolMessage {
+        tool_call_id: "call-1".into(),
+        content: vec![ContentBlock::Json(json!({"temperature": 21}))],
+    })]);
+    let value = serde_json::to_value(model().translate_request(&request).unwrap()).unwrap();
+    assert_eq!(
+        value["messages"][0]["content"],
+        json!("{\"temperature\":21}")
+    );
+}
+
+#[test]
 fn parses_openai_response_with_content_tool_call_and_usage() {
     // Hand-written OpenAI-shaped response JSON.
     let body = json!({
@@ -1518,6 +1531,19 @@ fn with_auth_style_and_with_header_build_without_panicking() {
         .with_auth_style(AuthStyle::XApiKey)
         .with_header("HTTP-Referer", "https://openhuman.example")
         .with_header("X-Title", "OpenHuman");
+}
+
+#[test]
+fn debug_redacts_credentials_and_header_values() {
+    let model = OpenAiModel::new("primary-secret")
+        .with_header("Authorization", "secondary-secret")
+        .with_header("X-Title", "public-but-still-redacted");
+    let output = format!("{model:?}");
+    assert!(output.contains("Authorization"));
+    assert!(output.contains("X-Title"));
+    assert!(!output.contains("primary-secret"));
+    assert!(!output.contains("secondary-secret"));
+    assert!(!output.contains("public-but-still-redacted"));
 }
 #[test]
 fn derive_profile_populates_known_context_windows() {

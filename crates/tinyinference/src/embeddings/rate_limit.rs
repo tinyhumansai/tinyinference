@@ -25,11 +25,6 @@ pub fn set_rate_limit(per_minute: u32) {
             .unwrap_or_else(PoisonError::into_inner)
             .clear();
     }
-    tracing::debug!(
-        target: "tinyagents::embeddings::rate_limit",
-        per_minute,
-        "[embeddings] configured outbound request rate"
-    );
 }
 
 /// Returns the configured process-wide request rate.
@@ -105,11 +100,6 @@ impl TokenBucket {
             let Some(wait) = wait else {
                 return;
             };
-            tracing::debug!(
-                target: "tinyagents::embeddings::rate_limit",
-                wait_ms = wait.as_millis(),
-                "[embeddings] waiting for outbound request slot"
-            );
             tokio::time::sleep(wait).await;
         }
     }

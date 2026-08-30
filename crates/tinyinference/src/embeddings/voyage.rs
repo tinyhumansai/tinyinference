@@ -14,9 +14,17 @@ pub const VOYAGE_DEFAULT_DIMENSIONS: usize = 1024;
 
 /// Voyage's endpoint uses the OpenAI response shape without its `dimensions`
 /// request parameter.
-#[derive(Debug)]
 pub struct VoyageEmbeddingModel {
     inner: OpenAiEmbeddingModel,
+}
+
+impl std::fmt::Debug for VoyageEmbeddingModel {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("VoyageEmbeddingModel")
+            .field("inner", &self.inner)
+            .finish()
+    }
 }
 
 impl VoyageEmbeddingModel {
