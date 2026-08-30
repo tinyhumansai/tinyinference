@@ -7,7 +7,9 @@ use async_trait::async_trait;
 use super::{EmbeddingModel, OpenAiEmbeddingModel};
 use crate::{Error, Result};
 
+/// Default model id for the host-authenticated cloud endpoint.
 pub const DEFAULT_CLOUD_MODEL: &str = "embedding-v1";
+/// Default vector dimensionality for the cloud model.
 pub const DEFAULT_CLOUD_DIMENSIONS: usize = 1024;
 
 /// Resolves the current bearer token for each request.
@@ -23,6 +25,7 @@ pub struct CloudEmbeddingModel {
 }
 
 impl CloudEmbeddingModel {
+    /// Creates a cloud embedding adapter using a host-owned bearer resolver.
     pub fn new(
         base_url: impl Into<String>,
         model: impl Into<String>,
@@ -36,6 +39,17 @@ impl CloudEmbeddingModel {
             dimensions,
             bearer,
         }
+    }
+}
+
+impl std::fmt::Debug for CloudEmbeddingModel {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CloudEmbeddingModel")
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field("dimensions", &self.dimensions)
+            .finish_non_exhaustive()
     }
 }
 

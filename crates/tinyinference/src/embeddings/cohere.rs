@@ -7,10 +7,15 @@ use super::EmbeddingModel;
 use super::retry_after::{MAX_RETRIES, backoff_ms_for_attempt};
 use crate::{Error, Result};
 
+/// Cohere API base URL.
 pub const COHERE_API_BASE: &str = "https://api.cohere.com";
+/// Default Cohere embedding model.
 pub const COHERE_DEFAULT_MODEL: &str = "embed-english-v3.0";
+/// Default output dimensionality of the Cohere model.
 pub const COHERE_DEFAULT_DIMENSIONS: usize = 1024;
 
+/// Native Cohere `/v2/embed` client.
+#[derive(Debug)]
 pub struct CohereEmbeddingModel {
     client: reqwest::Client,
     api_key: String,
@@ -21,6 +26,7 @@ pub struct CohereEmbeddingModel {
 }
 
 impl CohereEmbeddingModel {
+    /// Creates a Cohere model with the default model and endpoint.
     pub fn new(api_key: impl Into<String>) -> Self {
         Self {
             client: reqwest::Client::new(),
@@ -32,21 +38,25 @@ impl CohereEmbeddingModel {
         }
     }
 
+    /// Overrides the provider model id.
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
         self.model = model.into();
         self
     }
 
+    /// Overrides the reported output dimensions.
     pub fn with_dimensions(mut self, dimensions: usize) -> Self {
         self.dimensions = dimensions;
         self
     }
 
+    /// Overrides the Cohere API base URL.
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = base_url.into().trim().trim_end_matches('/').to_owned();
         self
     }
 
+    /// Replaces the reusable HTTP client.
     pub fn with_client(mut self, client: reqwest::Client) -> Self {
         self.client = client;
         self

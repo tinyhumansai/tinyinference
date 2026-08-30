@@ -5,17 +5,22 @@ use async_trait::async_trait;
 use super::{EmbeddingModel, OpenAiEmbeddingModel};
 use crate::Result;
 
+/// Voyage AI's OpenAI-compatible API base URL.
 pub const VOYAGE_API_BASE: &str = "https://api.voyageai.com/v1";
+/// Default Voyage embedding model.
 pub const VOYAGE_DEFAULT_MODEL: &str = "voyage-3-large";
+/// Default Voyage output dimensionality.
 pub const VOYAGE_DEFAULT_DIMENSIONS: usize = 1024;
 
 /// Voyage's endpoint uses the OpenAI response shape without its `dimensions`
 /// request parameter.
+#[derive(Debug)]
 pub struct VoyageEmbeddingModel {
     inner: OpenAiEmbeddingModel,
 }
 
 impl VoyageEmbeddingModel {
+    /// Creates a Voyage model with the default model, dimensions, and endpoint.
     pub fn new(api_key: impl Into<String>) -> Self {
         Self::with_options(
             api_key,
@@ -25,6 +30,7 @@ impl VoyageEmbeddingModel {
         )
     }
 
+    /// Creates a Voyage model with explicit provider options.
     pub fn with_options(
         api_key: impl Into<String>,
         model: impl Into<String>,

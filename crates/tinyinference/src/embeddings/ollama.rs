@@ -6,10 +6,14 @@ use serde::{Deserialize, Serialize};
 use super::EmbeddingModel;
 use crate::{Error, Result};
 
+/// Default local Ollama server URL.
 pub const DEFAULT_OLLAMA_URL: &str = "http://localhost:11434";
+/// Default Ollama embedding model.
 pub const DEFAULT_OLLAMA_MODEL: &str = "bge-m3";
+/// Default output dimensionality used when zero is requested.
 pub const DEFAULT_OLLAMA_DIMENSIONS: usize = 1024;
 
+/// Client for Ollama's native `/api/embed` endpoint.
 #[derive(Debug)]
 pub struct OllamaEmbeddingModel {
     client: reqwest::Client,
@@ -19,6 +23,11 @@ pub struct OllamaEmbeddingModel {
 }
 
 impl OllamaEmbeddingModel {
+    /// Creates and validates an Ollama embedding configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] for an invalid URL or model id.
     pub fn try_new(base_url: &str, model: &str, dimensions: usize) -> Result<Self> {
         Ok(Self {
             client: reqwest::Client::new(),
@@ -32,23 +41,33 @@ impl OllamaEmbeddingModel {
         })
     }
 
+    /// Creates an Ollama model, panicking for an invalid configuration.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `base_url` or `model` is invalid. Prefer [`Self::try_new`]
+    /// when configuration is not a trusted constant.
     pub fn new(base_url: &str, model: &str, dimensions: usize) -> Self {
         Self::try_new(base_url, model, dimensions).expect("invalid Ollama embedding configuration")
     }
 
+    /// Replaces the reusable HTTP client.
     pub fn with_client(mut self, client: reqwest::Client) -> Self {
         self.client = client;
         self
     }
 
+    /// Returns the normalized API base URL.
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
 
+    /// Returns the configured model id.
     pub fn model(&self) -> &str {
         &self.model
     }
 
+    /// Returns the complete native embed endpoint URL.
     pub fn embed_url(&self) -> String {
         format!("{}/api/embed", self.base_url)
     }

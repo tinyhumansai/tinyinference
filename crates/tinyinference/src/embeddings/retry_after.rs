@@ -2,10 +2,14 @@
 
 use chrono::{DateTime, Utc};
 
+/// Maximum number of provider retries.
 pub const MAX_RETRIES: u32 = 3;
+/// Initial exponential backoff in milliseconds.
 pub const BASE_BACKOFF_MS: u64 = 1_000;
+/// Maximum provider backoff in milliseconds.
 pub const MAX_BACKOFF_MS: u64 = 30_000;
 
+/// Parses delta seconds or an HTTP date into a bounded millisecond delay.
 pub fn parse_retry_after_ms(value: Option<&str>) -> Option<u64> {
     parse_retry_after_ms_at(value, Utc::now())
 }
@@ -28,6 +32,7 @@ fn parse_retry_after_ms_at(value: Option<&str>, now: DateTime<Utc>) -> Option<u6
     u64::try_from(delay).ok().map(|ms| ms.min(MAX_BACKOFF_MS))
 }
 
+/// Returns a Retry-After delay or bounded exponential fallback for `attempt`.
 pub fn backoff_ms_for_attempt(attempt: u32, retry_after: Option<&str>) -> u64 {
     parse_retry_after_ms(retry_after).unwrap_or_else(|| {
         BASE_BACKOFF_MS

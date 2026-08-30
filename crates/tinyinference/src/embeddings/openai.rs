@@ -32,12 +32,13 @@ const DEFAULT_DIMENSIONS: usize = 1536;
 /// ```no_run
 /// use tinyinference::embeddings::OpenAiEmbeddingModel;
 ///
-/// # fn main() -> tinyagents::Result<()> {
+/// # fn main() -> tinyinference::Result<()> {
 /// let model = OpenAiEmbeddingModel::from_env()?;
 /// # let _ = model;
 /// # Ok(())
 /// # }
 /// ```
+#[derive(Debug)]
 pub struct OpenAiEmbeddingModel {
     client: reqwest::Client,
     api_key: String,
@@ -100,14 +101,17 @@ impl OpenAiEmbeddingModel {
         self
     }
 
+    /// Returns the configured API base URL.
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
 
+    /// Returns the configured embedding model id.
     pub fn model(&self) -> &str {
         &self.model
     }
 
+    /// Returns the complete embeddings endpoint URL.
     pub fn embeddings_url(&self) -> String {
         embeddings_url(&self.base_url)
     }

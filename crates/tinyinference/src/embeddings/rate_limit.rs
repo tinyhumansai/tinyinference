@@ -8,11 +8,13 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
+/// Default process-wide outbound embedding request rate.
 pub const DEFAULT_REQUESTS_PER_MINUTE: u32 = 60;
 
 static CONFIGURED_LIMIT: AtomicU32 = AtomicU32::new(DEFAULT_REQUESTS_PER_MINUTE);
 static BUCKETS: OnceLock<Mutex<HashMap<String, Arc<TokenBucket>>>> = OnceLock::new();
 
+/// Sets the process-wide outbound request rate and resets existing buckets.
 pub fn set_rate_limit(per_minute: u32) {
     let previous = CONFIGURED_LIMIT.swap(per_minute, Ordering::Relaxed);
     if previous != per_minute
@@ -30,10 +32,12 @@ pub fn set_rate_limit(per_minute: u32) {
     );
 }
 
+/// Returns the configured process-wide request rate.
 pub fn rate_limit() -> u32 {
     CONFIGURED_LIMIT.load(Ordering::Relaxed)
 }
 
+/// Waits until an outbound request is allowed for `base_url`.
 pub async fn acquire(base_url: &str) {
     acquire_with_limit(base_url, rate_limit()).await;
 }
