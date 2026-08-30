@@ -324,6 +324,8 @@ pub(super) fn parse_chat_response(
         finish_reason: choice.finish_reason,
         raw: Some(value),
         resolved_model: None,
+        continue_turn: None,
+        served_from_cache: false,
     })
 }
 
@@ -332,9 +334,20 @@ pub(super) fn parse_chat_response(
 /// the slot's position so delta ids and the final call id always agree.
 pub(super) fn tool_call_id(slot: usize, id: &str) -> String {
     if id.is_empty() {
-        format!("tool-{slot}")
+        static NEXT_SYNTHETIC_ID: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(1);
+        let sequence = NEXT_SYNTHETIC_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        format!("tacall-{sequence}-{slot}")
     } else {
-        id.to_string()
+        id.chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') {
+                    character
+                } else {
+                    '-'
+                }
+            })
+            .collect()
     }
 }
 
@@ -494,13 +507,18 @@ pub(super) fn convert_usage(wire: UsageWire) -> Usage {
         total_tokens,
         cache_read_tokens: wire
             .prompt_tokens_details
+            .as_ref()
             .map(|d| d.cached_tokens)
+            .unwrap_or(0),
+        cache_creation_tokens: wire
+            .prompt_tokens_details
+            .as_ref()
+            .map(|details| details.cache_write_tokens)
             .unwrap_or(0),
         reasoning_tokens: wire
             .completion_tokens_details
             .map(|d| d.reasoning_tokens)
             .unwrap_or(0),
-        ..Usage::default()
     }
 }
 

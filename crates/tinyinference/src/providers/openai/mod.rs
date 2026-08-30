@@ -75,16 +75,21 @@ const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 30;
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 600;
 
 mod convert;
+mod local;
 mod prompt_tools;
 mod reasoning_tags;
 mod responses;
 mod sse;
 mod transport;
 
+pub use local::{
+    CONTEXT_OVERFLOW_CODE, LocalProbe, LocalRuntimeKind, is_chat_template_rejection_message,
+};
 pub use reasoning_tags::ReasoningTagExtraction;
 pub use transport::{AuthStyle, OpenAiModel};
 
 use convert::*;
+use local::*;
 use reasoning_tags::*;
 use sse::*;
 #[cfg(test)]
@@ -93,5 +98,7 @@ use transport::{
     merge_provider_options, merge_system_into_user, request_timeout,
 };
 
+#[cfg(test)]
+mod local_test;
 #[cfg(test)]
 mod test;

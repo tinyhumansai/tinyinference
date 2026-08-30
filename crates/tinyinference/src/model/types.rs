@@ -71,6 +71,65 @@ pub enum ResponseFormat {
     },
 }
 
+/// Provider-neutral reasoning effort for one model call.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningEffort {
+    /// Smallest available effort.
+    Minimal,
+    /// Below-default effort.
+    Low,
+    /// Provider default effort.
+    #[default]
+    Medium,
+    /// Above-default effort.
+    High,
+    /// Explicitly disable reasoning.
+    None,
+}
+
+impl ReasoningEffort {
+    /// Returns the common provider wire token.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Minimal => "minimal",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::None => "none",
+        }
+    }
+}
+
+/// Provider-neutral reasoning configuration.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReasoningConfig {
+    /// Requested reasoning effort.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<ReasoningEffort>,
+    /// Explicit thinking-token budget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_tokens: Option<u32>,
+    /// Requested reasoning-summary verbosity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+}
+
+impl ReasoningConfig {
+    /// Creates a config containing only `effort`.
+    pub fn effort(effort: ReasoningEffort) -> Self {
+        Self {
+            effort: Some(effort),
+            ..Self::default()
+        }
+    }
+
+    /// Returns whether no reasoning option is set.
+    pub fn is_empty(&self) -> bool {
+        self.effort.is_none() && self.budget_tokens.is_none() && self.summary.is_none()
+    }
+}
+
 /// Lifecycle status of a model, used by [`ModelProfile`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -172,6 +231,9 @@ pub struct ModelProfile {
     /// Emits reasoning/thinking output.
     #[serde(default)]
     pub reasoning: bool,
+    /// Accepts a configurable reasoning effort.
+    #[serde(default)]
+    pub reasoning_effort: bool,
     /// Maximum input (context) tokens, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_input_tokens: Option<u64>,
@@ -210,6 +272,9 @@ pub struct CapabilitySet {
     /// Requires reasoning output.
     #[serde(default)]
     pub reasoning: bool,
+    /// Requires configurable reasoning effort.
+    #[serde(default)]
+    pub reasoning_effort: bool,
     /// Requires image input (vision).
     #[serde(default)]
     pub image_in: bool,
@@ -372,6 +437,9 @@ pub struct ModelRequest {
     /// Optional provider continuation/response id for stateful follow-ups.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continuation_id: Option<String>,
+    /// Provider-neutral reasoning configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<ReasoningConfig>,
 }
 
 /// A provider-neutral chat model response.
@@ -391,6 +459,12 @@ pub struct ModelResponse {
     /// Durable model-selection metadata attached by a consuming runtime.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_model: Option<ResolvedModel>,
+    /// Runtime nudge indicating that this response does not end the turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continue_turn: Option<String>,
+    /// Whether a consuming runtime served this response from local cache.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub served_from_cache: bool,
 }
 
 /// An incremental streamed chunk of a model response.
@@ -433,6 +507,9 @@ pub struct ProviderError {
     /// Whether retrying the same request may succeed.
     #[serde(default)]
     pub retryable: bool,
+    /// Parsed provider Retry-After delay in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_after_ms: Option<u64>,
     /// Raw provider payload, when available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw: Option<Value>,
@@ -500,6 +577,14 @@ pub trait ChatModel<State: Send + Sync>: Send + Sync {
     /// structured-output strategy for [`ResponseFormat::Auto`] and to validate
     /// [`ModelRequest::required_capabilities`].
     fn profile(&self) -> Option<&ModelProfile> {
+        None
+    }
+
+    /// Returns a stable, credential-safe identity for response-cache scoping.
+    ///
+    /// The default declines identity. Implementations must never include raw
+    /// credentials in the returned value.
+    fn cache_identity(&self) -> Option<String> {
         None
     }
 

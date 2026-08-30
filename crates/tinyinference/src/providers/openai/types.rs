@@ -44,6 +44,9 @@ pub struct ChatCompletionRequest {
     /// reject `max_tokens`. Omitted when unset.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_completion_tokens: Option<u32>,
+    /// Reasoning effort for OpenAI reasoning models.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<crate::model::ReasoningEffort>,
     /// Stop sequences that terminate generation. Omitted when empty.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub stop: Vec<String>,
@@ -379,6 +382,9 @@ pub struct PromptTokensDetailsWire {
     /// Input tokens served from OpenAI's prompt cache.
     #[serde(default)]
     pub cached_tokens: u64,
+    /// Input tokens written to a provider prompt cache.
+    #[serde(default, alias = "cache_creation_tokens")]
+    pub cache_write_tokens: u64,
 }
 
 /// The `completion_tokens_details` breakdown of a [`UsageWire`].

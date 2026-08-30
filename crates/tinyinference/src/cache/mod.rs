@@ -297,5 +297,32 @@ impl CacheLayoutEvent {
     }
 }
 
+impl CachePolicy {
+    /// Creates a policy with response caching enabled and no expiry.
+    pub fn enabled() -> Self {
+        Self {
+            response_cache_enabled: true,
+            ..Self::default()
+        }
+    }
+
+    /// Returns the configured entry TTL.
+    pub fn ttl(&self) -> Option<std::time::Duration> {
+        self.ttl_ms.map(std::time::Duration::from_millis)
+    }
+
+    /// Sets the entry TTL.
+    pub fn with_ttl(mut self, ttl: std::time::Duration) -> Self {
+        self.ttl_ms = Some(ttl.as_millis() as u64);
+        self
+    }
+
+    /// Sets the cache-key namespace.
+    pub fn with_namespace(mut self, namespace: impl Into<String>) -> Self {
+        self.namespace = Some(namespace.into());
+        self
+    }
+}
+
 #[cfg(test)]
 mod test;

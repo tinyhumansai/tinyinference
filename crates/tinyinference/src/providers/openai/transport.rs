@@ -6,6 +6,7 @@
 
 use super::responses;
 use super::*;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// How the provider expects the API credential to be sent on each request.
 ///
@@ -106,6 +107,10 @@ pub struct OpenAiModel {
     /// inline `<think>` reasoning, and unconditional extraction would silently
     /// strip legitimate content that mentions a literal `<think>` tag.
     reasoning_tags_overridden: bool,
+    local_runtime: Option<LocalRuntimeKind>,
+    keep_alive: Option<String>,
+    json_schema_strict: AtomicBool,
+    native_tools_on_wire: AtomicBool,
 }
 
 impl std::fmt::Debug for OpenAiModel {
@@ -278,7 +283,12 @@ pub(super) fn merge_system_into_user(messages: &[Message]) -> Vec<Message> {
 /// reject `max_tokens` and require `max_completion_tokens` instead.
 pub(super) fn is_reasoning_model(model: &str) -> bool {
     let lower = model.to_ascii_lowercase();
-    lower.starts_with("o1") || lower.starts_with("o3") || lower.starts_with("o4")
+    lower.starts_with("o1")
+        || lower.starts_with("o3")
+        || lower.starts_with("o4")
+        || lower.starts_with("gpt-5")
+        || lower.starts_with("gpt5")
+        || lower.contains("/gpt-5")
 }
 
 /// Derives a static [`ModelProfile`] for an OpenAI(-compatible) model id.
@@ -311,6 +321,7 @@ pub(super) fn derive_profile(provider: &str, model: &str) -> ModelProfile {
         native_structured_output: native_structured,
         json_schema: true,
         reasoning,
+        reasoning_effort: reasoning,
         max_input_tokens: crate::model::context_window_for_model_id(model),
         ..ModelProfile::default()
     }
@@ -349,6 +360,10 @@ impl OpenAiModel {
             // `<think>` and must not strip literal mentions of the tag.
             reasoning_tags: Some(ReasoningTagExtraction::default()),
             reasoning_tags_overridden: false,
+            local_runtime: None,
+            keep_alive: None,
+            json_schema_strict: AtomicBool::new(true),
+            native_tools_on_wire: AtomicBool::new(true),
         }
     }
 
@@ -603,6 +618,16 @@ impl OpenAiModel {
                 "provider spec base_url must not be empty".to_string(),
             ));
         }
+        let kind = match spec.kind {
+            crate::providers::ProviderKind::Ollama => Some(LocalRuntimeKind::Ollama),
+            crate::providers::ProviderKind::LmStudio => Some(LocalRuntimeKind::LmStudio),
+            crate::providers::ProviderKind::LlamaCpp => Some(LocalRuntimeKind::LlamaCpp),
+            crate::providers::ProviderKind::Vllm => Some(LocalRuntimeKind::Vllm),
+            _ => None,
+        };
+        if let Some(kind) = kind {
+            return Self::local_runtime(kind, &spec.provider, spec.base_url, api_key, spec.model);
+        }
         Ok(Self::compatible_provider(
             spec.provider,
             api_key,
@@ -776,7 +801,177 @@ impl OpenAiModel {
     /// A local Ollama server (`http://localhost:11434/v1`), default model
     /// `llama3.2`. Ollama ignores the API key, so a placeholder is used.
     pub fn ollama() -> Self {
-        Self::compatible_provider("ollama", "ollama", "http://localhost:11434/v1", "llama3.2")
+        Self::ollama_at("http://localhost:11434", "llama3.2")
+            .expect("the built-in Ollama URL is valid")
+    }
+
+    /// Constructs an Ollama model at a custom server root.
+    pub fn ollama_at(base_url: impl Into<String>, model: impl Into<String>) -> Result<Self> {
+        Self::local_runtime(LocalRuntimeKind::Ollama, "ollama", base_url, "", model)
+    }
+
+    /// Constructs a llama.cpp model at a custom server root.
+    pub fn llama_cpp(base_url: impl Into<String>, model: impl Into<String>) -> Result<Self> {
+        Self::local_runtime(LocalRuntimeKind::LlamaCpp, "llama_cpp", base_url, "", model)
+    }
+
+    /// Constructs a vLLM model at a custom server root.
+    pub fn vllm(
+        base_url: impl Into<String>,
+        api_key: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Result<Self> {
+        Self::local_runtime(LocalRuntimeKind::Vllm, "vllm", base_url, api_key, model)
+    }
+
+    fn local_runtime(
+        kind: LocalRuntimeKind,
+        provider: &str,
+        base_url: impl Into<String>,
+        api_key: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Result<Self> {
+        let base_url = normalize_local_v1_base_url(base_url.into(), kind.default_root())?;
+        let mut output = Self::compatible_provider(provider, api_key, base_url, model)
+            .with_auth_style(AuthStyle::None)
+            .with_vision(false)
+            .with_named_tool_choice(false)
+            .with_json_object_format(false);
+        output.local_runtime = Some(kind);
+        output.json_schema_strict.store(false, Ordering::Relaxed);
+        output.profile.max_input_tokens = None;
+        Ok(output)
+    }
+
+    /// Sets native Ollama context options and the advertised context window.
+    pub fn with_local_num_ctx(mut self, num_ctx: u32) -> Self {
+        self.default_provider_options = merge_provider_options(
+            &self.default_provider_options,
+            &json!({"options": {"num_ctx": num_ctx}}),
+        );
+        self.profile.max_input_tokens = Some(u64::from(num_ctx));
+        self
+    }
+
+    /// Sets the native local-runtime model residency hint.
+    pub fn with_keep_alive(mut self, keep_alive: impl Into<String>) -> Self {
+        self.keep_alive = Some(keep_alive.into());
+        self
+    }
+
+    /// Returns the configured local runtime kind.
+    pub fn local_runtime_kind(&self) -> Option<LocalRuntimeKind> {
+        self.local_runtime
+    }
+
+    /// Probes a local runtime for its loaded model profile.
+    pub async fn probe_local_profile(&self) -> Result<LocalProbe> {
+        let Some(kind) = self.local_runtime else {
+            return Err(Error::Validation(format!(
+                "probe_local_profile is only meaningful for a local runtime; `{}` at {} is not one",
+                self.provider, self.base_url
+            )));
+        };
+        let root = kind.native_root(&self.base_url);
+        let (endpoint, builder) = match kind {
+            LocalRuntimeKind::Ollama => {
+                let endpoint = format!("{root}/api/show");
+                let builder = self
+                    .authorized(self.client.post(&endpoint))
+                    .json(&ollama_show_body(&self.model));
+                (endpoint, builder)
+            }
+            LocalRuntimeKind::LmStudio => {
+                let endpoint = format!("{root}/api/v0/models");
+                let builder = self.authorized(self.client.get(&endpoint));
+                (endpoint, builder)
+            }
+            LocalRuntimeKind::LlamaCpp | LocalRuntimeKind::Vllm => return Ok(LocalProbe::default()),
+        };
+        let response = builder
+            .timeout(PROBE_TIMEOUT)
+            .send()
+            .await
+            .map_err(|error| probe_error(&endpoint, error))?;
+        if !response.status().is_success() {
+            return Ok(LocalProbe::default());
+        }
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|error| probe_error(&endpoint, error))?;
+        Ok(match kind {
+            LocalRuntimeKind::Ollama => probe_from_ollama_show(&body),
+            LocalRuntimeKind::LmStudio => probe_from_lm_studio_models(&body, &self.model),
+            _ => LocalProbe::default(),
+        })
+    }
+
+    /// Applies a probed local profile.
+    pub fn apply_local_probe(mut self, probe: &LocalProbe) -> Self {
+        if let Some(window) = probe.effective_context_window() {
+            self.profile.max_input_tokens = Some(window);
+        }
+        if let Some(value) = probe.tool_calling {
+            self.profile.tool_calling = value;
+            self.profile.parallel_tool_calls = value;
+            self.profile.streaming_tool_chunks = value;
+        }
+        if let Some(value) = probe.vision {
+            self.profile.modalities.image_in = value;
+        }
+        if let Some(value) = probe.reasoning {
+            self.profile.reasoning = value;
+        }
+        self
+    }
+
+    /// Probes and applies local capabilities.
+    pub async fn probed(self) -> Result<Self> {
+        let probe = self.probe_local_profile().await?;
+        Ok(self.apply_local_probe(&probe))
+    }
+
+    /// Validates that the configured model is advertised by the provider.
+    pub async fn validate_model(&self) -> Result<()> {
+        let listed = self.list_models().await?;
+        if listed.is_empty() || listed.iter().any(|entry| entry.id == self.model) {
+            return Ok(());
+        }
+        let mut available: Vec<&str> = listed.iter().map(|entry| entry.id.as_str()).collect();
+        available.sort_unstable();
+        let remediation = if self.local_runtime == Some(LocalRuntimeKind::Ollama) {
+            format!(" Run `ollama pull {}` to install it.", self.model)
+        } else {
+            String::new()
+        };
+        Err(Error::Validation(format!(
+            "{} at {} does not serve model `{}`.{} Available: {}",
+            self.provider,
+            self.base_url,
+            self.model,
+            remediation,
+            available.join(", ")
+        )))
+    }
+
+    /// Loads an Ollama model through its native warm-up API.
+    pub async fn warm_up(&self) -> Result<()> {
+        let Some(kind) = self.local_runtime.filter(|kind| kind.has_native_api()) else {
+            return Ok(());
+        };
+        let url = format!("{}/api/chat", kind.native_root(&self.base_url));
+        let body = ollama_load_body(
+            &self.model,
+            local_options_object(&self.default_provider_options),
+            self.keep_alive.as_deref(),
+        );
+        self.authorized(self.client.post(&url))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|error| Error::Model(format!("openai warm-up of {url} failed: {error}")))?;
+        Ok(())
     }
 
     /// Returns the default model id this instance will request.
@@ -801,6 +996,8 @@ impl OpenAiModel {
         Degrade {
             named_tool_choice: !self.named_tool_choice_supported,
             json_object: !self.json_object_format_supported,
+            json_schema_strict: !self.json_schema_strict.load(Ordering::Relaxed),
+            native_tools: !self.native_tools_on_wire.load(Ordering::Relaxed),
         }
     }
 
@@ -830,7 +1027,7 @@ impl OpenAiModel {
         // handed tools gets the tool protocol embedded in its system prompt and no
         // native `tools` on the wire (many local runtimes 400 on `tools`). The
         // model's `<tool_call>` blocks are parsed back in [`Self::invoke`]/stream.
-        let prompt_guided_tools = !self.profile.tool_calling
+        let prompt_guided_tools = (!self.profile.tool_calling || degrade.native_tools)
             && !request.tools.is_empty()
             && request.tool_choice != ToolChoice::None;
         let prompt_tool_schemas = match &request.tool_choice {
@@ -905,7 +1102,7 @@ impl OpenAiModel {
             Some(translate_tool_choice(&request.tool_choice))
         };
 
-        let response_format = request.response_format.as_ref().and_then(|format| {
+        let mut response_format = request.response_format.as_ref().and_then(|format| {
             if degrade.json_object && matches!(format, ResponseFormat::JsonObject) {
                 // The endpoint rejects `{"type":"json_object"}`; use a permissive
                 // `json_schema` that still guarantees a JSON object.
@@ -914,6 +1111,15 @@ impl OpenAiModel {
                 translate_response_format(format)
             }
         });
+        if let Some(format) = response_format.as_mut()
+            && let Some(json_schema) = format.get_mut("json_schema")
+        {
+            let strict = !degrade.json_schema_strict && !degrade.json_object;
+            json_schema["strict"] = json!(strict);
+            if strict && let Some(schema) = json_schema.get_mut("schema") {
+                make_schema_strict(schema);
+            }
+        }
 
         let model = request.model.clone().unwrap_or_else(|| self.model.clone());
         // The o-series reasoning models reject `max_tokens` and require
@@ -932,9 +1138,22 @@ impl OpenAiModel {
             self.temperature_override,
             &self.temperature_unsupported,
         );
+        let merged_provider_options =
+            merge_provider_options(&self.default_provider_options, &request.provider_options);
+        let reasoning_effort = if merged_provider_options
+            .get("reasoning_effort")
+            .is_some_and(|value| !value.is_null())
+        {
+            None
+        } else {
+            request
+                .reasoning
+                .as_ref()
+                .and_then(|reasoning| reasoning.effort)
+        };
 
         Ok(ChatCompletionRequest {
-            model,
+            model: model.clone(),
             messages,
             tools,
             tool_choice,
@@ -943,14 +1162,12 @@ impl OpenAiModel {
             top_p: request.top_p,
             max_tokens,
             max_completion_tokens,
+            reasoning_effort,
             stop: request.stop_sequences.clone(),
             seed: request.seed,
             stream: false,
             stream_options: None,
-            extra: provider_extra_options(&merge_provider_options(
-                &self.default_provider_options,
-                &request.provider_options,
-            ))?,
+            extra: provider_extra_options(&merged_provider_options)?,
         })
     }
 
@@ -994,7 +1211,7 @@ impl OpenAiModel {
         request: &ModelRequest,
     ) -> Result<responses::ResponsesRequest> {
         let model = request.model.clone().unwrap_or_else(|| self.model.clone());
-        let (instructions, input) = responses::build_responses_input(&request.messages)?;
+        let (instructions, input) = responses::build_responses_input(&request.messages);
         let max_output_tokens = if self.responses_omit_max_output_tokens {
             None
         } else {
@@ -1002,21 +1219,57 @@ impl OpenAiModel {
         };
         let provider_options =
             merge_provider_options(&self.default_provider_options, &request.provider_options);
+        let extra = provider_extra_options(&provider_options)?;
+        let reasoning = if extra.contains_key("reasoning") {
+            None
+        } else {
+            request
+                .reasoning
+                .as_ref()
+                .and_then(responses::translate_reasoning)
+        };
+        let include = if reasoning.is_some() {
+            vec![responses::INCLUDE_ENCRYPTED_REASONING.to_string()]
+        } else {
+            Vec::new()
+        };
+        let tools: Vec<Value> = if self.native_tools_on_wire.load(Ordering::Relaxed) {
+            request
+                .tools
+                .iter()
+                .map(responses::translate_tool)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let tool_choice = (!tools.is_empty()).then(|| translate_tool_choice(&request.tool_choice));
+        let strict = self.json_schema_strict.load(Ordering::Relaxed);
         Ok(responses::ResponsesRequest {
-            model,
+            model: model.clone(),
             input,
             instructions,
             stream: None,
             store: Some(false),
             max_output_tokens,
-            tools: responses::responses_tools(&request.tools),
-            tool_choice: responses::responses_tool_choice(
-                &request.tool_choice,
-                !request.tools.is_empty(),
-            ),
+            tools,
+            tool_choice,
             previous_response_id: request.continuation_id.clone(),
-            text: responses::responses_text_format(request.response_format.as_ref()),
-            extra: responses::responses_extra_options(&provider_options)?,
+            text: request
+                .response_format
+                .as_ref()
+                .and_then(|format| responses::translate_text_format(format, strict)),
+            temperature: effective_temperature(
+                &model,
+                request.temperature,
+                self.temperature_override,
+                &self.temperature_unsupported,
+            ),
+            top_p: request.top_p,
+            seed: request.seed,
+            stop: request.stop_sequences.clone(),
+            reasoning,
+            include,
+            extra,
         })
     }
 
@@ -1049,7 +1302,7 @@ impl OpenAiModel {
             .await
             .map_err(|e| Error::Model(format!("openai responses body read failed: {e}")))?;
         let value: Value = serde_json::from_str(&text)?;
-        responses::parse_responses_response(value)
+        Ok(responses::parse_responses_response(value))
     }
 
     /// Shared `POST {responses_url}` with auth, query params, and timeout, mapped
@@ -1159,6 +1412,12 @@ impl OpenAiModel {
             Ok(response) => Ok(response),
             Err(Error::Provider(err)) if err.status == Some(400) => {
                 if let Some(degrade) = degrade_for_400(&err.message, request, baseline) {
+                    if degrade.native_tools {
+                        self.native_tools_on_wire.store(false, Ordering::Relaxed);
+                    }
+                    if degrade.json_schema_strict {
+                        self.json_schema_strict.store(false, Ordering::Relaxed);
+                    }
                     let retry = self.build_chat_body(request, degrade, streaming)?;
                     self.post_json(&retry, request.timeout_ms, streaming, what)
                         .await
@@ -1189,6 +1448,7 @@ impl OpenAiModel {
             message,
             retryable,
             raw,
+            retry_after_ms: None,
         }
     }
 
@@ -1210,6 +1470,17 @@ impl OpenAiModel {
             .and_then(|error| error.get("code").or_else(|| error.get("type")))
             .and_then(Value::as_str)
             .map(str::to_string);
+        let code = if is_context_overflow(status, &message) {
+            Some(CONTEXT_OVERFLOW_CODE.to_string())
+        } else {
+            code
+        };
+        let message = self
+            .local_runtime
+            .and_then(|kind| {
+                missing_model_remediation(kind, status, &message, &self.model, &self.base_url)
+            })
+            .unwrap_or(message);
         self.provider_error(message, Some(status), code, raw)
     }
 }
@@ -1229,6 +1500,27 @@ pub(super) struct Degrade {
     /// Degrade `response_format:{"type":"json_object"}` to a permissive
     /// `json_schema`.
     pub json_object: bool,
+    pub json_schema_strict: bool,
+    pub native_tools: bool,
+}
+
+fn make_schema_strict(schema: &mut Value) {
+    match schema {
+        Value::Object(object) => {
+            if object.get("type").and_then(Value::as_str) == Some("object") {
+                object.insert("additionalProperties".to_string(), Value::Bool(false));
+                if let Some(properties) = object.get("properties").and_then(Value::as_object) {
+                    let required = properties.keys().cloned().map(Value::String).collect();
+                    object.insert("required".to_string(), Value::Array(required));
+                }
+            }
+            for value in object.values_mut() {
+                make_schema_strict(value);
+            }
+        }
+        Value::Array(values) => values.iter_mut().for_each(make_schema_strict),
+        _ => {}
+    }
 }
 
 /// Computes the additional degradation to apply after an HTTP 400, or `None`
@@ -1260,6 +1552,21 @@ pub(super) fn degrade_for_400(
         && matches!(request.response_format, Some(ResponseFormat::JsonObject))
     {
         degrade.json_object = true;
+    }
+    if !already.json_schema_strict
+        && lower.contains("strict")
+        && matches!(
+            request.response_format,
+            Some(ResponseFormat::JsonSchema { .. } | ResponseFormat::Auto { .. })
+        )
+    {
+        degrade.json_schema_strict = true;
+    }
+    if !already.native_tools
+        && !request.tools.is_empty()
+        && (lower.contains("does not support tools") || lower.contains("tools unsupported"))
+    {
+        degrade.native_tools = true;
     }
 
     (degrade != already).then_some(degrade)

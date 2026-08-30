@@ -158,34 +158,40 @@ fn validate_schema_value(schema: &Value, value: &Value, path: &str) -> crate::Re
         validate_type_spec(type_spec, value, path)?;
     }
     if let Some(required) = schema.get("required").and_then(Value::as_array) {
-        let object = value.as_object().ok_or_else(|| {
-            crate::Error::Validation(format!("{path} must be an object with declared fields"))
-        })?;
-        for field in required.iter().filter_map(Value::as_str) {
-            if !object.contains_key(field) {
-                return Err(crate::Error::Validation(format!(
-                    "{path}.{field} is required"
-                )));
-            }
-        }
-    }
-    if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
-        let object = value.as_object().ok_or_else(|| {
-            crate::Error::Validation(format!("{path} must be an object with declared fields"))
-        })?;
-        if schema.get("additionalProperties").and_then(Value::as_bool) == Some(false) {
-            for field in object.keys() {
-                if !properties.contains_key(field) {
+        if let Some(object) = value.as_object() {
+            for field in required.iter().filter_map(Value::as_str) {
+                if !object.contains_key(field) {
                     return Err(crate::Error::Validation(format!(
-                        "{path}.{field} is not allowed"
+                        "{path}.{field} is required"
                     )));
                 }
             }
+        } else if schema.get("type").is_none() {
+            return Err(crate::Error::Validation(format!(
+                "{path} must be an object with declared fields"
+            )));
         }
-        for (field, field_schema) in properties {
-            if let Some(field_value) = object.get(field) {
-                validate_schema_value(field_schema, field_value, &format!("{path}.{field}"))?;
+    }
+    if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
+        if let Some(object) = value.as_object() {
+            if schema.get("additionalProperties").and_then(Value::as_bool) == Some(false) {
+                for field in object.keys() {
+                    if !properties.contains_key(field) {
+                        return Err(crate::Error::Validation(format!(
+                            "{path}.{field} is not allowed"
+                        )));
+                    }
+                }
             }
+            for (field, field_schema) in properties {
+                if let Some(field_value) = object.get(field) {
+                    validate_schema_value(field_schema, field_value, &format!("{path}.{field}"))?;
+                }
+            }
+        } else if schema.get("type").is_none() {
+            return Err(crate::Error::Validation(format!(
+                "{path} must be an object with declared fields"
+            )));
         }
     }
     if let Some(items_schema) = schema.get("items")

@@ -47,6 +47,7 @@ enum ContextPatternMatch {
 /// substrings such as `gpt-4.1` and `gpt-4-turbo` must stay before broader
 /// patterns such as `gpt-4` that would otherwise shadow them.
 const MODEL_CONTEXT_PATTERNS: &[(&str, ContextPatternMatch, u64)] = &[
+    ("gpt-5", ContextPatternMatch::Substring, 400_000),
     ("claude-haiku-4.5", ContextPatternMatch::Substring, 200_000),
     ("claude-haiku-4", ContextPatternMatch::Substring, 200_000),
     ("claude-haiku", ContextPatternMatch::Substring, 200_000),
@@ -161,6 +162,7 @@ impl ModelProfile {
             && (!set.native_structured_output || self.native_structured_output)
             && (!set.json_schema || self.json_schema)
             && (!set.reasoning || self.reasoning)
+            && (!set.reasoning_effort || self.reasoning_effort)
             && (!set.image_in || self.modalities.image_in)
             && (!set.image_out || self.modalities.image_out)
             && (!set.audio_in || self.modalities.audio_in)
@@ -215,6 +217,7 @@ impl ModelProfile {
             native_structured_output: true,
             json_schema: true,
             reasoning: true,
+            reasoning_effort: true,
             ..Self::default()
         }
     }
@@ -356,6 +359,17 @@ impl ModelRequest {
         self
     }
 
+    /// Sets provider-neutral reasoning configuration.
+    pub fn with_reasoning(mut self, reasoning: ReasoningConfig) -> Self {
+        self.reasoning = Some(reasoning);
+        self
+    }
+
+    /// Sets only the requested reasoning effort.
+    pub fn with_reasoning_effort(self, effort: ReasoningEffort) -> Self {
+        self.with_reasoning(ReasoningConfig::effort(effort))
+    }
+
     /// Returns the ids of cacheable segments in declaration order, describing
     /// the stable prompt prefix middleware should preserve.
     pub fn cacheable_prefix_ids(&self) -> Vec<String> {
@@ -381,6 +395,8 @@ impl ModelResponse {
             finish_reason: None,
             raw: None,
             resolved_model: None,
+            continue_turn: None,
+            served_from_cache: false,
         }
     }
 
@@ -609,6 +625,8 @@ impl StreamAccumulator {
             finish_reason: None,
             raw: None,
             resolved_model: None,
+            continue_turn: None,
+            served_from_cache: false,
         })
     }
 }

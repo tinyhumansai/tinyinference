@@ -2,6 +2,10 @@
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 
 use super::EmbeddingModel;
 use crate::{Error, Result};
@@ -12,6 +16,8 @@ pub const DEFAULT_OLLAMA_URL: &str = "http://localhost:11434";
 pub const DEFAULT_OLLAMA_MODEL: &str = "bge-m3";
 /// Default output dimensionality used when zero is requested.
 pub const DEFAULT_OLLAMA_DIMENSIONS: usize = 1024;
+/// Context and batch window recommended for long-document embedding models.
+pub const RECOMMENDED_OLLAMA_CONTEXT_TOKENS: u32 = 8192;
 
 /// Client for Ollama's native `/api/embed` endpoint.
 #[derive(Debug)]
@@ -19,7 +25,8 @@ pub struct OllamaEmbeddingModel {
     client: reqwest::Client,
     base_url: String,
     model: String,
-    dimensions: usize,
+    dimensions: Arc<AtomicUsize>,
+    options: Option<OllamaOptions>,
 }
 
 impl OllamaEmbeddingModel {
@@ -33,12 +40,45 @@ impl OllamaEmbeddingModel {
             client: reqwest::Client::new(),
             base_url: normalize_base_url(base_url)?,
             model: normalize_model(model)?,
-            dimensions: if dimensions == 0 {
+            dimensions: Arc::new(AtomicUsize::new(if dimensions == 0 {
                 DEFAULT_OLLAMA_DIMENSIONS
             } else {
                 dimensions
-            },
+            })),
+            options: None,
         })
+    }
+
+    fn try_new_unresolved(base_url: &str, model: &str) -> Result<Self> {
+        Ok(Self {
+            client: reqwest::Client::new(),
+            base_url: normalize_base_url(base_url)?,
+            model: normalize_model(model)?,
+            dimensions: Arc::new(AtomicUsize::new(0)),
+            options: None,
+        })
+    }
+
+    /// Embeds inputs while learning the installed model's vector width.
+    pub async fn embed_discovering_dimensions(
+        base_url: &str,
+        model: &str,
+        client: reqwest::Client,
+        texts: &[String],
+        num_ctx: u32,
+        num_batch: u32,
+    ) -> Result<(usize, Vec<Vec<f32>>)> {
+        if !texts.iter().any(|text| !text.trim().is_empty()) {
+            return Err(Error::Validation(
+                "dynamic embedding dimension discovery requires at least one nonblank input"
+                    .to_string(),
+            ));
+        }
+        let adapter = Self::try_new_unresolved(base_url, model)?
+            .with_client(client)
+            .with_context_options(num_ctx, num_batch);
+        let vectors = adapter.embed(texts).await?;
+        Ok((adapter.dimensions(), vectors))
     }
 
     /// Creates an Ollama model, panicking for an invalid configuration.
@@ -54,6 +94,15 @@ impl OllamaEmbeddingModel {
     /// Replaces the reusable HTTP client.
     pub fn with_client(mut self, client: reqwest::Client) -> Self {
         self.client = client;
+        self
+    }
+
+    /// Requests an explicit context and batch window from Ollama.
+    pub fn with_context_options(mut self, num_ctx: u32, num_batch: u32) -> Self {
+        self.options = Some(OllamaOptions {
+            num_ctx: num_ctx.max(1),
+            num_batch: num_batch.max(1),
+        });
         self
     }
 
@@ -78,6 +127,7 @@ impl OllamaEmbeddingModel {
             .json(&OllamaRequest {
                 model: self.model.clone(),
                 input,
+                options: self.options,
             })
             .send()
             .await
@@ -126,10 +176,24 @@ impl OllamaEmbeddingModel {
     }
 
     fn validate_dimensions(&self, index: usize, vector: &[f32]) -> Result<()> {
-        if vector.len() != self.dimensions {
+        if vector.is_empty() {
+            return Err(Error::Embedding(format!(
+                "ollama embed returned an empty vector at index {index}"
+            )));
+        }
+        let expected = match self.dimensions.compare_exchange(
+            0,
+            vector.len(),
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => vector.len(),
+            Err(expected) => expected,
+        };
+        if vector.len() != expected {
             return Err(Error::Embedding(format!(
                 "ollama embed dimension mismatch at index {index}: expected {}, got {}",
-                self.dimensions,
+                expected,
                 vector.len()
             )));
         }
@@ -151,6 +215,14 @@ impl Default for OllamaEmbeddingModel {
 struct OllamaRequest {
     model: String,
     input: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    options: Option<OllamaOptions>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+struct OllamaOptions {
+    num_ctx: u32,
+    num_batch: u32,
 }
 
 #[derive(Deserialize)]
@@ -253,7 +325,7 @@ impl EmbeddingModel for OllamaEmbeddingModel {
     }
 
     fn dimensions(&self) -> usize {
-        self.dimensions
+        self.dimensions.load(Ordering::Acquire)
     }
 
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
@@ -263,13 +335,13 @@ impl EmbeddingModel for OllamaEmbeddingModel {
         let live = texts
             .iter()
             .enumerate()
-            .filter(|(_, text)| !text.trim().is_empty())
-            .map(|(index, text)| (index, text.clone()))
+            .filter_map(|(index, text)| {
+                let text = text.trim();
+                (!text.is_empty()).then(|| (index, text.to_owned()))
+            })
             .collect::<Vec<_>>();
         if live.is_empty() {
-            return Err(Error::Validation(
-                "Ollama embedding batches must not contain blank inputs".into(),
-            ));
+            return Ok(vec![Vec::new(); texts.len()]);
         }
         if live.len() != texts.len() {
             return Err(Error::Validation(
@@ -335,10 +407,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn blank_inputs_are_rejected_without_network() {
+    async fn blank_inputs_are_position_safe_without_network() {
         let model = OllamaEmbeddingModel::default();
-        let error = model.embed(&[" ".into(), "\n".into()]).await.unwrap_err();
-        assert!(matches!(error, Error::Validation(_)));
+        let vectors = model.embed(&[" ".into(), "\n".into()]).await.unwrap();
+        assert_eq!(vectors, vec![Vec::<f32>::new(), Vec::new()]);
     }
 
     #[test]

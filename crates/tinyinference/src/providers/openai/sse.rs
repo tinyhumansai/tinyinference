@@ -138,6 +138,9 @@ impl OpenAiStreamAcc {
                     }
                     if let Some(args) = function.arguments.filter(|a| !a.is_empty()) {
                         slot.args.push_str(&args);
+                        if slot.id.is_empty() {
+                            slot.id = tool_call_id(idx, "");
+                        }
                         let call_id = tool_call_id(idx, &slot.id);
                         pending.push_back(ModelStreamItem::ToolCallDelta(ToolDelta {
                             call_id,
@@ -274,6 +277,8 @@ impl OpenAiStreamAcc {
             finish_reason: self.finish_reason,
             raw: None,
             resolved_model: None,
+            continue_turn: None,
+            served_from_cache: false,
         }
     }
 }
