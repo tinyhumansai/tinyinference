@@ -1,0 +1,31 @@
+[package]
+name = "tinyinference"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Provider-neutral model, streaming, provider, and embedding APIs for Rust."
+documentation = "https://docs.rs/tinyinference"
+readme = "../../README.md"
+keywords = ["llm", "inference", "streaming", "embeddings", "openai"]
+categories = ["api-bindings", "asynchronous"]
+
+[dependencies]
+async-trait = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[features]
+default = []
+
+[lints]
+workspace = true
