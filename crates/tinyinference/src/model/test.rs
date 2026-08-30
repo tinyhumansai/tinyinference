@@ -12,6 +12,12 @@ use serde_json::json;
 fn request_builder_sets_fields() {
     let req = ModelRequest::new(vec![Message::user("hi")])
         .with_model("gpt")
+        .with_model_hint(ModelHint {
+            model: "fast".into(),
+            priority: 10,
+            reason: Some("latency".into()),
+        })
+        .with_reuse_previous_model(true)
         .with_temperature(0.5)
         .with_top_p(0.9)
         .with_max_tokens(128)
@@ -29,6 +35,8 @@ fn request_builder_sets_fields() {
     assert_eq!(req.timeout_ms, Some(1000));
     assert_eq!(req.tool_choice, ToolChoice::Required);
     assert_eq!(req.tags, vec!["t".to_string()]);
+    assert_eq!(req.model_hints[0].model, "fast");
+    assert!(req.reuse_previous_model);
 }
 
 #[test]
@@ -252,10 +260,18 @@ fn model_request_capability_and_provider_option_builders() {
 
 #[test]
 fn response_helpers() {
-    let resp = ModelResponse::assistant("hi").with_finish_reason("stop");
+    let resolved = ResolvedModel {
+        name: "fast".into(),
+        requested: Some("fast".into()),
+        source: ModelResolutionSource::Hint,
+    };
+    let resp = ModelResponse::assistant("hi")
+        .with_finish_reason("stop")
+        .with_resolved_model(resolved.clone());
     assert_eq!(resp.text(), "hi");
     assert!(resp.tool_calls().is_empty());
     assert_eq!(resp.finish_reason.as_deref(), Some("stop"));
+    assert_eq!(resp.resolved_model, Some(resolved));
 }
 
 #[test]

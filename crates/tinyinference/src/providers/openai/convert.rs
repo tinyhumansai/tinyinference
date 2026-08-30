@@ -323,6 +323,7 @@ pub(super) fn parse_chat_response(
         usage,
         finish_reason: choice.finish_reason,
         raw: Some(value),
+        resolved_model: None,
     })
 }
 
