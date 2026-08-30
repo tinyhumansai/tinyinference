@@ -43,12 +43,30 @@ pub(super) struct ResponsesRequest {
     pub(super) tools: Vec<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) tool_choice: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) previous_response_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) text: Option<Value>,
+    #[serde(flatten, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub(super) extra: serde_json::Map<String, Value>,
 }
 
 #[derive(Debug, Serialize)]
 pub(super) struct ResponsesInput {
-    pub(super) role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) role: Option<String>,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub(super) kind: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) content: Vec<ResponsesContentPart>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) arguments: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) output: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -64,11 +82,21 @@ pub(super) struct ResponsesContentPart {
 #[derive(Debug, Deserialize)]
 pub(super) struct ResponsesResponse {
     #[serde(default)]
+    pub(super) status: Option<String>,
+    #[serde(default)]
+    pub(super) incomplete_details: Option<ResponsesIncompleteDetails>,
+    #[serde(default)]
     pub(super) output: Vec<ResponsesOutput>,
     #[serde(default)]
     pub(super) output_text: Option<String>,
     #[serde(default)]
     pub(super) usage: Option<ResponsesUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct ResponsesIncompleteDetails {
+    #[serde(default)]
+    pub(super) reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -108,6 +136,23 @@ fn message_text(content: &[ContentBlock]) -> String {
         .filter_map(ContentBlock::as_text)
         .collect::<Vec<_>>()
         .join("")
+}
+
+fn message_output_text(content: &[ContentBlock]) -> Result<String> {
+    let mut output = String::new();
+    for block in content {
+        match block {
+            ContentBlock::Text(text) => output.push_str(text),
+            ContentBlock::Json(value) => output.push_str(&value.to_string()),
+            ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => {}
+            ContentBlock::Image(_) | ContentBlock::ProviderExtension(_) => {
+                return Err(Error::Validation(
+                    "tool output cannot be represented by the Responses API".into(),
+                ));
+            }
+        }
+    }
+    Ok(output)
 }
 
 fn input_parts(message: &Message) -> Result<Vec<ResponsesContentPart>> {
@@ -195,7 +240,45 @@ pub(super) fn build_responses_input(
                 }
                 continue;
             }
-            Message::User(_) | Message::Assistant(_) | Message::Tool(_) => {}
+            Message::Tool(tool) => {
+                input.push(ResponsesInput {
+                    role: None,
+                    kind: Some("function_call_output".into()),
+                    content: Vec::new(),
+                    call_id: Some(tool.tool_call_id.clone()),
+                    name: None,
+                    arguments: None,
+                    output: Some(message_output_text(&tool.content)?),
+                });
+                continue;
+            }
+            Message::Assistant(assistant) => {
+                let content = input_parts(message)?;
+                if !content.is_empty() {
+                    input.push(ResponsesInput {
+                        role: Some("assistant".into()),
+                        kind: None,
+                        content,
+                        call_id: None,
+                        name: None,
+                        arguments: None,
+                        output: None,
+                    });
+                }
+                for call in &assistant.tool_calls {
+                    input.push(ResponsesInput {
+                        role: None,
+                        kind: Some("function_call".into()),
+                        content: Vec::new(),
+                        call_id: Some(call.id.clone()),
+                        name: Some(call.name.clone()),
+                        arguments: Some(serde_json::to_string(&call.arguments)?),
+                        output: None,
+                    });
+                }
+                continue;
+            }
+            Message::User(_) => {}
         }
         let content = input_parts(message)?;
         if content.is_empty() {
@@ -203,13 +286,67 @@ pub(super) fn build_responses_input(
         }
         let role = normalize_role(message);
         input.push(ResponsesInput {
-            role: role.to_string(),
+            role: Some(role.to_string()),
+            kind: None,
             content,
+            call_id: None,
+            name: None,
+            arguments: None,
+            output: None,
         });
     }
 
     let instructions = (!instructions_parts.is_empty()).then(|| instructions_parts.join("\n\n"));
     Ok((instructions, input))
+}
+
+pub(super) fn responses_text_format(
+    format: Option<&crate::model::ResponseFormat>,
+) -> Option<Value> {
+    use crate::model::ResponseFormat;
+
+    format.map(|format| match format {
+        ResponseFormat::Text => serde_json::json!({"format": {"type": "text"}}),
+        ResponseFormat::JsonObject => {
+            serde_json::json!({"format": {"type": "json_object"}})
+        }
+        ResponseFormat::JsonSchema { name, schema } | ResponseFormat::Auto { name, schema } => {
+            serde_json::json!({
+                "format": {
+                    "type": "json_schema",
+                    "name": name,
+                    "schema": schema,
+                    "strict": true
+                }
+            })
+        }
+    })
+}
+
+pub(super) fn responses_extra_options(options: &Value) -> Result<serde_json::Map<String, Value>> {
+    if options.is_null() {
+        return Ok(serde_json::Map::new());
+    }
+    let object = options.as_object().ok_or_else(|| {
+        Error::Validation("provider_options for Responses must be a JSON object".into())
+    })?;
+    const RESERVED: &[&str] = &[
+        "model",
+        "input",
+        "instructions",
+        "stream",
+        "store",
+        "max_output_tokens",
+        "tools",
+        "tool_choice",
+        "previous_response_id",
+        "text",
+    ];
+    Ok(object
+        .iter()
+        .filter(|(key, _)| !RESERVED.contains(&key.as_str()))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect())
 }
 
 pub(super) fn responses_tools(tools: &[ToolSchema]) -> Vec<Value> {
@@ -307,17 +444,25 @@ pub(super) fn parse_responses_response(value: Value) -> Result<ModelResponse> {
             usage,
         },
         usage,
-        finish_reason: Some(
-            if parsed
-                .output
-                .iter()
-                .any(|item| item.kind.as_deref() == Some("function_call"))
+        finish_reason: Some(if parsed.status.as_deref() == Some("incomplete") {
+            match parsed
+                .incomplete_details
+                .as_ref()
+                .and_then(|details| details.reason.as_deref())
             {
-                "tool_calls".to_string()
-            } else {
-                "stop".to_string()
-            },
-        ),
+                Some("max_output_tokens") => "length".to_string(),
+                Some(reason) => reason.to_string(),
+                None => "incomplete".to_string(),
+            }
+        } else if parsed
+            .output
+            .iter()
+            .any(|item| item.kind.as_deref() == Some("function_call"))
+        {
+            "tool_calls".to_string()
+        } else {
+            "stop".to_string()
+        }),
         raw: Some(value),
     })
 }
@@ -340,11 +485,11 @@ mod tests {
         let (instructions, input) = build_responses_input(&messages).unwrap();
         assert_eq!(instructions.as_deref(), Some("be terse\n\nand correct"));
         assert_eq!(input.len(), 2);
-        assert_eq!(input[0].role, "user");
+        assert_eq!(input[0].role.as_deref(), Some("user"));
         assert_eq!(input[0].content[0].kind, "input_text");
         assert_eq!(input[0].content[0].text.as_deref(), Some("hi"));
         // Assistant items must use `output_text`, not `input_text`.
-        assert_eq!(input[1].role, "assistant");
+        assert_eq!(input[1].role.as_deref(), Some("assistant"));
         assert_eq!(input[1].content[0].kind, "output_text");
         assert_eq!(input[1].content[0].text.as_deref(), Some("hello"));
     }
@@ -352,6 +497,8 @@ mod tests {
     #[test]
     fn extract_text_prefers_output_text_then_scans_content() {
         let with_convenience = ResponsesResponse {
+            status: Some("completed".into()),
+            incomplete_details: None,
             output: Vec::new(),
             output_text: Some("  final  ".to_string()),
             usage: None,
@@ -362,6 +509,8 @@ mod tests {
         );
 
         let via_content = ResponsesResponse {
+            status: Some("completed".into()),
+            incomplete_details: None,
             output: vec![ResponsesOutput {
                 kind: Some("message".into()),
                 content: vec![
@@ -387,6 +536,8 @@ mod tests {
         );
 
         let empty = ResponsesResponse {
+            status: Some("completed".into()),
+            incomplete_details: None,
             output: Vec::new(),
             output_text: None,
             usage: None,
@@ -454,5 +605,54 @@ mod tests {
             responses_tool_choice(&ToolChoice::Tool("lookup".into()), true).unwrap()["name"],
             "lookup"
         );
+    }
+
+    #[test]
+    fn build_input_correlates_function_calls_and_outputs() {
+        let messages = vec![
+            Message::Assistant(AssistantMessage {
+                id: None,
+                content: Vec::new(),
+                tool_calls: vec![ToolCall::new("call-1", "lookup", json!({"query": "rust"}))],
+                usage: None,
+            }),
+            Message::Tool(crate::message::ToolMessage {
+                tool_call_id: "call-1".into(),
+                content: vec![ContentBlock::Json(json!({"answer": 42}))],
+            }),
+        ];
+        let (_, input) = build_responses_input(&messages).unwrap();
+        assert_eq!(input.len(), 2);
+        assert_eq!(input[0].kind.as_deref(), Some("function_call"));
+        assert_eq!(input[0].call_id.as_deref(), Some("call-1"));
+        assert_eq!(input[0].name.as_deref(), Some("lookup"));
+        assert_eq!(input[0].arguments.as_deref(), Some("{\"query\":\"rust\"}"));
+        assert_eq!(input[1].kind.as_deref(), Some("function_call_output"));
+        assert_eq!(input[1].call_id.as_deref(), Some("call-1"));
+        assert_eq!(input[1].output.as_deref(), Some("{\"answer\":42}"));
+    }
+
+    #[test]
+    fn structured_formats_map_to_responses_text_configuration() {
+        let schema = json!({"type": "object"});
+        let format = responses_text_format(Some(&crate::model::ResponseFormat::json_schema(
+            "answer",
+            schema.clone(),
+        )))
+        .unwrap();
+        assert_eq!(format["format"]["type"], "json_schema");
+        assert_eq!(format["format"]["name"], "answer");
+        assert_eq!(format["format"]["schema"], schema);
+    }
+
+    #[test]
+    fn incomplete_response_preserves_length_finish_reason() {
+        let response = parse_responses_response(json!({
+            "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "output_text": "partial"
+        }))
+        .unwrap();
+        assert_eq!(response.finish_reason.as_deref(), Some("length"));
     }
 }

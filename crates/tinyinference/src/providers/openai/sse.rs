@@ -304,6 +304,8 @@ pub(super) struct SseState {
     pub(super) started: bool,
     /// Whether the byte stream ended or `[DONE]` was seen.
     pub(super) finished: bool,
+    /// Whether `[DONE]` or an index-zero finish reason was observed.
+    pub(super) completion_seen: bool,
     /// Whether the terminal [`ModelStreamItem::Completed`]/[`ModelStreamItem::Failed`]
     /// has been emitted.
     pub(super) terminal_emitted: bool,
@@ -365,6 +367,7 @@ impl SseState {
         };
         let payload = rest.trim();
         if payload == "[DONE]" {
+            self.completion_seen = true;
             self.finished = true;
             return;
         }
@@ -399,6 +402,9 @@ impl SseState {
             let mut pending = std::mem::take(&mut self.pending);
             self.acc.ingest(chunk, &mut pending);
             self.pending = pending;
+            if self.acc.finish_reason.is_some() {
+                self.completion_seen = true;
+            }
         }
     }
 
@@ -471,7 +477,22 @@ pub(super) async fn sse_next(mut state: SseState) -> Option<(ModelStreamItem, Ss
                 // Drain any final `data:` line the provider sent without a
                 // trailing newline before terminating.
                 state.drain_remaining();
-                state.finished = true;
+                if state.terminal_emitted || state.completion_seen {
+                    state.finished = true;
+                } else {
+                    state.finished = true;
+                    state.terminal_emitted = true;
+                    return Some((
+                        ModelStreamItem::ProviderFailed(ProviderError {
+                            provider: state.provider.clone(),
+                            model: Some(state.model.clone()),
+                            message: "provider stream ended before a completion signal".into(),
+                            retryable: true,
+                            ..ProviderError::default()
+                        }),
+                        state,
+                    ));
+                }
             }
         }
     }

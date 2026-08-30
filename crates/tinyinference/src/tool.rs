@@ -64,6 +64,12 @@ impl ToolSchema {
     /// Returns [`crate::Error::Validation`] when the tool name or arguments do
     /// not satisfy the declaration.
     pub fn validate_call(&self, call: &ToolCall) -> crate::Result<()> {
+        if let Some(reason) = &call.invalid {
+            return Err(crate::Error::Validation(format!(
+                "tool call `{}` has malformed arguments: {reason}",
+                call.name
+            )));
+        }
         if call.name != self.name {
             return Err(crate::Error::Validation(format!(
                 "tool call `{}` does not match schema `{}`",

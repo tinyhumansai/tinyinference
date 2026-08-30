@@ -103,6 +103,11 @@ impl EmbeddingModel for CohereEmbeddingModel {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
+        if self.dimensions == 0 {
+            return Err(Error::Validation(
+                "embedding dimensions must be greater than zero".into(),
+            ));
+        }
         if self.api_key.trim().is_empty() {
             return Err(Error::Validation(
                 "Cohere API key not set. Configure an API key before embedding.".into(),
@@ -233,5 +238,14 @@ mod tests {
         let model = CohereEmbeddingModel::new("").with_base_url("http://127.0.0.1:1");
         let error = model.embed(&["hello".into()]).await.unwrap_err();
         assert!(error.to_string().contains("API key not set"));
+    }
+
+    #[tokio::test]
+    async fn zero_dimensions_fail_before_network() {
+        let model = CohereEmbeddingModel::new("key")
+            .with_dimensions(0)
+            .with_base_url("http://127.0.0.1:1");
+        let error = model.embed(&["hello".into()]).await.unwrap_err();
+        assert!(matches!(error, Error::Validation(_)));
     }
 }

@@ -15,9 +15,11 @@ use super::*;
 /// [`Error::Validation`] instead of being discarded.
 pub(super) fn translate_message(message: &Message) -> Result<ChatMessageWire> {
     let wire = match message {
-        Message::System(_) => ChatMessageWire {
+        Message::System(system) => ChatMessageWire {
             role: "system".to_string(),
-            content: Some(MessageContentWire::Text(message.text())),
+            content: Some(MessageContentWire::Text(translate_text_content(
+                &system.content,
+            )?)),
             tool_calls: Vec::new(),
             tool_call_id: None,
         },
@@ -59,7 +61,7 @@ pub(super) fn translate_message(message: &Message) -> Result<ChatMessageWire> {
         }
         Message::Tool(tool) => ChatMessageWire {
             role: "tool".to_string(),
-            content: Some(MessageContentWire::Text(translate_tool_content(
+            content: Some(MessageContentWire::Text(translate_text_content(
                 &tool.content,
             )?)),
             tool_calls: Vec::new(),
@@ -69,7 +71,7 @@ pub(super) fn translate_message(message: &Message) -> Result<ChatMessageWire> {
     Ok(wire)
 }
 
-fn translate_tool_content(blocks: &[ContentBlock]) -> Result<String> {
+fn translate_text_content(blocks: &[ContentBlock]) -> Result<String> {
     let mut text = String::new();
     for block in blocks {
         match block {

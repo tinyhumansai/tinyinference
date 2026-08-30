@@ -989,7 +989,7 @@ impl OpenAiModel {
     }
 
     /// Builds the `/v1/responses` request body from a provider-neutral request.
-    fn translate_responses_request(
+    pub(super) fn translate_responses_request(
         &self,
         request: &ModelRequest,
     ) -> Result<responses::ResponsesRequest> {
@@ -1000,6 +1000,8 @@ impl OpenAiModel {
         } else {
             request.max_tokens
         };
+        let provider_options =
+            merge_provider_options(&self.default_provider_options, &request.provider_options);
         Ok(responses::ResponsesRequest {
             model,
             input,
@@ -1012,6 +1014,9 @@ impl OpenAiModel {
                 &request.tool_choice,
                 !request.tools.is_empty(),
             ),
+            previous_response_id: request.continuation_id.clone(),
+            text: responses::responses_text_format(request.response_format.as_ref()),
+            extra: responses::responses_extra_options(&provider_options)?,
         })
     }
 
@@ -1065,7 +1070,7 @@ impl OpenAiModel {
     /// Sends `builder` and returns the checked (2xx) [`reqwest::Response`].
     ///
     /// The shared transport tail for every OpenAI call: a send/transport failure
-    /// is mapped to a [`Error::Model`] describing `what` (e.g.
+    /// is mapped to a structured [`Error::Provider`] describing `what` (e.g.
     /// `"request"`, `"stream request"`) against `url`, and any non-2xx status is
     /// decoded through [`Self::parse_error_body`] into a structured
     /// [`Error::Provider`]. On success the raw response is handed back
@@ -1079,7 +1084,7 @@ impl OpenAiModel {
         let response = builder.send().await.map_err(|e| {
             let error =
                 self.provider_error(format!("{what} to {url} failed: {e}"), None, None, None);
-            Error::Model(self.provider_failure_message(&error))
+            Error::Provider(Box::new(error))
         })?;
 
         let status = response.status();
@@ -1185,23 +1190,6 @@ impl OpenAiModel {
             retryable,
             raw,
         }
-    }
-
-    fn provider_failure_message(&self, error: &ProviderError) -> String {
-        format!(
-            "{} returned{}{}: {}",
-            error.provider,
-            error
-                .status
-                .map(|status| format!(" HTTP {status}"))
-                .unwrap_or_default(),
-            error
-                .code
-                .as_deref()
-                .map(|code| format!(" ({code})"))
-                .unwrap_or_default(),
-            error.message
-        )
     }
 
     pub(super) fn parse_error_body(&self, status: u16, text: &str) -> ProviderError {
@@ -1494,6 +1482,7 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
             model: self.model.clone(),
             started: false,
             finished: false,
+            completion_seen: false,
             terminal_emitted: false,
         };
 

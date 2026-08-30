@@ -239,6 +239,26 @@ fn translates_structured_tool_result_content() {
 }
 
 #[test]
+fn translates_structured_system_content_and_rejects_images() {
+    let request = ModelRequest::new(vec![Message::System(crate::message::SystemMessage {
+        content: vec![ContentBlock::Json(json!({"policy": "strict"}))],
+    })]);
+    let value = serde_json::to_value(model().translate_request(&request).unwrap()).unwrap();
+    assert_eq!(
+        value["messages"][0]["content"],
+        json!("{\"policy\":\"strict\"}")
+    );
+
+    let invalid = ModelRequest::new(vec![Message::System(crate::message::SystemMessage {
+        content: vec![ContentBlock::Image(crate::message::ImageRef {
+            url: "https://example.test/image.png".into(),
+            mime_type: None,
+        })],
+    })]);
+    assert!(model().translate_request(&invalid).is_err());
+}
+
+#[test]
 fn parses_openai_response_with_content_tool_call_and_usage() {
     // Hand-written OpenAI-shaped response JSON.
     let body = json!({
@@ -690,6 +710,7 @@ async fn sse_stream_parses_text_tool_calls_and_usage() {
         model: "gpt-4.1-mini".to_string(),
         started: false,
         finished: false,
+        completion_seen: false,
         terminal_emitted: false,
     };
     let items: Vec<ModelStreamItem> = futures::stream::unfold(state, sse_next).collect().await;
@@ -845,6 +866,7 @@ async fn collect_sse(raw: Vec<Vec<u8>>) -> Vec<ModelStreamItem> {
         model: "gpt-4.1-mini".to_string(),
         started: false,
         finished: false,
+        completion_seen: false,
         terminal_emitted: false,
     };
     futures::stream::unfold(state, sse_next).collect().await
@@ -871,6 +893,7 @@ async fn collect_sse_with(
         model: "gpt-4.1-mini".to_string(),
         started: false,
         finished: false,
+        completion_seen: false,
         terminal_emitted: false,
     };
     futures::stream::unfold(state, sse_next).collect().await
@@ -1125,8 +1148,10 @@ async fn sse_stream_drains_final_line_without_trailing_newline() {
     // The provider ends the stream with a final `data:` event that has no
     // trailing newline and no `[DONE]` sentinel. The leftover buffer must be
     // drained at EOF so the last fragment is not dropped.
-    let raw: Vec<Vec<u8>> =
-        vec![b"data: {\"choices\":[{\"delta\":{\"content\":\"tail\"}}]}".to_vec()];
+    let raw: Vec<Vec<u8>> = vec![
+        b"data: {\"choices\":[{\"delta\":{\"content\":\"tail\"},\"finish_reason\":\"stop\"}]}"
+            .to_vec(),
+    ];
 
     let items = collect_sse(raw).await;
 
@@ -1137,6 +1162,19 @@ async fn sse_stream_drains_final_line_without_trailing_newline() {
     }
     let response = merged.finish().unwrap();
     assert_eq!(response.text(), "tail");
+}
+
+#[tokio::test]
+async fn sse_stream_rejects_eof_before_completion_signal() {
+    let items = collect_sse(vec![
+        b"data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n".to_vec(),
+    ])
+    .await;
+    assert!(matches!(
+        items.last(),
+        Some(ModelStreamItem::ProviderFailed(error))
+            if error.message.contains("before a completion signal")
+    ));
 }
 
 #[tokio::test]
@@ -1886,6 +1924,47 @@ fn prompt_guided_tools_honor_tool_choice_policy() {
     assert!(prompt.contains("must call the `second` tool"));
     assert!(prompt.contains("**second**"));
     assert!(!prompt.contains("**first**"));
+}
+
+#[test]
+fn responses_request_preserves_continuation_format_and_provider_options() {
+    let model = model().with_default_provider_options(json!({
+        "reasoning": {"effort": "medium"},
+        "store": true
+    }));
+    let request = ModelRequest::new(vec![Message::user("continue")])
+        .with_continuation_id("resp_previous")
+        .with_response_format(ResponseFormat::json_schema(
+            "answer",
+            json!({"type": "object"}),
+        ))
+        .with_provider_options(json!({
+            "reasoning": {"effort": "high"},
+            "metadata": {"source": "test"}
+        }));
+    let body = serde_json::to_value(model.translate_responses_request(&request).unwrap()).unwrap();
+    assert_eq!(body["previous_response_id"], "resp_previous");
+    assert_eq!(body["text"]["format"]["type"], "json_schema");
+    assert_eq!(body["reasoning"]["effort"], "high");
+    assert_eq!(body["metadata"]["source"], "test");
+    assert!(body.get("store").is_some(), "owned store field is retained");
+}
+
+#[tokio::test]
+async fn transport_failures_preserve_provider_details() {
+    let model = OpenAiModel::compatible("key", "http://127.0.0.1:1", "model");
+    let error = model
+        .invoke(&(), ModelRequest::new(vec![Message::user("hello")]))
+        .await
+        .unwrap_err();
+    match error {
+        Error::Provider(error) => {
+            assert_eq!(error.provider, "openai");
+            assert_eq!(error.model.as_deref(), Some("model"));
+            assert!(error.retryable);
+        }
+        other => panic!("expected structured provider error, got {other:?}"),
+    }
 }
 
 #[test]
