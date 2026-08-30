@@ -1127,13 +1127,14 @@ impl OpenAiModel {
             .await
         {
             Ok(response) => Ok(response),
-            Err(Error::Provider(err))
-                if err.status == Some(400)
-                    && let Some(degrade) = degrade_for_400(&err.message, request, baseline) =>
-            {
-                let retry = self.build_chat_body(request, degrade, streaming)?;
-                self.post_json(&retry, request.timeout_ms, streaming, what)
-                    .await
+            Err(Error::Provider(err)) if err.status == Some(400) => {
+                if let Some(degrade) = degrade_for_400(&err.message, request, baseline) {
+                    let retry = self.build_chat_body(request, degrade, streaming)?;
+                    self.post_json(&retry, request.timeout_ms, streaming, what)
+                        .await
+                } else {
+                    Err(Error::Provider(err))
+                }
             }
             Err(e) => Err(e),
         }
