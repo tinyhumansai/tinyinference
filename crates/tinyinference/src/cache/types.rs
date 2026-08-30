@@ -130,4 +130,10 @@ pub struct CachePolicy {
     /// When `true`, middleware must preserve the order and content of cacheable
     /// prefix segments. Violations are reported as [`CacheLayoutEvent`]s.
     pub protect_prompt_prefix: bool,
+    /// Entry time-to-live in milliseconds; `None` means no expiry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl_ms: Option<u64>,
+    /// Optional cache-key namespace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
 }

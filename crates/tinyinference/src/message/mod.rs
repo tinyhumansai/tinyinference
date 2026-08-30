@@ -129,6 +129,8 @@ impl Message {
         Message::Tool(ToolMessage {
             tool_call_id: tool_call_id.into(),
             content: vec![ContentBlock::Text(content.into())],
+            trusted_verbatim: false,
+            artifact: None,
         })
     }
 
@@ -139,6 +141,14 @@ impl Message {
             Message::User(m) => concat_text(&m.content),
             Message::Assistant(m) => concat_text(&m.content),
             Message::Tool(m) => concat_text(&m.content),
+        }
+    }
+
+    /// Returns an out-of-band tool artifact when this is a tool message.
+    pub fn artifact(&self) -> Option<&serde_json::Value> {
+        match self {
+            Message::Tool(message) => message.artifact.as_ref(),
+            _ => None,
         }
     }
 
@@ -162,9 +172,8 @@ impl Message {
             .sum()
     }
 
-    /// Approximate character weight of the message across *all* content blocks
-    /// (text, JSON, images, reasoning, provider extensions), for token
-    /// estimation and context-window gating.
+    /// Approximate character weight of provider-visible content and structural
+    /// tool-call payloads, for token estimation and context-window gating.
     ///
     /// Distinct from [`char_len`](Self::char_len), which counts only visible
     /// text: a transcript dominated by images, large tool-result JSON, or model
@@ -178,11 +187,31 @@ impl Message {
             Message::Assistant(m) => &m.content,
             Message::Tool(m) => &m.content,
         };
-        content
+        let content_weight: usize = content
             .iter()
             .map(ContentBlock::estimated_char_weight)
-            .sum()
+            .sum();
+        let structural_weight = match self {
+            Message::Assistant(message) => tool_calls_char_weight(&message.tool_calls),
+            Message::Tool(message) => message.tool_call_id.chars().count(),
+            _ => 0,
+        };
+        content_weight + structural_weight
     }
+}
+
+fn tool_calls_char_weight(tool_calls: &[crate::tool::ToolCall]) -> usize {
+    if tool_calls.is_empty() {
+        return 0;
+    }
+    serde_json::to_string(tool_calls)
+        .map(|rendered| rendered.chars().count())
+        .unwrap_or_else(|_| {
+            tool_calls
+                .iter()
+                .map(|call| call.name.chars().count() + call.arguments.to_string().chars().count())
+                .sum()
+        })
 }
 
 #[cfg(test)]

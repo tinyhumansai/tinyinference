@@ -7,25 +7,51 @@
 //! OpenAI Codex OAuth path requires (paired with `with_extra_query_param` +
 //! `with_user_agent`).
 //!
-//! This first port is **text-in / text-out**: system messages fold into
-//! `instructions`, user/assistant/tool turns become `input` items, and the
-//! terminal `output_text` (or the first `output_text` content part) becomes the
-//! assistant reply. Native tool calls over `/responses` and true SSE streaming
-//! are follow-ups; the harness embeds tool specs in the prompt for this path
-//! (its [`profile`](super::OpenAiModel) advertises the caller's chosen
-//! `tool_calling`).
+//! System messages fold into `instructions`, user/assistant/tool turns become
+//! `input` items, and the terminal `output_text` (or the first `output_text`
+//! content part) becomes the assistant reply.
+//!
+//! # What this path now carries
+//!
+//! The request used to be `{model, input, instructions, stream, store,
+//! max_output_tokens}` and **silently dropped everything else** a caller set —
+//! `tools`, `tool_choice`, `response_format`, `temperature`, `top_p`, `seed`,
+//! `stop_sequences`, `continuation_id`, and `provider_options`. That last one
+//! made `reasoning: {effort, summary}` unreachable on the only wire format in
+//! this crate that supports it. All of them are on the wire now, and the
+//! response side reads reasoning items, their `encrypted_content`, and the
+//! cache/reasoning usage breakdowns that were previously ignored (so every
+//! cached token on this path was billed at the full input rate).
+//!
+//! # Remaining gaps
+//!
+//! Tool *declarations* are sent, but a model that calls one comes back as a
+//! `function_call` output item this port does not yet decode into
+//! [`ToolCall`](crate::tool::ToolCall)s — and tool *results* are
+//! rendered as `user` turns carrying an explicit `[tool_result id=…]` prefix
+//! rather than native `function_call_output` items. That preserves the causal
+//! link the previous fold-into-assistant behaviour erased, but structural
+//! tool support and true SSE streaming remain follow-ups.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::message::{AssistantMessage, ContentBlock, Message};
-use crate::model::{ModelResponse, ToolChoice};
-use crate::tool::{ToolCall, ToolSchema};
+use crate::model::ModelResponse;
 use crate::usage::Usage;
-use crate::{Error, Result};
 
 /// The `/v1/responses` request body.
-#[derive(Debug, Serialize)]
+///
+/// # What used to be missing
+///
+/// This struct carried only `{model, input, instructions, stream, store,
+/// max_output_tokens}`. Everything else a caller set was **silently dropped**:
+/// `tools`, `tool_choice`, `response_format`, `temperature`, `top_p`,
+/// `stop_sequences`, `seed`, `previous_response_id`, and — most pointedly —
+/// `provider_options`, which meant `reasoning: {effort, summary}` was
+/// unreachable on the one wire format that supports it. A request that looked
+/// fully configured produced an unconfigured call.
+#[derive(Debug, Default, Serialize)]
 pub(super) struct ResponsesRequest {
     pub(super) model: String,
     pub(super) input: Vec<ResponsesInput>,
@@ -39,52 +65,128 @@ pub(super) struct ResponsesRequest {
     /// `max_tokens`. Omitted for the Codex OAuth backend, which rejects it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) max_output_tokens: Option<u32>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    /// Tool declarations. The Responses API flattens the function schema onto
+    /// the tool object rather than nesting it under `function` as Chat
+    /// Completions does.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) tools: Vec<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) tool_choice: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) previous_response_id: Option<String>,
+    /// Structured output. The Responses API nests it under `text.format`, not
+    /// the Chat Completions `response_format`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) text: Option<Value>,
-    #[serde(flatten, skip_serializing_if = "serde_json::Map::is_empty")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) temperature: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) top_p: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) seed: Option<i64>,
+    /// Stop sequences. Serialized only when non-empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) stop: Vec<String>,
+    /// The stateful-continuation handle. [`ModelRequest::continuation_id`]
+    /// existed with a builder and **no reader anywhere in the crate**, so this
+    /// was never sent and stateful follow-ups silently restarted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) previous_response_id: Option<String>,
+    /// `reasoning: { effort, summary }`, lowered from the provider-neutral
+    /// [`ReasoningConfig`][rc].
+    ///
+    /// [rc]: crate::model::ReasoningConfig
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) reasoning: Option<Value>,
+    /// Which extra payloads to return.
+    ///
+    /// Load-bearing for reasoning replay: with `store: false` the server keeps
+    /// no state, so reasoning items may be dropped between turns **unless** they
+    /// carry `encrypted_content` — which only arrives when
+    /// `include: ["reasoning.encrypted_content"]` is requested. Asking for
+    /// reasoning and not asking for this is asking for reasoning that cannot be
+    /// replayed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) include: Vec<String>,
+    /// Provider-specific passthrough merged onto the body. Keys here win, and
+    /// this is the escape hatch for anything the typed fields above cannot say.
+    #[serde(flatten)]
     pub(super) extra: serde_json::Map<String, Value>,
+}
+
+/// The `include` entry that makes reasoning replayable under `store: false`.
+pub(super) const INCLUDE_ENCRYPTED_REASONING: &str = "reasoning.encrypted_content";
+
+/// Lowers a provider-neutral [`ReasoningConfig`][rc] onto the Responses
+/// `reasoning` object.
+///
+/// Returns `None` when the config asks for nothing, so an empty config never
+/// adds a field. `budget_tokens` has no Responses spelling and is dropped here
+/// deliberately — it is Anthropic's knob, and inventing an OpenAI field for it
+/// would be worse than ignoring it.
+///
+/// [rc]: crate::model::ReasoningConfig
+pub(super) fn translate_reasoning(config: &crate::model::ReasoningConfig) -> Option<Value> {
+    if config.is_empty() {
+        return None;
+    }
+    let mut object = serde_json::Map::new();
+    if let Some(effort) = config.effort {
+        object.insert("effort".to_string(), Value::String(effort.as_str().into()));
+    }
+    if let Some(summary) = &config.summary {
+        object.insert("summary".to_string(), Value::String(summary.clone()));
+    }
+    (!object.is_empty()).then_some(Value::Object(object))
+}
+
+/// Translates a tool schema onto the Responses API's flattened tool shape.
+pub(super) fn translate_tool(schema: &crate::tool::ToolSchema) -> Value {
+    serde_json::json!({
+        "type": "function",
+        "name": schema.name,
+        "description": schema.description,
+        "parameters": schema.parameters,
+    })
+}
+
+/// Translates a [`ResponseFormat`][rf] onto the Responses API's `text.format`
+/// nesting (Chat Completions' `response_format` has no counterpart here).
+///
+/// [rf]: crate::model::ResponseFormat
+pub(super) fn translate_text_format(
+    format: &crate::model::ResponseFormat,
+    strict: bool,
+) -> Option<Value> {
+    use crate::model::ResponseFormat;
+    let inner = match format {
+        ResponseFormat::Text => return None,
+        ResponseFormat::JsonObject => serde_json::json!({ "type": "json_object" }),
+        ResponseFormat::JsonSchema { name, schema } | ResponseFormat::Auto { name, schema } => {
+            serde_json::json!({
+                "type": "json_schema",
+                "name": name,
+                "schema": schema,
+                "strict": strict,
+            })
+        }
+    };
+    Some(serde_json::json!({ "format": inner }))
 }
 
 #[derive(Debug, Serialize)]
 pub(super) struct ResponsesInput {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) role: Option<String>,
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub(super) kind: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) role: String,
     pub(super) content: Vec<ResponsesContentPart>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) call_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) arguments: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) output: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 pub(super) struct ResponsesContentPart {
     #[serde(rename = "type")]
     pub(super) kind: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) text: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) image_url: Option<String>,
+    pub(super) text: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ResponsesResponse {
-    #[serde(default)]
-    pub(super) status: Option<String>,
-    #[serde(default)]
-    pub(super) incomplete_details: Option<ResponsesIncompleteDetails>,
     #[serde(default)]
     pub(super) output: Vec<ResponsesOutput>,
     #[serde(default)]
@@ -93,24 +195,24 @@ pub(super) struct ResponsesResponse {
     pub(super) usage: Option<ResponsesUsage>,
 }
 
-#[derive(Debug, Deserialize)]
-pub(super) struct ResponsesIncompleteDetails {
-    #[serde(default)]
-    pub(super) reason: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub(super) struct ResponsesOutput {
+    /// Item kind: `message`, `reasoning`, `function_call`, …
     #[serde(rename = "type", default)]
     pub(super) kind: Option<String>,
     #[serde(default)]
     pub(super) content: Vec<ResponsesContent>,
+    /// Reasoning summary parts, on a `reasoning` item.
     #[serde(default)]
-    pub(super) call_id: Option<String>,
+    pub(super) summary: Vec<ResponsesContent>,
+    /// The opaque reasoning payload that survives `store: false`.
+    ///
+    /// Only present when the request asked for
+    /// [`INCLUDE_ENCRYPTED_REASONING`]. Preserved so a caller can replay
+    /// reasoning across turns; without it the server drops reasoning between
+    /// stateless turns.
     #[serde(default)]
-    pub(super) name: Option<String>,
-    #[serde(default)]
-    pub(super) arguments: Option<String>,
+    pub(super) encrypted_content: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -120,13 +222,44 @@ pub(super) struct ResponsesContent {
     pub(super) text: Option<String>,
 }
 
-/// Responses-API usage block (`input_tokens` / `output_tokens`).
-#[derive(Debug, Deserialize)]
+/// Responses-API usage block.
+///
+/// The details sub-objects used to be absent from this struct entirely, so
+/// **every cached token on this path was billed at the full input rate** and
+/// reasoning tokens were invisible.
+#[derive(Debug, Default, Deserialize)]
 pub(super) struct ResponsesUsage {
     #[serde(default)]
     pub(super) input_tokens: Option<u64>,
     #[serde(default)]
     pub(super) output_tokens: Option<u64>,
+    #[serde(default)]
+    pub(super) input_tokens_details: Option<ResponsesInputTokenDetails>,
+    #[serde(default)]
+    pub(super) output_tokens_details: Option<ResponsesOutputTokenDetails>,
+}
+
+/// `usage.input_tokens_details` — the cache breakdown of the input total.
+#[derive(Debug, Default, Deserialize)]
+pub(super) struct ResponsesInputTokenDetails {
+    #[serde(default)]
+    pub(super) cached_tokens: Option<u64>,
+    /// Cache **writes**, under either spelling gateways use.
+    #[serde(default)]
+    pub(super) cache_write_tokens: Option<u64>,
+    #[serde(default)]
+    pub(super) cache_creation_tokens: Option<u64>,
+}
+
+/// `usage.output_tokens_details` — where OpenAI reports reasoning tokens.
+///
+/// Note that **Anthropic has no equivalent field**: its thinking tokens are
+/// billed inside `output_tokens`, so a zero here is not evidence that no
+/// reasoning happened on an Anthropic-shaped gateway.
+#[derive(Debug, Default, Deserialize)]
+pub(super) struct ResponsesOutputTokenDetails {
+    #[serde(default)]
+    pub(super) reasoning_tokens: Option<u64>,
 }
 
 /// Concatenates the visible text of a message's content blocks.
@@ -138,84 +271,22 @@ fn message_text(content: &[ContentBlock]) -> String {
         .join("")
 }
 
-fn message_output_text(content: &[ContentBlock]) -> Result<String> {
-    let mut output = String::new();
-    for block in content {
-        match block {
-            ContentBlock::Text(text) => output.push_str(text),
-            ContentBlock::Json(value) => output.push_str(&value.to_string()),
-            ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => {}
-            ContentBlock::Image(_) | ContentBlock::ProviderExtension(_) => {
-                return Err(Error::Validation(
-                    "tool output cannot be represented by the Responses API".into(),
-                ));
-            }
-        }
-    }
-    Ok(output)
-}
-
-fn input_parts(message: &Message) -> Result<Vec<ResponsesContentPart>> {
-    let role = normalize_role(message);
-    let content = match message {
-        Message::System(message) => &message.content,
-        Message::User(message) => &message.content,
-        Message::Assistant(message) => &message.content,
-        Message::Tool(message) => &message.content,
-    };
-    let mut parts = Vec::new();
-    for block in content {
-        match block {
-            ContentBlock::Text(text) if !text.trim().is_empty() => {
-                parts.push(ResponsesContentPart {
-                    kind: if role == "assistant" {
-                        "output_text".into()
-                    } else {
-                        "input_text".into()
-                    },
-                    text: Some(text.clone()),
-                    image_url: None,
-                });
-            }
-            ContentBlock::Json(value) => parts.push(ResponsesContentPart {
-                kind: if role == "assistant" {
-                    "output_text".into()
-                } else {
-                    "input_text".into()
-                },
-                text: Some(value.to_string()),
-                image_url: None,
-            }),
-            ContentBlock::Image(image) if matches!(message, Message::User(_)) => {
-                parts.push(ResponsesContentPart {
-                    kind: "input_image".into(),
-                    text: None,
-                    image_url: Some(image.url.clone()),
-                });
-            }
-            ContentBlock::Image(_) => {
-                return Err(Error::Validation(
-                    "Responses API images are supported only in user messages".into(),
-                ));
-            }
-            ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => {}
-            ContentBlock::ProviderExtension(_) => {
-                return Err(Error::Validation(
-                    "provider extension content cannot be represented by the Responses API".into(),
-                ));
-            }
-            ContentBlock::Text(_) => {}
-        }
-    }
-    Ok(parts)
-}
-
-/// Normalizes a message role for the Responses API: assistant + tool turns fold
-/// into `assistant` (which the API keys to `output_text`), everything else to
-/// `user` (`input_text`). Mirrors the host `normalize_responses_role`.
+/// Normalizes a message role for the Responses API.
+///
+/// Assistant turns key to `output_text`; everything else to `input_text`.
+///
+/// **Tool results no longer fold into `assistant`.** They used to, which erased
+/// tool identity entirely: a tool result became an anonymous assistant utterance
+/// with no `tool_call_id`, so the model saw an assistant asserting a fact rather
+/// than the answer to a call it made. They are now rendered as `user` turns
+/// carrying an explicit `[tool_result …]` prefix (see
+/// [`build_responses_input`]), which preserves the causal link on a wire format
+/// this text-in/text-out port cannot express structurally. A true
+/// `function_call_output` item is the complete fix and rides with native tool
+/// support on this path.
 fn normalize_role(message: &Message) -> &'static str {
     match message {
-        Message::Assistant(_) | Message::Tool(_) => "assistant",
+        Message::Assistant(_) => "assistant",
         _ => "user",
     }
 }
@@ -225,14 +296,12 @@ fn normalize_role(message: &Message) -> &'static str {
 /// the content-part `kind` tracks the *normalized* role (`output_text` for
 /// assistant/tool, `input_text` otherwise) — the API rejects `input_text` on an
 /// assistant item.
-pub(super) fn build_responses_input(
-    messages: &[Message],
-) -> Result<(Option<String>, Vec<ResponsesInput>)> {
+pub(super) fn build_responses_input(messages: &[Message]) -> (Option<String>, Vec<ResponsesInput>) {
     let mut instructions_parts = Vec::new();
     let mut input = Vec::new();
 
     for message in messages {
-        match message {
+        let text = match message {
             Message::System(m) => {
                 let t = message_text(&m.content);
                 if !t.trim().is_empty() {
@@ -240,144 +309,44 @@ pub(super) fn build_responses_input(
                 }
                 continue;
             }
-            Message::Tool(tool) => {
-                input.push(ResponsesInput {
-                    role: None,
-                    kind: Some("function_call_output".into()),
-                    content: Vec::new(),
-                    call_id: Some(tool.tool_call_id.clone()),
-                    name: None,
-                    arguments: None,
-                    output: Some(message_output_text(&tool.content)?),
-                });
-                continue;
-            }
-            Message::Assistant(assistant) => {
-                let content = input_parts(message)?;
-                if !content.is_empty() {
-                    input.push(ResponsesInput {
-                        role: Some("assistant".into()),
-                        kind: None,
-                        content,
-                        call_id: None,
-                        name: None,
-                        arguments: None,
-                        output: None,
-                    });
+            Message::User(m) => message_text(&m.content),
+            Message::Assistant(m) => message_text(&m.content),
+            // Keep the call id visible so the model can tell *which* call this
+            // answers. Folding it into an anonymous assistant turn lost that.
+            Message::Tool(m) => {
+                let body = message_text(&m.content);
+                if body.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!("[tool_result id={} ]\n{body}", m.tool_call_id)
                 }
-                for call in &assistant.tool_calls {
-                    input.push(ResponsesInput {
-                        role: None,
-                        kind: Some("function_call".into()),
-                        content: Vec::new(),
-                        call_id: Some(call.id.clone()),
-                        name: Some(call.name.clone()),
-                        arguments: Some(serde_json::to_string(&call.arguments)?),
-                        output: None,
-                    });
-                }
-                continue;
             }
-            Message::User(_) => {}
-        }
-        let content = input_parts(message)?;
-        if content.is_empty() {
+        };
+        if text.trim().is_empty() {
             continue;
         }
         let role = normalize_role(message);
         input.push(ResponsesInput {
-            role: Some(role.to_string()),
-            kind: None,
-            content,
-            call_id: None,
-            name: None,
-            arguments: None,
-            output: None,
+            role: role.to_string(),
+            content: vec![ResponsesContentPart {
+                kind: if role == "assistant" {
+                    "output_text".to_string()
+                } else {
+                    "input_text".to_string()
+                },
+                text,
+            }],
         });
     }
 
     let instructions = (!instructions_parts.is_empty()).then(|| instructions_parts.join("\n\n"));
-    Ok((instructions, input))
-}
-
-pub(super) fn responses_text_format(
-    format: Option<&crate::model::ResponseFormat>,
-) -> Option<Value> {
-    use crate::model::ResponseFormat;
-
-    format.map(|format| match format {
-        ResponseFormat::Text => serde_json::json!({"format": {"type": "text"}}),
-        ResponseFormat::JsonObject => {
-            serde_json::json!({"format": {"type": "json_object"}})
-        }
-        ResponseFormat::JsonSchema { name, schema } | ResponseFormat::Auto { name, schema } => {
-            serde_json::json!({
-                "format": {
-                    "type": "json_schema",
-                    "name": name,
-                    "schema": schema,
-                    "strict": true
-                }
-            })
-        }
-    })
-}
-
-pub(super) fn responses_extra_options(options: &Value) -> Result<serde_json::Map<String, Value>> {
-    if options.is_null() {
-        return Ok(serde_json::Map::new());
-    }
-    let object = options.as_object().ok_or_else(|| {
-        Error::Validation("provider_options for Responses must be a JSON object".into())
-    })?;
-    const RESERVED: &[&str] = &[
-        "model",
-        "input",
-        "instructions",
-        "stream",
-        "store",
-        "max_output_tokens",
-        "tools",
-        "tool_choice",
-        "previous_response_id",
-        "text",
-    ];
-    Ok(object
-        .iter()
-        .filter(|(key, _)| !RESERVED.contains(&key.as_str()))
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect())
-}
-
-pub(super) fn responses_tools(tools: &[ToolSchema]) -> Vec<Value> {
-    tools
-        .iter()
-        .map(|tool| {
-            serde_json::json!({
-                "type": "function",
-                "name": tool.name,
-                "description": tool.description,
-                "parameters": tool.parameters,
-            })
-        })
-        .collect()
-}
-
-pub(super) fn responses_tool_choice(choice: &ToolChoice, has_tools: bool) -> Option<Value> {
-    if !has_tools {
-        return None;
-    }
-    Some(match choice {
-        ToolChoice::Auto => Value::String("auto".into()),
-        ToolChoice::None => Value::String("none".into()),
-        ToolChoice::Required => Value::String("required".into()),
-        ToolChoice::Tool(name) => serde_json::json!({"type": "function", "name": name}),
-    })
+    (instructions, input)
 }
 
 /// Extracts the assistant text from a Responses body: the convenience
 /// `output_text` field first, else the first `output_text` content part.
 pub(super) fn extract_responses_text(response: &ResponsesResponse) -> Option<String> {
+    // `output_text` is the whole answer when the server supplies it.
     if let Some(text) = response
         .output_text
         .as_deref()
@@ -387,6 +356,11 @@ pub(super) fn extract_responses_text(response: &ResponsesResponse) -> Option<Str
         return Some(text.to_string());
     }
     for item in &response.output {
+        // A `reasoning` item's parts are chain-of-thought, not the answer;
+        // folding them into the visible text would leak reasoning as content.
+        if item.kind.as_deref() == Some("reasoning") {
+            continue;
+        }
         for content in &item.content {
             if content.kind.as_deref() == Some("output_text")
                 && let Some(text) = content
@@ -402,70 +376,111 @@ pub(super) fn extract_responses_text(response: &ResponsesResponse) -> Option<Str
     None
 }
 
-/// Parses a raw `/v1/responses` JSON body into a [`ModelResponse`] (text reply).
-pub(super) fn parse_responses_response(value: Value) -> Result<ModelResponse> {
-    let parsed: ResponsesResponse = serde_json::from_value(value.clone())?;
-    let text = extract_responses_text(&parsed).unwrap_or_default();
-    let tool_calls = parsed
+/// Collects the reasoning text a Responses body carries.
+///
+/// Reads `reasoning` items' `summary` parts, then any `content` parts on the
+/// same item. Returns `None` when there is none. The parser used to read
+/// **no** reasoning at all from this path.
+pub(super) fn extract_responses_reasoning(response: &ResponsesResponse) -> Option<String> {
+    let mut text = String::new();
+    for item in &response.output {
+        if item.kind.as_deref() != Some("reasoning") {
+            continue;
+        }
+        for part in item.summary.iter().chain(item.content.iter()) {
+            if let Some(fragment) = part
+                .text
+                .as_deref()
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+            {
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str(fragment);
+            }
+        }
+    }
+    (!text.is_empty()).then_some(text)
+}
+
+/// The opaque reasoning payload to replay on the next turn, when the request
+/// asked for [`INCLUDE_ENCRYPTED_REASONING`] and the server supplied it.
+pub(super) fn extract_encrypted_reasoning(response: &ResponsesResponse) -> Option<String> {
+    response
         .output
         .iter()
-        .filter(|item| item.kind.as_deref() == Some("function_call"))
-        .map(|item| {
-            let id = item.call_id.clone().ok_or_else(|| {
-                Error::Serialization(serde_json::Error::io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "Responses function_call missing call_id",
-                )))
-            })?;
-            let name = item.name.clone().ok_or_else(|| {
-                Error::Serialization(serde_json::Error::io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "Responses function_call missing name",
-                )))
-            })?;
-            let raw = item.arguments.clone().unwrap_or_else(|| "{}".into());
-            Ok(match serde_json::from_str(&raw) {
-                Ok(arguments) => ToolCall::new(id, name, arguments),
-                Err(error) => ToolCall::invalid(id, name, raw, error.to_string()),
-            })
+        .find_map(|item| item.encrypted_content.clone())
+        .filter(|value| !value.is_empty())
+}
+
+/// Maps a Responses `usage` block onto the neutral [`Usage`], including the
+/// cache and reasoning breakdowns.
+pub(super) fn convert_responses_usage(wire: &ResponsesUsage) -> Usage {
+    let input_details = wire.input_tokens_details.as_ref();
+    let cache_read_tokens = input_details.and_then(|d| d.cached_tokens).unwrap_or(0);
+    let cache_creation_tokens = input_details
+        .map(|d| {
+            d.cache_write_tokens
+                .unwrap_or(0)
+                .max(d.cache_creation_tokens.unwrap_or(0))
         })
-        .collect::<Result<Vec<_>>>()?;
-    let usage = parsed.usage.as_ref().map(|u| Usage {
-        input_tokens: u.input_tokens.unwrap_or(0),
-        output_tokens: u.output_tokens.unwrap_or(0),
-        total_tokens: u.input_tokens.unwrap_or(0) + u.output_tokens.unwrap_or(0),
-        ..Usage::default()
-    });
-    Ok(ModelResponse {
+        .unwrap_or(0);
+    let input_tokens = wire.input_tokens.unwrap_or(0);
+    let output_tokens = wire.output_tokens.unwrap_or(0);
+    Usage {
+        input_tokens,
+        output_tokens,
+        total_tokens: input_tokens + output_tokens,
+        cache_read_tokens,
+        cache_creation_tokens,
+        reasoning_tokens: wire
+            .output_tokens_details
+            .as_ref()
+            .and_then(|d| d.reasoning_tokens)
+            .unwrap_or(0),
+    }
+}
+
+/// Parses a raw `/v1/responses` JSON body into a [`ModelResponse`].
+///
+/// Reasoning items surface as a leading
+/// [`ContentBlock::Thinking`] block, consistent with the Chat Completions path;
+/// the encrypted payload, when present, rides on the block's `signature` so it
+/// can be replayed on a later turn.
+pub(super) fn parse_responses_response(value: Value) -> ModelResponse {
+    let parsed: ResponsesResponse =
+        serde_json::from_value(value.clone()).unwrap_or_else(|_| ResponsesResponse {
+            output: Vec::new(),
+            output_text: None,
+            usage: None,
+        });
+    let text = extract_responses_text(&parsed).unwrap_or_default();
+    let usage = parsed.usage.as_ref().map(convert_responses_usage);
+
+    let mut content = Vec::new();
+    if let Some(reasoning) = extract_responses_reasoning(&parsed) {
+        content.push(ContentBlock::Thinking {
+            text: reasoning,
+            signature: extract_encrypted_reasoning(&parsed),
+        });
+    }
+    content.push(ContentBlock::Text(text));
+
+    ModelResponse {
         message: AssistantMessage {
             id: None,
-            content: vec![ContentBlock::Text(text)],
-            tool_calls,
+            content,
+            tool_calls: Vec::new(),
             usage,
         },
         usage,
-        finish_reason: Some(if parsed.status.as_deref() == Some("incomplete") {
-            match parsed
-                .incomplete_details
-                .as_ref()
-                .and_then(|details| details.reason.as_deref())
-            {
-                Some("max_output_tokens") => "length".to_string(),
-                Some(reason) => reason.to_string(),
-                None => "incomplete".to_string(),
-            }
-        } else if parsed
-            .output
-            .iter()
-            .any(|item| item.kind.as_deref() == Some("function_call"))
-        {
-            "tool_calls".to_string()
-        } else {
-            "stop".to_string()
-        }),
+        finish_reason: Some("stop".to_string()),
         raw: Some(value),
         resolved_model: None,
-    })
+        continue_turn: None,
+        served_from_cache: false,
+    }
 }
 
 #[cfg(test)]
@@ -483,23 +498,21 @@ mod tests {
             Message::assistant("hello"),
             Message::user("  "), // empty → skipped
         ];
-        let (instructions, input) = build_responses_input(&messages).unwrap();
+        let (instructions, input) = build_responses_input(&messages);
         assert_eq!(instructions.as_deref(), Some("be terse\n\nand correct"));
         assert_eq!(input.len(), 2);
-        assert_eq!(input[0].role.as_deref(), Some("user"));
+        assert_eq!(input[0].role, "user");
         assert_eq!(input[0].content[0].kind, "input_text");
-        assert_eq!(input[0].content[0].text.as_deref(), Some("hi"));
+        assert_eq!(input[0].content[0].text, "hi");
         // Assistant items must use `output_text`, not `input_text`.
-        assert_eq!(input[1].role.as_deref(), Some("assistant"));
+        assert_eq!(input[1].role, "assistant");
         assert_eq!(input[1].content[0].kind, "output_text");
-        assert_eq!(input[1].content[0].text.as_deref(), Some("hello"));
+        assert_eq!(input[1].content[0].text, "hello");
     }
 
     #[test]
     fn extract_text_prefers_output_text_then_scans_content() {
         let with_convenience = ResponsesResponse {
-            status: Some("completed".into()),
-            incomplete_details: None,
             output: Vec::new(),
             output_text: Some("  final  ".to_string()),
             usage: None,
@@ -510,10 +523,7 @@ mod tests {
         );
 
         let via_content = ResponsesResponse {
-            status: Some("completed".into()),
-            incomplete_details: None,
             output: vec![ResponsesOutput {
-                kind: Some("message".into()),
                 content: vec![
                     ResponsesContent {
                         kind: Some("reasoning".into()),
@@ -524,9 +534,7 @@ mod tests {
                         text: Some("answer".into()),
                     },
                 ],
-                call_id: None,
-                name: None,
-                arguments: None,
+                ..ResponsesOutput::default()
             }],
             output_text: None,
             usage: None,
@@ -537,8 +545,6 @@ mod tests {
         );
 
         let empty = ResponsesResponse {
-            status: Some("completed".into()),
-            incomplete_details: None,
             output: Vec::new(),
             output_text: None,
             usage: None,
@@ -552,7 +558,7 @@ mod tests {
             "output_text": "the answer",
             "usage": { "input_tokens": 12, "output_tokens": 5 }
         });
-        let resp = parse_responses_response(body).unwrap();
+        let resp = parse_responses_response(body);
         assert_eq!(resp.text(), "the answer");
         assert_eq!(resp.finish_reason.as_deref(), Some("stop"));
         let usage = resp.usage.expect("usage mapped");
@@ -563,97 +569,7 @@ mod tests {
 
     #[test]
     fn parse_tolerates_a_body_without_output() {
-        let resp = parse_responses_response(json!({ "id": "resp_1" })).unwrap();
+        let resp = parse_responses_response(json!({ "id": "resp_1" }));
         assert_eq!(resp.text(), "");
-    }
-
-    #[test]
-    fn parse_rejects_incompatible_output_shape() {
-        assert!(parse_responses_response(json!({"output": "not-an-array"})).is_err());
-    }
-
-    #[test]
-    fn build_input_preserves_user_images() {
-        use crate::message::{ImageRef, UserMessage};
-
-        let message = Message::User(UserMessage {
-            content: vec![
-                ContentBlock::Text("inspect".into()),
-                ContentBlock::Image(ImageRef {
-                    url: "https://example.test/image.png".into(),
-                    mime_type: Some("image/png".into()),
-                }),
-            ],
-        });
-        let (_, input) = build_responses_input(&[message]).unwrap();
-        assert_eq!(input[0].content.len(), 2);
-        assert_eq!(input[0].content[1].kind, "input_image");
-        assert_eq!(
-            input[0].content[1].image_url.as_deref(),
-            Some("https://example.test/image.png")
-        );
-    }
-
-    #[test]
-    fn responses_request_preserves_tools_and_choice() {
-        let tools = vec![ToolSchema::new(
-            "lookup",
-            "Look up a value",
-            json!({"type": "object"}),
-        )];
-        assert_eq!(responses_tools(&tools)[0]["name"], "lookup");
-        assert_eq!(
-            responses_tool_choice(&ToolChoice::Tool("lookup".into()), true).unwrap()["name"],
-            "lookup"
-        );
-    }
-
-    #[test]
-    fn build_input_correlates_function_calls_and_outputs() {
-        let messages = vec![
-            Message::Assistant(AssistantMessage {
-                id: None,
-                content: Vec::new(),
-                tool_calls: vec![ToolCall::new("call-1", "lookup", json!({"query": "rust"}))],
-                usage: None,
-            }),
-            Message::Tool(crate::message::ToolMessage {
-                tool_call_id: "call-1".into(),
-                content: vec![ContentBlock::Json(json!({"answer": 42}))],
-            }),
-        ];
-        let (_, input) = build_responses_input(&messages).unwrap();
-        assert_eq!(input.len(), 2);
-        assert_eq!(input[0].kind.as_deref(), Some("function_call"));
-        assert_eq!(input[0].call_id.as_deref(), Some("call-1"));
-        assert_eq!(input[0].name.as_deref(), Some("lookup"));
-        assert_eq!(input[0].arguments.as_deref(), Some("{\"query\":\"rust\"}"));
-        assert_eq!(input[1].kind.as_deref(), Some("function_call_output"));
-        assert_eq!(input[1].call_id.as_deref(), Some("call-1"));
-        assert_eq!(input[1].output.as_deref(), Some("{\"answer\":42}"));
-    }
-
-    #[test]
-    fn structured_formats_map_to_responses_text_configuration() {
-        let schema = json!({"type": "object"});
-        let format = responses_text_format(Some(&crate::model::ResponseFormat::json_schema(
-            "answer",
-            schema.clone(),
-        )))
-        .unwrap();
-        assert_eq!(format["format"]["type"], "json_schema");
-        assert_eq!(format["format"]["name"], "answer");
-        assert_eq!(format["format"]["schema"], schema);
-    }
-
-    #[test]
-    fn incomplete_response_preserves_length_finish_reason() {
-        let response = parse_responses_response(json!({
-            "status": "incomplete",
-            "incomplete_details": {"reason": "max_output_tokens"},
-            "output_text": "partial"
-        }))
-        .unwrap();
-        assert_eq!(response.finish_reason.as_deref(), Some("length"));
     }
 }

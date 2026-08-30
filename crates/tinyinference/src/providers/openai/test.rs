@@ -230,6 +230,8 @@ fn translates_structured_tool_result_content() {
     let request = ModelRequest::new(vec![Message::Tool(crate::message::ToolMessage {
         tool_call_id: "call-1".into(),
         content: vec![ContentBlock::Json(json!({"temperature": 21}))],
+        trusted_verbatim: false,
+        artifact: None,
     })]);
     let value = serde_json::to_value(model().translate_request(&request).unwrap()).unwrap();
     assert_eq!(
@@ -388,10 +390,11 @@ fn parses_id_less_tool_call_with_synthesized_fallback_id() {
     let response = parse_response(body).unwrap();
     let calls = response.tool_calls();
     assert_eq!(calls.len(), 2);
-    assert_eq!(calls[0].id, "tool-0");
+    assert!(calls[0].id.starts_with("tacall-"));
     assert_eq!(calls[0].name, "ping");
     assert_eq!(calls[0].arguments, json!({}));
-    assert_eq!(calls[1].id, "tool-1");
+    assert!(calls[1].id.starts_with("tacall-"));
+    assert_ne!(calls[0].id, calls[1].id);
     assert_eq!(calls[1].name, "pong");
     assert_eq!(calls[1].arguments, json!({ "n": 1 }));
 }
@@ -666,6 +669,7 @@ fn provider_failed_stream_item_finishes_as_provider_error() {
         code: Some("rate_limit".to_string()),
         message: "too many requests".to_string(),
         retryable: true,
+        retry_after_ms: None,
         raw: None,
     }));
 
@@ -2138,6 +2142,7 @@ fn degrade_for_400_targets_only_the_shape_the_request_used() {
         Some(Degrade {
             named_tool_choice: true,
             json_object: false,
+            ..Degrade::default()
         })
     );
 
@@ -2152,6 +2157,7 @@ fn degrade_for_400_targets_only_the_shape_the_request_used() {
         Some(Degrade {
             named_tool_choice: false,
             json_object: true,
+            ..Degrade::default()
         })
     );
 }
@@ -2186,6 +2192,7 @@ fn degrade_for_400_ignores_unrelated_or_already_degraded_failures() {
             Degrade {
                 named_tool_choice: true,
                 json_object: false,
+                ..Degrade::default()
             },
         ),
         None
@@ -2205,11 +2212,13 @@ fn degrade_for_400_unions_with_existing_baseline_degrade() {
             Degrade {
                 named_tool_choice: true,
                 json_object: false,
+                ..Degrade::default()
             },
         ),
         Some(Degrade {
             named_tool_choice: true,
             json_object: true,
+            ..Degrade::default()
         })
     );
 }

@@ -99,6 +99,16 @@ pub struct ToolMessage {
     pub tool_call_id: String,
     /// Ordered content blocks.
     pub content: Vec<ContentBlock>,
+    /// Whether a consuming runtime must preserve the content byte-for-byte.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub trusted_verbatim: bool,
+    /// Host-side structured payload that is never sent to the provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<Value>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// A structured conversation message.

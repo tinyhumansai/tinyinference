@@ -28,6 +28,12 @@ pub enum ProviderKind {
     Anthropic,
     /// Local Ollama server exposing `/v1/chat/completions`.
     Ollama,
+    /// Local LM Studio server exposing `/v1/chat/completions`.
+    LmStudio,
+    /// Local llama.cpp server exposing `/v1/chat/completions`.
+    LlamaCpp,
+    /// Local vLLM server exposing `/v1/chat/completions`.
+    Vllm,
     /// DeepSeek OpenAI-compatible endpoint.
     DeepSeek,
     /// Groq OpenAI-compatible endpoint.
@@ -51,6 +57,9 @@ impl ProviderKind {
             ProviderKind::OpenAi => "openai",
             ProviderKind::Anthropic => "anthropic",
             ProviderKind::Ollama => "ollama",
+            ProviderKind::LmStudio => "lmstudio",
+            ProviderKind::LlamaCpp => "llama_cpp",
+            ProviderKind::Vllm => "vllm",
             ProviderKind::DeepSeek => "deepseek",
             ProviderKind::Groq => "groq",
             ProviderKind::Xai => "xai",
@@ -73,6 +82,11 @@ impl ProviderKind {
                 "openai" => Some(ProviderKind::OpenAi),
                 "anthropic" => Some(ProviderKind::Anthropic),
                 "ollama" => Some(ProviderKind::Ollama),
+                "lmstudio" | "lm_studio" | "lm-studio" => Some(ProviderKind::LmStudio),
+                "llamacpp" | "llama_cpp" | "llama-cpp" | "llamaserver" => {
+                    Some(ProviderKind::LlamaCpp)
+                }
+                "vllm" => Some(ProviderKind::Vllm),
                 "deepseek" => Some(ProviderKind::DeepSeek),
                 "groq" => Some(ProviderKind::Groq),
                 "xai" => Some(ProviderKind::Xai),
@@ -142,6 +156,9 @@ impl ProviderSpec {
             ProviderKind::Ollama => {
                 Self::new(kind, "llama3.2", "http://localhost:11434/v1", None, false)
             }
+            ProviderKind::LmStudio => Self::new(kind, "", "http://localhost:1234/v1", None, false),
+            ProviderKind::LlamaCpp => Self::new(kind, "", "http://localhost:8080/v1", None, false),
+            ProviderKind::Vllm => Self::new(kind, "", "http://localhost:8000/v1", None, false),
             ProviderKind::DeepSeek => Self::new(
                 kind,
                 "deepseek-chat",
