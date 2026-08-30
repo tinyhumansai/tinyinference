@@ -464,6 +464,7 @@ pub(super) fn parse_responses_response(value: Value) -> Result<ModelResponse> {
             "stop".to_string()
         }),
         raw: Some(value),
+        resolved_model: None,
     })
 }
 

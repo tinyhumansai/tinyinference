@@ -260,6 +260,50 @@ pub struct PromptSegment {
     pub cacheable: bool,
 }
 
+/// Runtime-supplied model candidate metadata.
+///
+/// TinyInference carries this serializable value without registering, ranking,
+/// or resolving models; consuming runtimes own those policies.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ModelHint {
+    /// Runtime registry name or provider model id.
+    pub model: String,
+    /// Higher values indicate stronger runtime preference.
+    #[serde(default)]
+    pub priority: i32,
+    /// Optional runtime explanation for observability.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Runtime-owned source that selected a model.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelResolutionSource {
+    /// Explicit request-level override.
+    RequestOverride,
+    /// Reused from durable runtime state.
+    StateReuse,
+    /// Chosen from runtime hints.
+    Hint,
+    /// Default declared by an agent.
+    AgentDefault,
+    /// Default declared by a consuming registry.
+    RegistryDefault,
+}
+
+/// Durable metadata describing a runtime-selected model.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedModel {
+    /// Runtime registry name or provider model id.
+    pub name: String,
+    /// Originally requested name, when different.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested: Option<String>,
+    /// Runtime selection source.
+    pub source: ModelResolutionSource,
+}
+
 /// A provider-neutral chat model request.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ModelRequest {
@@ -277,6 +321,12 @@ pub struct ModelRequest {
     /// Model id or registry alias override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Ordered runtime model-selection hints carried without interpretation.
+    #[serde(default)]
+    pub model_hints: Vec<ModelHint>,
+    /// Whether a consuming runtime may reuse its prior selected model.
+    #[serde(default)]
+    pub reuse_previous_model: bool,
     /// Sampling temperature.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f64>,
@@ -338,6 +388,9 @@ pub struct ModelResponse {
     /// Raw provider metadata preserved for callers who need it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw: Option<Value>,
+    /// Durable model-selection metadata attached by a consuming runtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_model: Option<ResolvedModel>,
 }
 
 /// An incremental streamed chunk of a model response.

@@ -273,6 +273,7 @@ impl OpenAiStreamAcc {
             usage: self.usage,
             finish_reason: self.finish_reason,
             raw: None,
+            resolved_model: None,
         }
     }
 }
