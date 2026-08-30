@@ -8,7 +8,7 @@
 //! every depth, with the [`ModelRegistry`] resolving *which* model answers each
 //! nested call.
 //!
-//! See [`types`] for definitions. This module provides builder methods on
+//! The private `types` module holds definitions. This module provides builder methods on
 //! [`ModelRequest`], accessors on [`ModelResponse`], the [`ModelRegistry`]
 //! resolution logic, and the [`StreamAccumulator`] that folds a real
 //! [`ModelStream`] back into a single [`ModelResponse`].
@@ -110,7 +110,7 @@ impl std::fmt::Display for ProviderError {
     /// `Display` impl lets [`crate::Error::Provider`] keep
     /// the identical wording while also keeping the structured fields
     /// (`status`, `code`, `retryable`) intact for callers — like
-    /// [`crate::retry::is_retryable`] — that need to reason about
+    /// [`crate::failure::classify_provider_error`] — that need to reason about
     /// the failure rather than just print it.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(

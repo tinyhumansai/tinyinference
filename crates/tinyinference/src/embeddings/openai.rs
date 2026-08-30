@@ -192,9 +192,7 @@ impl EmbeddingModel for OpenAiEmbeddingModel {
                 request = request.header("Authorization", format!("Bearer {}", self.api_key));
             }
             let current = request.send().await.map_err(|e| {
-                Error::Embedding(format!(
-                    "openai embeddings request to {url} failed: {e}"
-                ))
+                Error::Embedding(format!("openai embeddings request to {url} failed: {e}"))
             })?;
             let retryable = matches!(current.status().as_u16(), 429 | 503);
             if retryable && attempt < MAX_RETRIES {
@@ -222,9 +220,10 @@ impl EmbeddingModel for OpenAiEmbeddingModel {
         let response = response.expect("bounded retry loop always records its final response");
 
         let status = response.status();
-        let text = response.text().await.map_err(|e| {
-            Error::Embedding(format!("openai embeddings body read failed: {e}"))
-        })?;
+        let text = response
+            .text()
+            .await
+            .map_err(|e| Error::Embedding(format!("openai embeddings body read failed: {e}")))?;
         if !status.is_success() {
             return Err(Error::Embedding(format!(
                 "openai embeddings returned HTTP {status}: {text}"
@@ -244,9 +243,7 @@ impl EmbeddingModel for OpenAiEmbeddingModel {
                 .get("embedding")
                 .and_then(|e| e.as_array())
                 .ok_or_else(|| {
-                    Error::Embedding(
-                        "openai embeddings response missing `embedding` array".into(),
-                    )
+                    Error::Embedding("openai embeddings response missing `embedding` array".into())
                 })?;
             let vector = embedding
                 .iter()

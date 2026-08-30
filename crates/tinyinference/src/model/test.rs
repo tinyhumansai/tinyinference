@@ -784,13 +784,11 @@ fn model_stream_item_roundtrips_every_variant() {
     roundtrip_stream_item(ModelStreamItem::MessageDelta(
         crate::message::MessageDelta::text("hi"),
     ));
-    roundtrip_stream_item(ModelStreamItem::ToolCallDelta(
-        crate::tool::ToolDelta {
-            call_id: "call-1".into(),
-            content: "{\"q\":1}".into(),
-            tool_name: None,
-        },
-    ));
+    roundtrip_stream_item(ModelStreamItem::ToolCallDelta(crate::tool::ToolDelta {
+        call_id: "call-1".into(),
+        content: "{\"q\":1}".into(),
+        tool_name: None,
+    }));
     roundtrip_stream_item(ModelStreamItem::UsageDelta(Usage::new(3, 5)));
     roundtrip_stream_item(ModelStreamItem::Completed(ModelResponse::assistant("done")));
     // The scalar-carrying variant an internally tagged enum could not encode.

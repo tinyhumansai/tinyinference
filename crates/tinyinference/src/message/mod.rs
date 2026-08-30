@@ -7,7 +7,7 @@
 //! (typed [`ContentBlock`]s rather than strings) is what lets those recursive
 //! hand-offs stay inspectable and lossless.
 //!
-//! See [`types`] for definitions. This module provides ergonomic constructors
+//! The private `types` module holds definitions. This module provides ergonomic constructors
 //! and a [`Message::text`] accessor.
 
 mod types;
@@ -30,7 +30,7 @@ impl ContentBlock {
     /// Reasoning blocks ([`ContentBlock::Thinking`] /
     /// [`ContentBlock::RedactedThinking`]) are intentionally *not* treated as
     /// text, so they never leak into visible assistant output via
-    /// [`concat_text`] / [`Message::text`].
+    /// `concat_text` / [`Message::text`].
     pub fn as_text(&self) -> Option<&str> {
         match self {
             ContentBlock::Text(text) => Some(text),
@@ -73,7 +73,7 @@ impl ContentBlock {
     /// this accounts for *every* block that occupies model context: text,
     /// structured JSON, reasoning ([`Thinking`](Self::Thinking) /
     /// [`RedactedThinking`](Self::RedactedThinking)), provider extensions, and
-    /// a flat [`IMAGE_CHAR_WEIGHT`] per image. It is used only by token
+    /// a flat `IMAGE_CHAR_WEIGHT` per image. It is used only by token
     /// budgeting / compaction gating, never by the visible-text accessors, so a
     /// transcript dominated by images, large tool-result JSON, or model
     /// reasoning no longer under-counts to near-zero and silently defeats

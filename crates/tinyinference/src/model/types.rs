@@ -58,14 +58,11 @@ pub enum ResponseFormat {
     /// Request structured JSON output but let the harness pick the extraction
     /// strategy from the resolved model's [`ModelProfile`].
     ///
-    /// The harness resolves this into either provider-native schema mode
-    /// ([`StructuredStrategy::ProviderSchema`]) when the model advertises
-    /// native structured output, or a tool-call fallback
-    /// ([`StructuredStrategy::ToolCall`]) otherwise. When no profile is
+    /// The consuming harness resolves this into either provider-native schema
+    /// mode when the model advertises native structured output, or a tool-call
+    /// fallback otherwise. When no profile is
     /// available it falls back to provider-native schema mode.
     ///
-    /// [`StructuredStrategy::ProviderSchema`]: crate::structured::StructuredStrategy::ProviderSchema
-    /// [`StructuredStrategy::ToolCall`]: crate::structured::StructuredStrategy::ToolCall
     Auto {
         /// Schema name advertised to the provider or used as the fallback tool
         /// name.
@@ -481,7 +478,8 @@ pub struct ProviderError {
 /// merged response preserves tool-call names and ids that individual deltas may
 /// omit.
 ///
-/// Use [`StreamAccumulator`] (or the [`collect_model_stream`] helper) to fold a
+/// Use [`crate::model::StreamAccumulator`] (or the
+/// [`crate::model::collect_model_stream`] helper) to fold a
 /// stream of these items back into a [`ModelResponse`].
 /// # Serialization
 ///
@@ -565,12 +563,33 @@ pub struct ModelRegistry<State: Send + Sync> {
     pub(crate) default: Option<String>,
 }
 
+impl<State: Send + Sync> std::fmt::Debug for ModelRegistry<State> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut names: Vec<&str> = self.models.keys().map(String::as_str).collect();
+        names.sort_unstable();
+        formatter
+            .debug_struct("ModelRegistry")
+            .field("models", &names)
+            .field("default", &self.default)
+            .finish()
+    }
+}
+
 /// Executable model plus durable resolution metadata.
 pub struct ResolvedModelBinding<State: Send + Sync> {
     /// Durable selected-model record.
     pub resolved: ResolvedModel,
     /// Executable model handle.
     pub model: Arc<dyn ChatModel<State>>,
+}
+
+impl<State: Send + Sync> std::fmt::Debug for ResolvedModelBinding<State> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ResolvedModelBinding")
+            .field("resolved", &self.resolved)
+            .finish_non_exhaustive()
+    }
 }
 
 use crate::Result;

@@ -104,9 +104,7 @@ pub fn classify_provider_failure(
 
     let rate_limited = status == Some(429)
         || (lower.contains("429")
-            && (lower.contains("too many")
-                || lower.contains("rate")
-                || lower.contains("limit")));
+            && (lower.contains("too many") || lower.contains("rate") || lower.contains("limit")));
     if rate_limited {
         return if contains_business_limit(&lower) {
             ProviderFailureClass::NonRetryableRateLimit
@@ -142,9 +140,15 @@ pub fn classify_provider_failure(
         .iter()
         .any(|hint| lower.contains(hint))
         || (lower.contains("model")
-            && ["not found", "unknown", "unsupported", "does not exist", "invalid"]
-                .iter()
-                .any(|hint| lower.contains(hint)))
+            && [
+                "not found",
+                "unknown",
+                "unsupported",
+                "does not exist",
+                "invalid",
+            ]
+            .iter()
+            .any(|hint| lower.contains(hint)))
     {
         return ProviderFailureClass::NonRetryable;
     }
@@ -153,8 +157,6 @@ pub fn classify_provider_failure(
 }
 
 /// Classifies a normalized structured provider error.
-pub fn classify_provider_error(
-    error: &crate::model::ProviderError,
-) -> ProviderFailureClass {
+pub fn classify_provider_error(error: &crate::model::ProviderError) -> ProviderFailureClass {
     classify_provider_failure(error.status, error.code.as_deref(), &error.message)
 }

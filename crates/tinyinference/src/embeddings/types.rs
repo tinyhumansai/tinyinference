@@ -307,3 +307,14 @@ pub struct Retriever {
     /// Backing vector store searched at retrieval time.
     pub(crate) store: Arc<dyn VectorStore>,
 }
+
+impl std::fmt::Debug for Retriever {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Retriever")
+            .field("provider", &self.model.name())
+            .field("model", &self.model.model_id())
+            .field("dimensions", &self.model.dimensions())
+            .finish_non_exhaustive()
+    }
+}

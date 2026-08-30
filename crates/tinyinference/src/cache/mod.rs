@@ -4,9 +4,8 @@
 //! sub-agent re-asked an identical sub-question, a graph node replayed during
 //! recovery, or a deterministic test driving the loop twice. This module makes
 //! that recursion cheap and deterministic: the local response cache short-
-//! circuits an identical model call entirely (the agent loop emits
-//! [`crate::events::AgentEvent::CacheHit`] /
-//! [`crate::events::AgentEvent::CacheMiss`]), while the prompt-cache
+//! circuits an identical model call entirely (a consuming agent loop can emit
+//! its own cache hit/miss events), while the prompt-cache
 //! layout tooling protects the stable prefix the *provider* itself caches.
 //!
 //! # Two distinct caching concerns
@@ -31,8 +30,8 @@ use sha2::{Digest, Sha256};
 
 pub use types::*;
 
-use crate::{Error, Result};
 use crate::model::{ModelRequest, ModelResponse};
+use crate::{Error, Result};
 
 // ── Deterministic hash ────────────────────────────────────────────────────────
 

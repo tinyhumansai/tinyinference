@@ -140,10 +140,7 @@ async fn vector_store_rejects_mismatched_query_dimension() {
         .unwrap();
 
     let err = store.query(&[1.0, 0.0, 0.0], 1).await.unwrap_err();
-    assert!(
-        matches!(err, crate::Error::Validation(_)),
-        "{err:?}"
-    );
+    assert!(matches!(err, crate::Error::Validation(_)), "{err:?}");
     assert!(err.to_string().contains("dimensions"), "{err}");
 }
 
@@ -152,10 +149,7 @@ async fn vector_store_rejects_mismatched_or_empty_add() {
     let store = InMemoryVectorStore::new();
     // Zero-dimensional vectors are rejected outright.
     let err = store.add("z".into(), vec![], json!({})).await.unwrap_err();
-    assert!(
-        matches!(err, crate::Error::Validation(_)),
-        "{err:?}"
-    );
+    assert!(matches!(err, crate::Error::Validation(_)), "{err:?}");
 
     store
         .add("a".into(), vec![1.0, 0.0], json!({}))
@@ -166,10 +160,7 @@ async fn vector_store_rejects_mismatched_or_empty_add() {
         .add("b".into(), vec![1.0, 0.0, 0.0], json!({}))
         .await
         .unwrap_err();
-    assert!(
-        matches!(err, crate::Error::Validation(_)),
-        "{err:?}"
-    );
+    assert!(matches!(err, crate::Error::Validation(_)), "{err:?}");
     assert_eq!(store.len(), 1, "rejected vectors must not be stored");
 }
 
@@ -195,10 +186,7 @@ async fn retriever_rejects_query_of_wrong_dimension() {
 
     let querier = Retriever::new(Arc::new(MockEmbeddingModel::new(4)), store);
     let err = querier.retrieve("some text", 1).await.unwrap_err();
-    assert!(
-        matches!(err, crate::Error::Validation(_)),
-        "{err:?}"
-    );
+    assert!(matches!(err, crate::Error::Validation(_)), "{err:?}");
 }
 
 #[tokio::test]

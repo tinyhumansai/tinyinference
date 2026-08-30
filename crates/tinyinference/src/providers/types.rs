@@ -307,7 +307,7 @@ pub(crate) struct MockInner {
 /// # Streaming
 ///
 /// The [`ChatModel::stream`][crate::model::ChatModel] override
-/// internally calls [`ChatModel::invoke`] and replays the response as a real
+/// internally calls [`crate::model::ChatModel::invoke`] and replays the response as a real
 /// [`ModelStream`][crate::model::ModelStream]: a
 /// [`Started`][crate::model::ModelStreamItem::Started] item, one or two
 /// [`MessageDelta`][crate::model::ModelStreamItem::MessageDelta] items
@@ -346,4 +346,18 @@ pub(crate) struct MockInner {
 pub struct MockModel {
     pub(crate) behavior: MockBehavior,
     pub(crate) inner: Mutex<MockInner>,
+}
+
+impl std::fmt::Debug for MockModel {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let call_count = self
+            .inner
+            .lock()
+            .map(|inner| inner.call_count)
+            .unwrap_or_default();
+        formatter
+            .debug_struct("MockModel")
+            .field("call_count", &call_count)
+            .finish_non_exhaustive()
+    }
 }

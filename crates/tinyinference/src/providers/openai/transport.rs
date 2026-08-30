@@ -108,6 +108,21 @@ pub struct OpenAiModel {
     reasoning_tags_overridden: bool,
 }
 
+impl std::fmt::Debug for OpenAiModel {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OpenAiModel")
+            .field("auth", &self.auth)
+            .field("extra_headers", &self.extra_headers)
+            .field("model", &self.model)
+            .field("provider", &self.provider)
+            .field("base_url", &self.base_url)
+            .field("profile", &self.profile)
+            .field("responses_api_primary", &self.responses_api_primary)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The auth headers `(name, value)` for a given [`AuthStyle`] + credential.
 ///
 /// Pure (no request), so the header mapping is unit-testable without a network
@@ -511,7 +526,7 @@ impl OpenAiModel {
     /// `{"options": {"num_ctx": 8192}}`). These are merged **under** each
     /// request's own [`ModelRequest::provider_options`], so a per-call option of
     /// the same key wins. Reserved OpenAI fields are still stripped downstream by
-    /// [`provider_extra_options`]. Passing `Value::Null` clears the baked options.
+    /// `provider_extra_options`. Passing `Value::Null` clears the baked options.
     pub fn with_default_provider_options(mut self, options: Value) -> Self {
         self.default_provider_options = options;
         self
@@ -638,9 +653,10 @@ impl OpenAiModel {
             .send_checked(self.authorized(self.client.get(&url)), "request", &url)
             .await?;
 
-        let text = response.text().await.map_err(|e| {
-            Error::Model(format!("openai response body read failed: {e}"))
-        })?;
+        let text = response
+            .text()
+            .await
+            .map_err(|e| Error::Model(format!("openai response body read failed: {e}")))?;
 
         let listing: ModelListWire = serde_json::from_str(&text)?;
         Ok(listing.data)
@@ -998,9 +1014,10 @@ impl OpenAiModel {
             }
             Err(e) => return Err(e),
         };
-        let text = response.text().await.map_err(|e| {
-            Error::Model(format!("openai responses body read failed: {e}"))
-        })?;
+        let text = response
+            .text()
+            .await
+            .map_err(|e| Error::Model(format!("openai responses body read failed: {e}")))?;
         let value: Value = serde_json::from_str(&text)?;
         Ok(responses::parse_responses_response(value))
     }
@@ -1337,9 +1354,10 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
             .post_chat_with_degrade(&request, false, "request")
             .await?;
 
-        let text = response.text().await.map_err(|e| {
-            Error::Model(format!("openai response body read failed: {e}"))
-        })?;
+        let text = response
+            .text()
+            .await
+            .map_err(|e| Error::Model(format!("openai response body read failed: {e}")))?;
 
         let value: Value = serde_json::from_str(&text)?;
         let response = parse_chat_response(value, self.effective_reasoning_tags())?;
@@ -1431,9 +1449,9 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
         // produced (a cheap refcount clone, no per-chunk copy); only the error
         // type is mapped onto the crate error. `SseState` is crate-internal,
         // so `bytes` never leaks into the public API.
-        let bytes = response.bytes_stream().map(|chunk| {
-            chunk.map_err(|e| Error::Model(format!("stream chunk failed: {e}")))
-        });
+        let bytes = response
+            .bytes_stream()
+            .map(|chunk| chunk.map_err(|e| Error::Model(format!("stream chunk failed: {e}"))));
 
         let state = SseState {
             bytes: Box::pin(bytes),

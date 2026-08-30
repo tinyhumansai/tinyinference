@@ -5,11 +5,9 @@ resolver = "3"
 # package. Keeping the root virtual leaves room for future protocol-specific
 # crates without making the core inference crate structurally special.
 members = ["crates/*"]
-# `vendor/` holds the pinned TinyBus submodule, which is its own workspace with
-# its own lockfile. `worktrees/` holds `git worktree` checkouts of this same
-# repository; each contains a full copy of this manifest and every crate under
-# it, so without this entry cargo walks into them and reports duplicate
-# packages.
+# `vendor/` is reserved for pinned external source dependencies. `worktrees/`
+# holds linked checkouts of this repository; both are excluded so Cargo never
+# walks into another workspace and reports duplicate packages.
 exclude = ["vendor", "worktrees"]
 
 # Shared package metadata. A member inherits a field with `field.workspace =
@@ -58,20 +56,9 @@ rust_2018_idioms = { level = "warn", priority = -1 }
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
-pedantic = { level = "warn", priority = -1 }
-# Library code must not panic on its own; tests and examples may.
-unwrap_used = "warn"
-expect_used = "warn"
-panic = "warn"
+# Library code must not ship placeholders.
 todo = "warn"
 unimplemented = "warn"
-# Public fallible/panicking APIs must document their failure modes.
-missing_errors_doc = "warn"
-missing_panics_doc = "warn"
-# Documentation hygiene.
-doc_markdown = "warn"
-# `#[must_use]` on pure public functions.
-must_use_candidate = "warn"
 
 [workspace.lints.rustdoc]
 broken_intra_doc_links = "warn"

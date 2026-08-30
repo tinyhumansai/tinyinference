@@ -143,7 +143,7 @@ pub struct FunctionChunkWire {
     ///
     /// OpenAI streams this as a string fragment, but some OpenAI-compatible
     /// local servers emit the completed arguments as a JSON **object** in a
-    /// single delta. [`deserialize_optional_arguments`] normalizes either shape
+    /// single delta. `deserialize_optional_arguments` normalizes either shape
     /// to the stringified form the accumulator concatenates.
     #[serde(default, deserialize_with = "deserialize_optional_arguments")]
     pub arguments: Option<String>,
@@ -297,7 +297,7 @@ pub struct FunctionCallWire {
     /// Arguments encoded as a JSON **string** (OpenAI sends stringified JSON).
     ///
     /// Some OpenAI-compatible local servers send a JSON **object** instead of a
-    /// string, or omit the field; [`deserialize_arguments`] normalizes any of
+    /// string, or omit the field; `deserialize_arguments` normalizes any of
     /// those shapes to the stringified form so one non-conforming field can no
     /// longer fail the whole response.
     #[serde(default, deserialize_with = "deserialize_arguments")]

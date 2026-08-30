@@ -222,9 +222,11 @@ pub(super) fn parse_chat_response(
 ) -> Result<ModelResponse> {
     let parsed: ChatCompletionResponse = serde_json::from_value(value.clone())?;
 
-    let choice = parsed.choices.into_iter().next().ok_or_else(|| {
-        Error::Model("openai response contained no choices".to_string())
-    })?;
+    let choice = parsed
+        .choices
+        .into_iter()
+        .next()
+        .ok_or_else(|| Error::Model("openai response contained no choices".to_string()))?;
 
     let mut content = Vec::new();
 

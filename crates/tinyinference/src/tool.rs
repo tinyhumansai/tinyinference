@@ -157,7 +157,9 @@ fn validate_schema_value(schema: &Value, value: &Value, path: &str) -> crate::Re
         })?;
         for field in required.iter().filter_map(Value::as_str) {
             if !object.contains_key(field) {
-                return Err(crate::Error::Validation(format!("{path}.{field} is required")));
+                return Err(crate::Error::Validation(format!(
+                    "{path}.{field} is required"
+                )));
             }
         }
     }
@@ -202,7 +204,10 @@ fn validate_type_spec(type_spec: &Value, value: &Value, path: &str) -> crate::Re
     }
     if let Some(kinds) = type_spec.as_array() {
         let allowed: Vec<&str> = kinds.iter().filter_map(Value::as_str).collect();
-        if allowed.iter().any(|kind| json_value_matches_type(value, kind)) {
+        if allowed
+            .iter()
+            .any(|kind| json_value_matches_type(value, kind))
+        {
             return Ok(());
         }
         return Err(crate::Error::Validation(format!(

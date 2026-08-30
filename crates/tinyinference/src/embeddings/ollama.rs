@@ -165,9 +165,10 @@ struct OllamaResponse {
 }
 
 async fn parse_response(response: reqwest::Response) -> Result<OllamaResponse> {
-    response.json().await.map_err(|error| {
-        Error::Embedding(format!("ollama embed response parse failed: {error}"))
-    })
+    response
+        .json()
+        .await
+        .map_err(|error| Error::Embedding(format!("ollama embed response parse failed: {error}")))
 }
 
 fn ollama_http_error(status: reqwest::StatusCode, body: &str) -> Error {
@@ -192,9 +193,8 @@ fn normalize_base_url(base_url: &str) -> Result<String> {
     } else {
         base_url.trim()
     };
-    let url = reqwest::Url::parse(raw).map_err(|error| {
-        Error::Validation(format!("invalid Ollama base_url `{raw}`: {error}"))
-    })?;
+    let url = reqwest::Url::parse(raw)
+        .map_err(|error| Error::Validation(format!("invalid Ollama base_url `{raw}`: {error}")))?;
     if !matches!(url.scheme(), "http" | "https") {
         return Err(Error::Validation(format!(
             "invalid Ollama base_url `{raw}`: expected an http:// or https:// URL"

@@ -9,11 +9,11 @@
 //! [`OpenAiModel`] implements [`ChatModel`] against the hosted OpenAI Chat
 //! Completions endpoint (`POST {base_url}/chat/completions`). It translates the
 //! provider-neutral [`ModelRequest`] into OpenAI's JSON wire format (see
-//! [`types`]), performs the HTTP call with `reqwest`, and maps the response back
+//! the private `types` module), performs the HTTP call with `reqwest`, and maps the response back
 //! into a [`ModelResponse`] with a fully-populated [`AssistantMessage`],
 //! [`ToolCall`]s, [`Usage`], and finish reason.
 //!
-//! The wire (de)serialization shapes live in [`types`]; this module owns only
+//! The wire (de)serialization shapes live in the private `types` module; this module owns only
 //! the translation logic and the HTTP transport, keeping OpenAI-specific JSON
 //! out of the rest of the harness.
 //!
@@ -31,7 +31,7 @@
 //! ```no_run
 //! use tinyinference::providers::openai::OpenAiModel;
 //!
-//! # fn main() -> tinyagents::Result<()> {
+//! # fn main() -> tinyinference::Result<()> {
 //! // Reads OPENAI_API_KEY (and optional OPENAI_MODEL / OPENAI_BASE_URL).
 //! let model = OpenAiModel::from_env()?;
 //! # let _ = model;
@@ -51,7 +51,6 @@ use async_trait::async_trait;
 use futures::{Stream, StreamExt};
 use serde_json::{Map, Value, json};
 
-use crate::{Error, Result};
 use crate::message::{AssistantMessage, ContentBlock, Message, MessageDelta};
 use crate::model::{
     ChatModel, Modalities, ModelProfile, ModelRequest, ModelResponse, ModelStatus, ModelStream,
@@ -59,6 +58,7 @@ use crate::model::{
 };
 use crate::tool::{ToolCall, ToolDelta};
 use crate::usage::Usage;
+use crate::{Error, Result};
 
 use super::ProviderSpec;
 

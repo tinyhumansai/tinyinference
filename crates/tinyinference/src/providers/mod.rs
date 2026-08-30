@@ -48,8 +48,8 @@ pub use types::*;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::Result;
 use crate::Error;
+use crate::Result;
 use crate::message::{AssistantMessage, ContentBlock, Message, MessageDelta};
 use crate::model::{
     ChatModel, ModelProfile, ModelRequest, ModelResponse, ModelStream, ModelStreamItem,
