@@ -53,7 +53,8 @@ fn hex_digest(digest: impl AsRef<[u8]>) -> String {
 /// concatenation of frames unambiguous — no two distinct component sequences
 /// can hash to the same byte stream.
 fn fold_canonical(hasher: &mut Sha256, tag: u8, value: Value) {
-    let bytes = serde_json::to_vec(&canonical_value(value)).unwrap_or_default();
+    let bytes = serde_json::to_vec(&canonical_value(value))
+        .expect("serializing a serde_json::Value cannot fail");
     hasher.update([tag]);
     hasher.update((bytes.len() as u64).to_le_bytes());
     hasher.update(&bytes);

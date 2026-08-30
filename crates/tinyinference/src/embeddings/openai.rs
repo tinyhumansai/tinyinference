@@ -97,6 +97,7 @@ impl OpenAiEmbeddingModel {
 
     /// Overrides the reported dimensionality (and requests it from the API
     /// via the `dimensions` parameter, which `text-embedding-3-*` supports).
+    /// A zero value is rejected by [`EmbeddingModel::embed`] before network I/O.
     pub fn with_dimensions(mut self, dimensions: usize) -> Self {
         self.dimensions = dimensions;
         self
@@ -174,6 +175,11 @@ impl EmbeddingModel for OpenAiEmbeddingModel {
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Ok(Vec::new());
+        }
+        if self.dimensions == 0 {
+            return Err(Error::Validation(
+                "embedding dimensions must be greater than zero".into(),
+            ));
         }
         if let Some(index) = texts.iter().position(|text| text.trim().is_empty()) {
             return Err(Error::Validation(format!(

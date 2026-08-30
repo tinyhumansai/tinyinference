@@ -285,6 +285,23 @@ async fn stream_tool_call_response_returns_single_empty_delta() {
     assert_eq!(message_deltas[0].text, "");
 }
 
+#[tokio::test]
+async fn streaming_script_appends_terminal_completion() {
+    let model = MockModel::streaming_script(vec![ModelStreamItem::MessageDelta(
+        MessageDelta::text("partial"),
+    )]);
+    let items = model
+        .stream(&NoState, ModelRequest::new(vec![]))
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await;
+    assert!(matches!(
+        items.last(),
+        Some(ModelStreamItem::Completed(response)) if response.text() == "partial"
+    ));
+}
+
 // ---------------------------------------------------------------------------
 // Usage estimates are non-zero
 // ---------------------------------------------------------------------------

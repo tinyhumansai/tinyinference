@@ -18,6 +18,7 @@ use futures::Stream;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::Result;
 use crate::cache::CachePolicy;
 use crate::message::{AssistantMessage, Message, MessageDelta};
 use crate::tool::{ToolDelta, ToolSchema};
@@ -475,5 +476,3 @@ pub trait ChatModel<State: Send + Sync>: Send + Sync {
         Ok(Box::pin(futures::stream::iter(items)))
     }
 }
-
-use crate::Result;

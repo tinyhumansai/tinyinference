@@ -368,3 +368,12 @@ fn gemini_openai_compatible_model_id_is_not_rewritten() {
         .with_model("gemini-embedding-001");
     assert_eq!(model.model(), "gemini-embedding-001");
 }
+
+#[tokio::test]
+async fn openai_rejects_zero_dimensions_before_network() {
+    let model = OpenAiEmbeddingModel::new("key")
+        .with_base_url("http://127.0.0.1:1")
+        .with_dimensions(0);
+    let error = model.embed(&["text".into()]).await.unwrap_err();
+    assert!(matches!(error, crate::Error::Validation(_)));
+}

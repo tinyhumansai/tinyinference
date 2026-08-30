@@ -101,9 +101,28 @@ impl MockModel {
     /// them through a
     /// [`StreamAccumulator`][crate::model::StreamAccumulator] to
     /// produce the equivalent unary [`ModelResponse`]. Items may end with a
-    /// terminal [`ModelStreamItem::Completed`], or be delta-only (the
-    /// accumulator reconstructs the response from the deltas).
-    pub fn streaming_script(items: Vec<ModelStreamItem>) -> Self {
+    /// terminal item. When the list is empty or delta-only, the mock appends a
+    /// reconstructed [`ModelStreamItem::Completed`] item so every emitted stream
+    /// satisfies the terminal-item contract.
+    pub fn streaming_script(mut items: Vec<ModelStreamItem>) -> Self {
+        let is_terminal = matches!(
+            items.last(),
+            Some(
+                ModelStreamItem::Completed(_)
+                    | ModelStreamItem::Failed(_)
+                    | ModelStreamItem::ProviderFailed(_)
+            )
+        );
+        if !is_terminal {
+            let mut accumulator = crate::model::StreamAccumulator::new();
+            for item in &items {
+                accumulator.push(item);
+            }
+            match accumulator.finish() {
+                Ok(response) => items.push(ModelStreamItem::Completed(response)),
+                Err(error) => items.push(ModelStreamItem::Failed(error.to_string())),
+            }
+        }
         Self {
             behavior: MockBehavior::StreamScript(items),
             inner: std::sync::Mutex::new(MockInner::default()),
