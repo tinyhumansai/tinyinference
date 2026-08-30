@@ -299,7 +299,7 @@ pub(super) fn parse_responses_response(value: Value) -> Result<ModelResponse> {
         total_tokens: u.input_tokens.unwrap_or(0) + u.output_tokens.unwrap_or(0),
         ..Usage::default()
     });
-    ModelResponse {
+    Ok(ModelResponse {
         message: AssistantMessage {
             id: None,
             content: vec![ContentBlock::Text(text)],
@@ -307,17 +307,18 @@ pub(super) fn parse_responses_response(value: Value) -> Result<ModelResponse> {
             usage,
         },
         usage,
-        finish_reason: Some(if parsed
-            .output
-            .iter()
-            .any(|item| item.kind.as_deref() == Some("function_call"))
-        {
-            "tool_calls".to_string()
-        } else {
-            "stop".to_string()
-        }),
+        finish_reason: Some(
+            if parsed
+                .output
+                .iter()
+                .any(|item| item.kind.as_deref() == Some("function_call"))
+            {
+                "tool_calls".to_string()
+            } else {
+                "stop".to_string()
+            },
+        ),
         raw: Some(value),
-        resolved_model: None,
     })
 }
 

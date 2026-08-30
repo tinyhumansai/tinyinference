@@ -65,19 +65,14 @@ fn prompt_layout_detects_changed_content_with_stable_ids() {
     let segment = PromptSegment {
         id: "system".into(),
         role: SegmentRole::System,
-        content: "same declared segment".into(),
         cacheable: true,
     };
-    let before = PromptCacheLayout::from_request(
-        &ModelRequest::new(vec![])
-            .with_cache_segment(segment.clone())
-            .with_prompt_fingerprint("before"),
-    );
-    let after = PromptCacheLayout::from_request(
-        &ModelRequest::new(vec![])
-            .with_cache_segment(segment)
-            .with_prompt_fingerprint("after"),
-    );
+    let mut before_request = ModelRequest::new(vec![]).with_cache_segments(vec![segment.clone()]);
+    before_request.prompt_fingerprint = Some("before".into());
+    let before = PromptCacheLayout::from_request(&before_request);
+    let mut after_request = ModelRequest::new(vec![]).with_cache_segments(vec![segment]);
+    after_request.prompt_fingerprint = Some("after".into());
+    let after = PromptCacheLayout::from_request(&after_request);
     assert!(!before.is_prefix_stable_against(&after));
     assert!(CacheLayoutEvent::new(&before, &after).changed_prefix);
 }

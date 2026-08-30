@@ -209,10 +209,7 @@ mod test {
     #[test]
     fn empty_tools_leaves_messages_unchanged() {
         let msgs = vec![Message::user("hi")];
-        assert_eq!(
-            with_tool_instructions(&msgs, &[], &ToolChoice::Auto),
-            msgs
-        );
+        assert_eq!(with_tool_instructions(&msgs, &[], &ToolChoice::Auto), msgs);
     }
 
     #[test]

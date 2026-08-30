@@ -249,10 +249,9 @@ pub(super) fn parse_vectors(
     expected_count: usize,
     dimensions: usize,
 ) -> Result<Vec<Vec<f32>>> {
-    let data = value
-        .get("data")
-        .and_then(Value::as_array)
-        .ok_or_else(|| Error::Embedding("openai embeddings response missing `data` array".into()))?;
+    let data = value.get("data").and_then(Value::as_array).ok_or_else(|| {
+        Error::Embedding("openai embeddings response missing `data` array".into())
+    })?;
     if data.len() != expected_count {
         return Err(Error::Embedding(format!(
             "openai embed count mismatch: sent {expected_count} texts, got {} embeddings",
@@ -266,7 +265,9 @@ pub(super) fn parse_vectors(
             .get("index")
             .and_then(Value::as_u64)
             .and_then(|value| usize::try_from(value).ok())
-            .ok_or_else(|| Error::Embedding("openai embedding is missing a valid `index`".into()))?;
+            .ok_or_else(|| {
+                Error::Embedding("openai embedding is missing a valid `index`".into())
+            })?;
         if index >= expected_count {
             return Err(Error::Embedding(format!(
                 "openai embedding index {index} is out of range for {expected_count} inputs"

@@ -276,8 +276,7 @@ impl PromptCacheLayout {
     /// in the same order, meaning the provider KV-cache prefix is stable
     /// across the two requests.
     pub fn is_prefix_stable_against(&self, other: &PromptCacheLayout) -> bool {
-        self.prefix_ids == other.prefix_ids
-            && self.content_fingerprint == other.content_fingerprint
+        self.prefix_ids == other.prefix_ids && self.content_fingerprint == other.content_fingerprint
     }
 }
 

@@ -24,14 +24,14 @@ use tinyinference::message::Message;
 use tinyinference::model::{ChatModel, ModelRequest};
 use tinyinference::providers::MockModel;
 
-# tokio::runtime::Runtime::new().unwrap().block_on(async {
+tokio::runtime::Runtime::new().unwrap().block_on(async {
 let model = MockModel::echo();
 let response = model
     .invoke(&(), ModelRequest::new(vec![Message::user("hello")]))
     .await
     .unwrap();
 assert_eq!(response.text(), "hello");
-# });
+});
 ```
 
 TinyAgents vendors this repository at `vendor/tinyinference` and re-exports the

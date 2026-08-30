@@ -290,10 +290,8 @@ pub(super) fn is_reasoning_model(model: &str) -> bool {
 /// The context window is populated from the provider-neutral
 /// [`context_window_for_model_id`][crate::model::context_window_for_model_id]
 /// hint table when the id is recognized (`None` otherwise), so downstream
-/// context-window-aware trimming/compaction
-/// ([`SummarizationPolicy::from_profile`][crate::summarization::SummarizationPolicy::from_profile])
-/// engages on a real window instead of silently falling back to a fixed
-/// threshold.
+/// context-window-aware consumers can use a real window instead of silently
+/// falling back to a fixed threshold.
 pub(super) fn derive_profile(provider: &str, model: &str) -> ModelProfile {
     let lower = model.to_ascii_lowercase();
     let reasoning = is_reasoning_model(model);

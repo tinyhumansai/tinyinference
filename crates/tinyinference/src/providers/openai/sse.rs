@@ -273,7 +273,6 @@ impl OpenAiStreamAcc {
             usage: self.usage,
             finish_reason: self.finish_reason,
             raw: None,
-            resolved_model: None,
         }
     }
 }
@@ -371,16 +370,15 @@ impl SseState {
         }
         let Ok(value) = serde_json::from_str::<Value>(payload) else {
             if payload.starts_with('{') || payload.starts_with('[') {
-                self.pending.push_back(ModelStreamItem::ProviderFailed(
-                    ProviderError {
+                self.pending
+                    .push_back(ModelStreamItem::ProviderFailed(ProviderError {
                         provider: self.provider.clone(),
                         model: Some(self.model.clone()),
                         message: "provider returned malformed SSE JSON".into(),
                         retryable: false,
                         raw: Some(Value::String(payload.into())),
                         ..ProviderError::default()
-                    },
-                ));
+                    }));
                 self.finished = true;
                 self.terminal_emitted = true;
             }

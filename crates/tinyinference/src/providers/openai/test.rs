@@ -1179,6 +1179,44 @@ async fn sse_stream_surfaces_mid_stream_error_payload() {
 }
 
 #[tokio::test]
+async fn sse_stream_stops_after_terminal_error_in_same_chunk() {
+    let raw = vec![b"data: {\"error\":{\"message\":\"boom\"}}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"late\"}}]}\n\n".to_vec()];
+    let items = collect_sse(raw).await;
+    assert!(matches!(
+        items.last(),
+        Some(ModelStreamItem::ProviderFailed(_))
+    ));
+    assert!(!items.iter().any(|item| matches!(
+        item,
+        ModelStreamItem::MessageDelta(delta) if delta.text == "late"
+    )));
+}
+
+#[tokio::test]
+async fn sse_stream_rejects_malformed_json_event() {
+    let items = collect_sse(vec![b"data: {\"choices\":[broken}\n\n".to_vec()]).await;
+    assert!(matches!(
+        items.last(),
+        Some(ModelStreamItem::ProviderFailed(error))
+            if error.message.contains("malformed SSE JSON")
+    ));
+}
+
+#[tokio::test]
+async fn sse_stream_consumes_only_choice_zero() {
+    let raw = vec![
+        b"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"first\"}},{\"index\":1,\"delta\":{\"content\":\"second\"}}]}\n\n".to_vec(),
+        b"data: [DONE]\n\n".to_vec(),
+    ];
+    let items = collect_sse(raw).await;
+    let mut accumulator = StreamAccumulator::new();
+    for item in &items {
+        accumulator.push(item);
+    }
+    assert_eq!(accumulator.finish().unwrap().text(), "first");
+}
+
+#[tokio::test]
 async fn sse_stream_correlates_indexless_parallel_tool_calls_by_id() {
     // A compat backend that omits `index` entirely and interleaves two parallel
     // tool calls, correlating fragments only by `id`. Without id-based slotting
@@ -1824,6 +1862,30 @@ fn with_native_tool_calling_false_clears_tool_profile_flags() {
         .with_native_tool_calling(false)
         .with_native_tool_calling(true);
     assert!(profile_of(&re).tool_calling);
+}
+
+#[test]
+fn prompt_guided_tools_honor_tool_choice_policy() {
+    let model = OpenAiModel::new("k").with_native_tool_calling(false);
+    let tools = vec![
+        ToolSchema::new("first", "first", json!({"type": "object"})),
+        ToolSchema::new("second", "second", json!({"type": "object"})),
+    ];
+
+    let none = ModelRequest::new(vec![Message::user("go")])
+        .with_tools(tools.clone())
+        .with_tool_choice(ToolChoice::None);
+    let none = serde_json::to_value(model.translate_request(&none).unwrap()).unwrap();
+    assert!(!none.to_string().contains("Tool Use Protocol"));
+
+    let named = ModelRequest::new(vec![Message::user("go")])
+        .with_tools(tools)
+        .with_tool_choice(ToolChoice::Tool("second".into()));
+    let named = serde_json::to_value(model.translate_request(&named).unwrap()).unwrap();
+    let prompt = named["messages"][0]["content"].as_str().unwrap();
+    assert!(prompt.contains("must call the `second` tool"));
+    assert!(prompt.contains("**second**"));
+    assert!(!prompt.contains("**first**"));
 }
 
 #[test]

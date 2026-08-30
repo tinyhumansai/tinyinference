@@ -263,9 +263,8 @@ impl EmbeddingModel for OllamaEmbeddingModel {
         let live = texts
             .iter()
             .enumerate()
-            .filter_map(|(index, text)| {
-                (!text.trim().is_empty()).then(|| (index, text.clone()))
-            })
+            .filter(|(_, text)| !text.trim().is_empty())
+            .map(|(index, text)| (index, text.clone()))
             .collect::<Vec<_>>();
         if live.is_empty() {
             return Err(Error::Validation(

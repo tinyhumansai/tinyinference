@@ -247,21 +247,9 @@ impl ModelRequest {
         self
     }
 
-    /// Sets the model id or registry alias.
+    /// Sets the provider model id.
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
         self.model = Some(model.into());
-        self
-    }
-
-    /// Adds a model resolution hint.
-    pub fn with_model_hint(mut self, hint: ModelHint) -> Self {
-        self.model_hints.push(hint);
-        self
-    }
-
-    /// Enables or disables previous model reuse from run/agent state.
-    pub fn with_reuse_previous_model(mut self, reuse: bool) -> Self {
-        self.reuse_previous_model = reuse;
         self
     }
 
@@ -380,7 +368,6 @@ impl ModelResponse {
             usage: None,
             finish_reason: None,
             raw: None,
-            resolved_model: None,
         }
     }
 
@@ -394,12 +381,6 @@ impl ModelResponse {
     /// Sets the provider finish reason.
     pub fn with_finish_reason(mut self, reason: impl Into<String>) -> Self {
         self.finish_reason = Some(reason.into());
-        self
-    }
-
-    /// Attaches model resolution metadata.
-    pub fn with_resolved_model(mut self, resolved: ResolvedModel) -> Self {
-        self.resolved_model = Some(resolved);
         self
     }
 
@@ -608,7 +589,6 @@ impl StreamAccumulator {
             usage: self.usage,
             finish_reason: None,
             raw: None,
-            resolved_model: None,
         })
     }
 }

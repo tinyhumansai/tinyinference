@@ -1,4 +1,4 @@
-# harness::providers::openai
+# tinyinference::providers::openai
 
 Real OpenAI Chat Completions provider (feature `openai`). This is one of the
 concrete leaves the recursive runtime bottoms out in: a single `OpenAiModel`
@@ -24,7 +24,7 @@ It:
 The wire (de)serialization shapes live in `types.rs`; `transport.rs`,
 `convert.rs`, and `sse.rs` own the HTTP transport, request/response
 translation, and SSE decoding respectively, keeping OpenAI-specific JSON out
-of the rest of the harness.
+of the rest of TinyInference.
 
 ## Construction
 
@@ -183,12 +183,13 @@ Non-2xx responses are normalized through `parse_error_body` / `provider_error`
 into a structured `ProviderError` (HTTP status, provider error code, and a
 `retryable` flag derived from the status: 408/409/429/5xx are retryable,
 everything else — including 401/400 — is not) and surfaced as
-`TinyAgentsError::Provider`, so `harness::retry::is_retryable` can classify
+`tinyinference::Error::Provider`, so
+`tinyinference::failure::classify_provider_error` can classify
 retryability instead of retrying every provider failure indiscriminately.
 Transport-level failures (connection errors, body-read failures) have no such
-structure to preserve and surface as a plain `TinyAgentsError::Model` string
+structure to preserve and surface as a plain `tinyinference::Error::Model` string
 via `provider_failure_message`. Malformed JSON bodies surface as
-`TinyAgentsError::Serialization`.
+`tinyinference::Error::Serialization`.
 
 ## Operational constraints
 
@@ -209,7 +210,7 @@ via `provider_failure_message`. Malformed JSON bodies surface as
 | --- | --- |
 | `mod.rs` | Module wiring: shared imports/constants and re-exports (`OpenAiModel`). |
 | `transport.rs` | `OpenAiModel` construction, provider presets, request building, and the `ChatModel` impl (`invoke`/`stream`). |
-| `convert.rs` | Request/response translation between harness types and the OpenAI wire format. |
+| `convert.rs` | Request/response translation between TinyInference types and the OpenAI wire format. |
 | `reasoning_tags.rs` | Streaming-safe inline `<think>…</think>` reasoning-tag extraction (`ReasoningTagExtraction`, `ReasoningTagStream`, `extract_reasoning`). |
 | `sse.rs` | SSE stream parsing and incremental accumulation (`SseState`, `OpenAiStreamAcc`, `sse_next`). |
 | `types.rs` | Wire (de)serialization shapes (`ModelListWire`, `ModelListing`, request/response bodies). |

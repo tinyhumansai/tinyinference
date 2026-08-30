@@ -267,7 +267,10 @@ async fn retriever_rejects_short_batches_before_writing() {
         .await
         .unwrap_err();
     assert!(error.to_string().contains("1 vectors for 2 documents"));
-    assert!(store.is_empty(), "partial batches must not mutate the store");
+    assert!(
+        store.is_empty(),
+        "partial batches must not mutate the store"
+    );
 }
 
 #[tokio::test]
