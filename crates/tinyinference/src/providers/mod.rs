@@ -14,12 +14,13 @@
 //! |---|---|
 //! | [`MockModel`] | Implemented — deterministic, no network |
 //! | [`openai`] (and OpenAI-compatible endpoints) | Implemented |
+//! | [`anthropic`] (Messages API, including prompt caching) | Implemented |
 //!
 //! [`MockModel`] is always compiled and needs no network, keeping the default
 //! build offline and deterministic. The [`openai`] module is always compiled
 //! too (it pulls no extra dependencies) and additionally serves every
 //! OpenAI-compatible endpoint (Ollama, DeepSeek, Groq, xAI, OpenRouter,
-//! Together, Mistral, and Anthropic's OpenAI-compat endpoint) through the same
+//! Together, and Mistral) through the same
 //! Chat Completions wire format. The default build stays offline anyway: the
 //! adapter only touches the network when invoked, and the live tests
 //! early-return without `OPENAI_API_KEY`.
@@ -29,7 +30,7 @@
 //!
 //! ```text
 //! pub mod openai;                          // always compiled
-//! // #[cfg(feature = "anthropic")] pub mod anthropic;
+//! pub mod anthropic;                       // always compiled
 //! // #[cfg(feature = "ollama")]    pub mod ollama;
 //! ```
 
@@ -39,8 +40,8 @@ mod types;
 // The OpenAI Chat Completions adapter is always compiled; it also serves every
 // OpenAI-compatible endpoint. Providers with a different wire protocol would be
 // added behind their own Cargo feature.
+pub mod anthropic;
 pub mod openai;
-// #[cfg(feature = "anthropic")] pub mod anthropic;
 // #[cfg(feature = "ollama")]    pub mod ollama;
 
 pub use types::*;
