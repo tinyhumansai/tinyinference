@@ -104,7 +104,7 @@ pub(crate) fn request_body(request: &ModelRequest, default_model: &str) -> Value
     for message in &request.messages {
         match message {
             Message::System(system_message) => {
-                system.push(Value::Array(content_blocks(&system_message.content)))
+                system.extend(content_blocks(&system_message.content))
             }
             Message::User(user_message) => messages.push(json!({
                 "role": "user",
@@ -133,16 +133,12 @@ pub(crate) fn request_body(request: &ModelRequest, default_model: &str) -> Value
         }
     }
     if cache_enabled {
-        let block = system
-            .last_mut()
-            .and_then(Value::as_array_mut)
-            .and_then(|blocks| blocks.last_mut())
-            .or_else(|| {
-                messages
-                    .first_mut()
-                    .and_then(|message| message["content"].as_array_mut())
-                    .and_then(|blocks| blocks.first_mut())
-            });
+        let block = system.last_mut().or_else(|| {
+            messages
+                .first_mut()
+                .and_then(|message| message["content"].as_array_mut())
+                .and_then(|blocks| blocks.first_mut())
+        });
         if let Some(block) = block {
             block["cache_control"] = json!({ "type": "ephemeral" });
         }
@@ -265,7 +261,7 @@ mod test {
         });
         let body = request_body(&request, "test-model");
         assert_eq!(
-            body["system"][0][0]["cache_control"],
+            body["system"][0]["cache_control"],
             json!({ "type": "ephemeral" })
         );
         assert_eq!(body["messages"][0]["role"], "user");
