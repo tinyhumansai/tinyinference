@@ -18,13 +18,25 @@ const DEFAULT_MODEL: &str = "claude-sonnet-4-20250514";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
 /// A chat model backed by Anthropic's native Messages API.
-#[derive(Debug)]
 pub struct AnthropicModel {
     client: reqwest::Client,
     api_key: String,
     base_url: String,
     model: String,
     profile: ModelProfile,
+}
+
+impl std::fmt::Debug for AnthropicModel {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AnthropicModel")
+            .field("client", &self.client)
+            .field("api_key", &"[redacted]")
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field("profile", &self.profile)
+            .finish()
+    }
 }
 
 impl AnthropicModel {
@@ -236,5 +248,13 @@ mod test {
         let usage = response.usage.unwrap();
         assert_eq!(usage.cache_read_tokens, 90);
         assert_eq!(usage.cache_creation_tokens, 10);
+    }
+
+    #[test]
+    fn debug_redacts_the_api_key() {
+        let model = AnthropicModel::new("secret-api-key");
+        let debug = format!("{model:?}");
+        assert!(debug.contains("[redacted]"));
+        assert!(!debug.contains("secret-api-key"));
     }
 }
