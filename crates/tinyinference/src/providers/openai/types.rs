@@ -82,7 +82,7 @@ pub struct ChatCompletionChunk {
     #[serde(default)]
     pub id: Option<String>,
     /// Per-choice incremental deltas; the first choice is used.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_as_empty")]
     pub choices: Vec<ChunkChoiceWire>,
     /// Cumulative usage, sent on the final chunk when `include_usage` is set.
     #[serde(default)]
@@ -117,7 +117,7 @@ pub struct ChunkDeltaWire {
     #[serde(default)]
     pub reasoning: Option<Value>,
     /// Incremental tool-call fragments, correlated by `index`.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_as_empty")]
     pub tool_calls: Vec<ToolCallChunkWire>,
 }
 
@@ -153,6 +153,28 @@ pub struct FunctionChunkWire {
     /// to the stringified form the accumulator concatenates.
     #[serde(default, deserialize_with = "deserialize_optional_arguments")]
     pub arguments: Option<String>,
+}
+
+/// Deserializes a sequence that a provider may send as an explicit `null`.
+///
+/// `#[serde(default)]` covers an **absent** key and nothing else: a key present
+/// with the value `null` still reaches the `Vec` visitor and fails the whole
+/// response with `invalid type: null, expected a sequence`. Several
+/// OpenAI-compatible servers spell "no tool calls" that way — Mistral-family
+/// endpoints send `"tool_calls": null` on every plain-text completion — so a
+/// model that simply answered in prose looked like a transport fault, and a
+/// role sitting on such a rung could not complete a single turn.
+///
+/// Same intent as [`deserialize_arguments`]: one provider's unexpected spelling
+/// of "nothing" must not fail the decode of everything around it.
+pub(super) fn deserialize_null_as_empty<'de, D, T>(
+    deserializer: D,
+) -> std::result::Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Option::<Vec<T>>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 /// Normalizes a tool-call `function.arguments` payload to the stringified-JSON
@@ -321,7 +343,7 @@ pub struct ChatCompletionResponse {
     #[serde(default)]
     pub id: Option<String>,
     /// Candidate completions; the first is used.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_as_empty")]
     pub choices: Vec<ChoiceWire>,
     /// Token usage, when reported.
     #[serde(default)]
@@ -352,7 +374,7 @@ pub struct ResponseMessageWire {
     #[serde(default)]
     pub reasoning: Option<Value>,
     /// Tool calls requested by the model.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_as_empty")]
     pub tool_calls: Vec<ToolCallWire>,
 }
 
@@ -423,6 +445,6 @@ pub struct ModelListing {
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct ModelListWire {
     /// The advertised models.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_as_empty")]
     pub data: Vec<ModelListing>,
 }
