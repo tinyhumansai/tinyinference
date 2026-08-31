@@ -14,7 +14,7 @@ use crate::usage::Usage;
 use crate::{Error, Result};
 
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com/v1";
-const DEFAULT_MODEL: &str = "claude-sonnet-4-20250514";
+const DEFAULT_MODEL: &str = "claude-sonnet-4-6";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
 /// A chat model backed by Anthropic's native Messages API.
@@ -122,7 +122,11 @@ pub(crate) fn request_body(request: &ModelRequest, default_model: &str) -> Value
         if let Some(block) = system.last_mut() {
             block["cache_control"] = json!({ "type": "ephemeral" });
         } else if let Some(message) = messages.first_mut() {
-            message["cache_control"] = json!({ "type": "ephemeral" });
+            message["content"] = json!([{
+                "type": "text",
+                "text": message["content"].as_str().unwrap_or_default(),
+                "cache_control": { "type": "ephemeral" },
+            }]);
         }
     }
     let mut body = json!({
@@ -236,6 +240,31 @@ mod test {
             json!({ "type": "ephemeral" })
         );
         assert_eq!(body["messages"][0]["role"], "user");
+    }
+
+    #[test]
+    fn cacheable_user_prefix_becomes_a_content_block_breakpoint() {
+        let request = ModelRequest::new(vec![Message::user("stable context")])
+            .with_cache_segments(vec![PromptSegment {
+                id: "history".into(),
+                role: SegmentRole::History,
+                cacheable: true,
+            }])
+            .with_cache_policy(CachePolicy {
+                protect_prompt_prefix: true,
+                ..CachePolicy::default()
+            });
+        let body = request_body(&request, "test-model");
+        assert_eq!(body["messages"][0]["content"][0]["type"], "text");
+        assert_eq!(
+            body["messages"][0]["content"][0]["cache_control"],
+            json!({ "type": "ephemeral" })
+        );
+    }
+
+    #[test]
+    fn default_model_is_current() {
+        assert_eq!(AnthropicModel::new("key").model, "claude-sonnet-4-6");
     }
 
     #[test]
