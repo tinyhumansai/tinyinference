@@ -7,6 +7,7 @@
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
+use std::time::Duration;
 
 use crate::message::{AssistantMessage, ContentBlock, Message};
 use crate::model::{ChatModel, ModelProfile, ModelRequest, ModelResponse};
@@ -70,6 +71,10 @@ impl AnthropicModel {
 
     /// Reads `ANTHROPIC_API_KEY`, plus optional `ANTHROPIC_BASE_URL` and
     /// `ANTHROPIC_MODEL`, from the environment.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Model`] when `ANTHROPIC_API_KEY` is not set.
     pub fn from_env() -> Result<Self> {
         let key = std::env::var("ANTHROPIC_API_KEY")
             .map_err(|_| Error::Model("ANTHROPIC_API_KEY is not set".to_string()))?;
@@ -151,6 +156,15 @@ pub(crate) fn request_body(request: &ModelRequest, default_model: &str) -> Value
     if !system.is_empty() {
         body["system"] = Value::Array(system);
     }
+    if let Some(temperature) = request.temperature {
+        body["temperature"] = json!(temperature);
+    }
+    if let Some(top_p) = request.top_p {
+        body["top_p"] = json!(top_p);
+    }
+    if !request.stop_sequences.is_empty() {
+        body["stop_sequences"] = json!(request.stop_sequences);
+    }
     body
 }
 
@@ -180,12 +194,20 @@ fn parse_response(body: Value) -> Result<ModelResponse> {
                 .flatten()
         })
         .collect::<String>();
-    let usage = body.get("usage").map(|usage| Usage {
-        input_tokens: usage["input_tokens"].as_u64().unwrap_or(0),
-        output_tokens: usage["output_tokens"].as_u64().unwrap_or(0),
-        cache_read_tokens: usage["cache_read_input_tokens"].as_u64().unwrap_or(0),
-        cache_creation_tokens: usage["cache_creation_input_tokens"].as_u64().unwrap_or(0),
-        ..Usage::default()
+    let usage = body.get("usage").map(|usage| {
+        let uncached_input_tokens = usage["input_tokens"].as_u64().unwrap_or(0);
+        let cache_read_tokens = usage["cache_read_input_tokens"].as_u64().unwrap_or(0);
+        let cache_creation_tokens = usage["cache_creation_input_tokens"].as_u64().unwrap_or(0);
+        let input_tokens = uncached_input_tokens + cache_read_tokens + cache_creation_tokens;
+        let output_tokens = usage["output_tokens"].as_u64().unwrap_or(0);
+        Usage {
+            input_tokens,
+            output_tokens,
+            total_tokens: input_tokens + output_tokens,
+            cache_read_tokens,
+            cache_creation_tokens,
+            ..Usage::default()
+        }
     });
     Ok(ModelResponse {
         message: AssistantMessage {
@@ -214,12 +236,17 @@ impl<State: Send + Sync> ChatModel<State> for AnthropicModel {
     }
 
     async fn invoke(&self, _state: &State, request: ModelRequest) -> Result<ModelResponse> {
-        let response = self
+        let request_builder = self
             .client
             .post(self.endpoint())
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", ANTHROPIC_VERSION)
-            .json(&request_body(&request, &self.model))
+            .json(&request_body(&request, &self.model));
+        let request_builder = match request.timeout_ms {
+            Some(timeout_ms) => request_builder.timeout(Duration::from_millis(timeout_ms)),
+            None => request_builder,
+        };
+        let response = request_builder
             .send()
             .await
             .map_err(|error| Error::Model(format!("anthropic request failed: {error}")))?;
@@ -315,8 +342,22 @@ mod test {
         })).unwrap();
         assert_eq!(response.text(), "hello");
         let usage = response.usage.unwrap();
+        assert_eq!(usage.input_tokens, 200);
+        assert_eq!(usage.total_tokens, 205);
         assert_eq!(usage.cache_read_tokens, 90);
         assert_eq!(usage.cache_creation_tokens, 10);
+    }
+
+    #[test]
+    fn request_body_forwards_generation_controls() {
+        let request = ModelRequest::new(vec![Message::user("hello")])
+            .with_temperature(0.2)
+            .with_top_p(0.8)
+            .with_stop_sequences(["END"]);
+        let body = request_body(&request, "test-model");
+        assert_eq!(body["temperature"], 0.2);
+        assert_eq!(body["top_p"], 0.8);
+        assert_eq!(body["stop_sequences"], json!(["END"]));
     }
 
     #[test]
