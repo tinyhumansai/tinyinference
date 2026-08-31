@@ -43,8 +43,6 @@ impl AnthropicModel {
             profile: ModelProfile {
                 provider: Some("anthropic".to_string()),
                 model: Some(model.clone()),
-                tool_calling: true,
-                streaming: true,
                 ..ModelProfile::default()
             },
             model,
