@@ -187,7 +187,7 @@ pub(super) struct ResponsesContentPart {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ResponsesResponse {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::types::deserialize_null_as_empty")]
     pub(super) output: Vec<ResponsesOutput>,
     #[serde(default)]
     pub(super) output_text: Option<String>,
@@ -200,10 +200,10 @@ pub(super) struct ResponsesOutput {
     /// Item kind: `message`, `reasoning`, `function_call`, …
     #[serde(rename = "type", default)]
     pub(super) kind: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::types::deserialize_null_as_empty")]
     pub(super) content: Vec<ResponsesContent>,
     /// Reasoning summary parts, on a `reasoning` item.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::types::deserialize_null_as_empty")]
     pub(super) summary: Vec<ResponsesContent>,
     /// The opaque reasoning payload that survives `store: false`.
     ///
