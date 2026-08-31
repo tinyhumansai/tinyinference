@@ -102,31 +102,49 @@ pub(crate) fn request_body(request: &ModelRequest, default_model: &str) -> Value
     let mut system = Vec::new();
     let mut messages = Vec::new();
     for message in &request.messages {
-        let role = match message {
+        match message {
             Message::System(system_message) => {
-                system.push(text_block(
-                    system_message
-                        .content
-                        .iter()
-                        .filter_map(ContentBlock::as_text)
-                        .collect(),
-                ));
-                continue;
+                system.push(Value::Array(content_blocks(&system_message.content)))
             }
-            Message::User(_) | Message::Tool(_) => "user",
-            Message::Assistant(_) => "assistant",
-        };
-        messages.push(json!({ "role": role, "content": message.text() }));
+            Message::User(user_message) => messages.push(json!({
+                "role": "user",
+                "content": content_blocks(&user_message.content),
+            })),
+            Message::Assistant(assistant_message) => {
+                let mut content = content_blocks(&assistant_message.content);
+                content.extend(assistant_message.tool_calls.iter().map(|call| {
+                    json!({
+                        "type": "tool_use",
+                        "id": call.id,
+                        "name": call.name,
+                        "input": call.arguments,
+                    })
+                }));
+                messages.push(json!({ "role": "assistant", "content": content }));
+            }
+            Message::Tool(tool_message) => messages.push(json!({
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": tool_message.tool_call_id,
+                    "content": content_blocks(&tool_message.content),
+                }],
+            })),
+        }
     }
     if cache_enabled {
-        if let Some(block) = system.last_mut() {
+        let block = system
+            .last_mut()
+            .and_then(Value::as_array_mut)
+            .and_then(|blocks| blocks.last_mut())
+            .or_else(|| {
+                messages
+                    .first_mut()
+                    .and_then(|message| message["content"].as_array_mut())
+                    .and_then(|blocks| blocks.first_mut())
+            });
+        if let Some(block) = block {
             block["cache_control"] = json!({ "type": "ephemeral" });
-        } else if let Some(message) = messages.first_mut() {
-            message["content"] = json!([{
-                "type": "text",
-                "text": message["content"].as_str().unwrap_or_default(),
-                "cache_control": { "type": "ephemeral" },
-            }]);
         }
     }
     let mut body = json!({
@@ -140,8 +158,19 @@ pub(crate) fn request_body(request: &ModelRequest, default_model: &str) -> Value
     body
 }
 
-fn text_block(text: String) -> Value {
-    json!({ "type": "text", "text": text })
+fn content_blocks(content: &[ContentBlock]) -> Vec<Value> {
+    content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text(text) => Some(json!({ "type": "text", "text": text })),
+            ContentBlock::Json(value) => Some(json!({ "type": "text", "text": value.to_string() })),
+            ContentBlock::Thinking { text, .. } => Some(json!({ "type": "text", "text": text })),
+            ContentBlock::RedactedThinking { data } => {
+                Some(json!({ "type": "text", "text": data }))
+            }
+            ContentBlock::Image(_) | ContentBlock::ProviderExtension(_) => None,
+        })
+        .collect()
 }
 
 fn parse_response(body: Value) -> Result<ModelResponse> {
@@ -236,7 +265,7 @@ mod test {
         });
         let body = request_body(&request, "test-model");
         assert_eq!(
-            body["system"][0]["cache_control"],
+            body["system"][0][0]["cache_control"],
             json!({ "type": "ephemeral" })
         );
         assert_eq!(body["messages"][0]["role"], "user");
@@ -256,10 +285,25 @@ mod test {
             });
         let body = request_body(&request, "test-model");
         assert_eq!(body["messages"][0]["content"][0]["type"], "text");
+        assert_eq!(body["messages"][0]["content"][0]["text"], "stable context");
         assert_eq!(
             body["messages"][0]["content"][0]["cache_control"],
             json!({ "type": "ephemeral" })
         );
+    }
+
+    #[test]
+    fn tool_results_use_anthropic_tool_result_blocks() {
+        let request = ModelRequest::new(vec![Message::Tool(crate::message::ToolMessage {
+            tool_call_id: "tool_1".into(),
+            content: vec![ContentBlock::Text("42".into())],
+            trusted_verbatim: false,
+            artifact: None,
+        })]);
+        let body = request_body(&request, "test-model");
+        assert_eq!(body["messages"][0]["role"], "user");
+        assert_eq!(body["messages"][0]["content"][0]["type"], "tool_result");
+        assert_eq!(body["messages"][0]["content"][0]["tool_use_id"], "tool_1");
     }
 
     #[test]
