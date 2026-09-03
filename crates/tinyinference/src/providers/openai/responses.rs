@@ -442,6 +442,69 @@ pub(super) fn convert_responses_usage(wire: &ResponsesUsage) -> Usage {
     }
 }
 
+pub(super) fn parse_responses_wire(text: &str) -> Result<Value, serde_json::Error> {
+    if let Ok(value) = serde_json::from_str::<Value>(text) {
+        return Ok(unwrap_completed_response(value));
+    }
+    let mut completed = None;
+    let mut output_text = String::new();
+    let mut done_text = None;
+    for line in text.lines() {
+        let Some(data) = line.strip_prefix("data:") else {
+            continue;
+        };
+        let data = data.trim();
+        if data.is_empty() || data == "[DONE]" {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(data) else {
+            continue;
+        };
+        match value.get("type").and_then(|t| t.as_str()) {
+            Some("response.completed") => {
+                completed = value.get("response").cloned();
+            }
+            Some("response.output_text.done") => {
+                done_text = value
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+            }
+            Some("response.output_text.delta") => {
+                if let Some(delta) = value.get("delta").and_then(|v| v.as_str()) {
+                    output_text.push_str(delta);
+                }
+            }
+            _ => {}
+        }
+    }
+    let assembled = done_text.filter(|s| !s.is_empty()).unwrap_or(output_text);
+    match completed {
+        Some(mut value) => {
+            let existing = value
+                .get("output_text")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if existing.is_empty()
+                && !assembled.is_empty()
+                && let Some(obj) = value.as_object_mut()
+            {
+                obj.insert("output_text".into(), Value::String(assembled));
+            }
+            Ok(value)
+        }
+        None => serde_json::from_str(text),
+    }
+}
+
+fn unwrap_completed_response(value: Value) -> Value {
+    if value.get("type").and_then(|t| t.as_str()) == Some("response.completed") {
+        value.get("response").cloned().unwrap_or(value)
+    } else {
+        value
+    }
+}
+
 /// Parses a raw `/v1/responses` JSON body into a [`ModelResponse`].
 ///
 /// Reasoning items surface as a leading
@@ -571,5 +634,92 @@ mod tests {
     fn parse_tolerates_a_body_without_output() {
         let resp = parse_responses_response(json!({ "id": "resp_1" }));
         assert_eq!(resp.text(), "");
+    }
+
+    #[test]
+    fn parse_responses_wire_reads_sse_completed_event() {
+        let sse = "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"output_text\":\"hi\"}}\n\n";
+        let value = parse_responses_wire(sse).expect("sse");
+        assert_eq!(value["output_text"], "hi");
+    }
+
+    #[test]
+    fn parse_responses_wire_uses_output_text_done_when_completed_output_is_empty() {
+        let sse = "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\nevent: response.output_text.done\ndata: {\"type\":\"response.output_text.done\",\"text\":\"ok\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"output\":[]}}\n\n";
+        let value = parse_responses_wire(sse).expect("sse");
+        assert_eq!(value["output_text"], "ok");
+    }
+
+    #[tokio::test]
+    async fn responses_invoke_avoids_codex_stream_required_400() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        use crate::model::{ChatModel, ModelRequest};
+        use crate::providers::openai::OpenAiModel;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut buf = Vec::new();
+            let mut tmp = [0u8; 4096];
+            loop {
+                let n = sock.read(&mut tmp).unwrap();
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&tmp[..n]);
+                if let Some(split) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let headers = std::str::from_utf8(&buf[..split]).unwrap_or("");
+                    let content_len = headers
+                        .lines()
+                        .find_map(|line| {
+                            line.split_once(':').and_then(|(k, v)| {
+                                k.eq_ignore_ascii_case("content-length")
+                                    .then(|| v.trim().parse::<usize>().ok())
+                                    .flatten()
+                            })
+                        })
+                        .unwrap_or(0);
+                    let start = split + 4;
+                    while buf.len() < start + content_len {
+                        let n = sock.read(&mut tmp).unwrap();
+                        if n == 0 {
+                            break;
+                        }
+                        buf.extend_from_slice(&tmp[..n]);
+                    }
+                    break;
+                }
+            }
+            let req = String::from_utf8_lossy(&buf);
+            let body = req.split("\r\n\r\n").nth(1).unwrap_or("");
+            let stream_true = body.contains("\"stream\":true") || body.contains("\"stream\": true");
+            let (status, content_type, payload) = if stream_true {
+                let sse = "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"output_text\":\"ok\"}}\n\n";
+                ("200 OK", "text/event-stream", sse.to_string())
+            } else {
+                (
+                    "400 Bad Request",
+                    "application/json",
+                    r#"{"detail":"Stream must be set to true"}"#.to_string(),
+                )
+            };
+            let resp = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                payload.len()
+            );
+            sock.write_all(resp.as_bytes()).unwrap();
+        });
+
+        let model = OpenAiModel::compatible("k", format!("http://{addr}/v1"), "gpt-5.6-luna")
+            .with_responses_api_primary();
+        let response = model
+            .invoke(&(), ModelRequest::new(vec![Message::user("hi")]))
+            .await
+            .expect("codex-shaped mock must succeed when stream is true");
+        assert_eq!(response.text(), "ok");
+        server.join().unwrap();
     }
 }
