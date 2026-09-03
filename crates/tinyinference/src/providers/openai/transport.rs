@@ -111,6 +111,13 @@ pub struct OpenAiModel {
     keep_alive: Option<String>,
     json_schema_strict: AtomicBool,
     native_tools_on_wire: AtomicBool,
+    /// Whether the Responses endpoint requires `stream: true` (the ChatGPT Codex
+    /// OAuth backend does: it answers a unary POST with HTTP 400
+    /// `{"detail":"Stream must be set to true"}` and only ever speaks SSE).
+    /// Latched on the first such 400 so exactly one call pays the probe; every
+    /// later request sends `stream: true` up front and the SSE body is folded
+    /// back into one `ModelResponse`.
+    responses_requires_stream: AtomicBool,
 }
 
 impl std::fmt::Debug for OpenAiModel {
@@ -364,6 +371,7 @@ impl OpenAiModel {
             keep_alive: None,
             json_schema_strict: AtomicBool::new(true),
             native_tools_on_wire: AtomicBool::new(true),
+            responses_requires_stream: AtomicBool::new(false),
         }
     }
 
@@ -1248,7 +1256,10 @@ impl OpenAiModel {
             model: model.clone(),
             input,
             instructions,
-            stream: None,
+            stream: self
+                .responses_requires_stream
+                .load(Ordering::Relaxed)
+                .then_some(true),
             store: Some(false),
             max_output_tokens,
             tools,
@@ -1295,13 +1306,54 @@ impl OpenAiModel {
                 self.send_responses(&retry, request.timeout_ms, &url)
                     .await?
             }
+            // The ChatGPT Codex OAuth backend refuses a unary Responses call
+            // outright (`{"detail":"Stream must be set to true"}`) — it only
+            // speaks SSE. Latch that fact so later calls send `stream: true`
+            // up front, and retry this one immediately; the SSE body is folded
+            // back into a single `ModelResponse` below, so the caller still
+            // sees an ordinary unary result.
+            Err(Error::Provider(err))
+                if err.status == Some(400)
+                    && body.stream.is_none()
+                    && err.message.to_ascii_lowercase().contains("stream must be set") =>
+            {
+                self.responses_requires_stream.store(true, Ordering::Relaxed);
+                let retry = responses::ResponsesRequest {
+                    stream: Some(true),
+                    ..body
+                };
+                self.send_responses(&retry, request.timeout_ms, &url)
+                    .await?
+            }
             Err(e) => return Err(e),
         };
+        let is_event_stream = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(|content_type| {
+                content_type
+                    .to_ascii_lowercase()
+                    .contains("text/event-stream")
+            })
+            .unwrap_or(false);
         let text = response
             .text()
             .await
             .map_err(|e| Error::Model(format!("openai responses body read failed: {e}")))?;
-        let value: Value = serde_json::from_str(&text)?;
+        // Content-type is a hint, not a contract here: the Codex backend has been
+        // observed answering a streamed Responses call without an
+        // `text/event-stream` content-type, and a plain JSON body parses on the
+        // first branch anyway. So try JSON first and fold SSE whenever that
+        // fails (or whenever the header did say SSE).
+        let value: Value = match (is_event_stream, serde_json::from_str::<Value>(&text)) {
+            (false, Ok(value)) => value,
+            _ => responses_sse_final_value(&text).ok_or_else(|| {
+                Error::Model(
+                    "openai responses stream carried no `response.completed` event".to_string(),
+                )
+            })?,
+        };
         Ok(responses::parse_responses_response(value))
     }
 
@@ -1810,4 +1862,66 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
         }
         Ok(Box::pin(stream))
     }
+}
+
+/// Fold a Responses-API SSE body into the single final `response` object.
+///
+/// The Codex backend streams `data:`-prefixed JSON events and carries the
+/// complete result on `response.completed`. Earlier events (`response.created`,
+/// per-delta events) are partial, so the completed one is preferred; a body that
+/// ends without it falls back to the last event that carried a `response`
+/// object, then to the last event that itself looks like a response (`output`
+/// present), so a backend that streams a bare final object still parses.
+pub(super) fn responses_sse_final_value(body: &str) -> Option<Value> {
+    let mut fallback: Option<Value> = None;
+    let mut final_response: Option<Value> = None;
+    // Codex streams each finished output item as its own `response.output_item.done`
+    // event and then sends a `response.completed` whose `output` array is EMPTY —
+    // so the terminal event alone carries usage and status but no text. Collect the
+    // items as they stream and graft them onto the final response.
+    let mut items: Vec<Value> = Vec::new();
+    for line in body.lines() {
+        let payload = match line.strip_prefix("data:") {
+            Some(payload) => payload.trim(),
+            None => continue,
+        };
+        if payload.is_empty() || payload == "[DONE]" {
+            continue;
+        }
+        let Ok(event) = serde_json::from_str::<Value>(payload) else {
+            continue;
+        };
+        let kind = event.get("type").and_then(Value::as_str).unwrap_or_default();
+        match kind {
+            "response.output_item.done" => {
+                if let Some(item) = event.get("item") {
+                    items.push(item.clone());
+                }
+            }
+            "response.completed" | "response.incomplete" => {
+                if let Some(response) = event.get("response") {
+                    final_response = Some(response.clone());
+                }
+            }
+            _ => {
+                if let Some(response) = event.get("response") {
+                    fallback = Some(response.clone());
+                } else if event.get("output").is_some() {
+                    fallback = Some(event);
+                }
+            }
+        }
+    }
+    let mut response = final_response.or(fallback)?;
+    let output_is_empty = response
+        .get("output")
+        .and_then(Value::as_array)
+        .map(|output| output.is_empty())
+        .unwrap_or(true);
+    if output_is_empty && !items.is_empty() {
+        if let Some(object) = response.as_object_mut() {
+            object.insert("output".to_string(), Value::Array(items));
+        }
+    }
+    Some(response)
 }

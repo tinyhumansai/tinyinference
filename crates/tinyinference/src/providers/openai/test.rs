@@ -2222,3 +2222,41 @@ fn degrade_for_400_unions_with_existing_baseline_degrade() {
         })
     );
 }
+
+/// The Codex OAuth backend ends a streamed Responses call with a
+/// `response.completed` whose `output` array is **empty** and delivers the actual
+/// content in earlier `response.output_item.done` events. Reading the terminal
+/// event alone therefore yields a well-formed response with no text — which is
+/// exactly what surfaced to users as "The model returned an empty response".
+#[test]
+fn responses_sse_fold_grafts_streamed_output_items_onto_the_completed_response() {
+    let body = concat!(
+        "event: response.created\n",
+        "data: {\"type\":\"response.created\",\"response\":{\"status\":\"in_progress\",\"output\":[]}}\n\n",
+        "event: response.output_item.done\n",
+        "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello\"}]}}\n\n",
+        "event: response.completed\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\n",
+    );
+
+    let value = super::transport::responses_sse_final_value(body).expect("a final response");
+    assert_eq!(
+        value.get("status").and_then(|status| status.as_str()),
+        Some("completed"),
+        "the terminal event wins over the earlier in-progress one"
+    );
+    let response = super::responses::parse_responses_response(value);
+    assert_eq!(response.text(), "hello");
+}
+
+/// A body that never reaches a terminal event still yields the last response it
+/// saw, rather than failing the whole call.
+#[test]
+fn responses_sse_fold_falls_back_to_the_last_seen_response() {
+    let body = "data: {\"type\":\"response.created\",\"response\":{\"status\":\"in_progress\",\"output\":[]}}\n";
+    let value = super::transport::responses_sse_final_value(body).expect("a fallback response");
+    assert_eq!(
+        value.get("status").and_then(|status| status.as_str()),
+        Some("in_progress")
+    );
+}
