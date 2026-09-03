@@ -1315,9 +1315,13 @@ impl OpenAiModel {
             Err(Error::Provider(err))
                 if err.status == Some(400)
                     && body.stream.is_none()
-                    && err.message.to_ascii_lowercase().contains("stream must be set") =>
+                    && err
+                        .message
+                        .to_ascii_lowercase()
+                        .contains("stream must be set") =>
             {
-                self.responses_requires_stream.store(true, Ordering::Relaxed);
+                self.responses_requires_stream
+                    .store(true, Ordering::Relaxed);
                 let retry = responses::ResponsesRequest {
                     stream: Some(true),
                     ..body
@@ -1891,7 +1895,10 @@ pub(super) fn responses_sse_final_value(body: &str) -> Option<Value> {
         let Ok(event) = serde_json::from_str::<Value>(payload) else {
             continue;
         };
-        let kind = event.get("type").and_then(Value::as_str).unwrap_or_default();
+        let kind = event
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         match kind {
             "response.output_item.done" => {
                 if let Some(item) = event.get("item") {
@@ -1918,10 +1925,11 @@ pub(super) fn responses_sse_final_value(body: &str) -> Option<Value> {
         .and_then(Value::as_array)
         .map(|output| output.is_empty())
         .unwrap_or(true);
-    if output_is_empty && !items.is_empty() {
-        if let Some(object) = response.as_object_mut() {
-            object.insert("output".to_string(), Value::Array(items));
-        }
+    if let Some(object) = response
+        .as_object_mut()
+        .filter(|_| output_is_empty && !items.is_empty())
+    {
+        object.insert("output".to_string(), Value::Array(items));
     }
     Some(response)
 }
