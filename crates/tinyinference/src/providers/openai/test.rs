@@ -1952,6 +1952,7 @@ fn responses_request_preserves_continuation_format_and_provider_options() {
     assert_eq!(body["reasoning"]["effort"], "high");
     assert_eq!(body["metadata"]["source"], "test");
     assert!(body.get("store").is_some(), "owned store field is retained");
+    assert_eq!(body["stream"], true);
 }
 
 #[tokio::test]

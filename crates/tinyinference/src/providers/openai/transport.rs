@@ -1248,7 +1248,7 @@ impl OpenAiModel {
             model: model.clone(),
             input,
             instructions,
-            stream: None,
+            stream: Some(true),
             store: Some(false),
             max_output_tokens,
             tools,
@@ -1301,7 +1301,7 @@ impl OpenAiModel {
             .text()
             .await
             .map_err(|e| Error::Model(format!("openai responses body read failed: {e}")))?;
-        let value: Value = serde_json::from_str(&text)?;
+        let value = responses::parse_responses_wire(&text)?;
         Ok(responses::parse_responses_response(value))
     }
 
@@ -1314,7 +1314,7 @@ impl OpenAiModel {
         url: &str,
     ) -> Result<reqwest::Response> {
         let mut builder = self.authorized(self.client.post(url)).json(body);
-        if let Some(timeout) = request_timeout(timeout_ms, false) {
+        if let Some(timeout) = request_timeout(timeout_ms, body.stream == Some(true)) {
             builder = builder.timeout(timeout);
         }
         self.send_checked(builder, "responses request", url).await
