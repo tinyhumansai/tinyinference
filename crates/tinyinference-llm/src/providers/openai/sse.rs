@@ -17,6 +17,80 @@ pub(super) struct ToolCallBuild {
     args: String,
 }
 
+/// The block-channel's notion of "which content stream is currently open",
+/// used to detect a switch (and thus a `BlockEnd`/`BlockStart` pair) between
+/// text, reasoning, and each individual tool call.
+///
+/// A tool call is identified by its slot in [`OpenAiStreamAcc::tool_calls`]
+/// (not the block index): two tool calls always occupy distinct slots, so
+/// comparing slots is enough to tell fragments for different calls apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OpenKind {
+    Text,
+    Reasoning,
+    ToolCall(usize),
+}
+
+/// What the caller of [`OpenAiStreamAcc::ensure_block`] wants opened, carrying
+/// whatever data a fresh [`BlockKind`] needs to be constructed. Text and
+/// reasoning blocks need nothing beyond their kind; a tool-call block needs
+/// the id/name known at the moment it first opens.
+enum BlockRequest {
+    Text,
+    Reasoning,
+    ToolCall { slot: usize, id: String, name: String },
+}
+
+impl BlockRequest {
+    fn kind(&self) -> OpenKind {
+        match self {
+            BlockRequest::Text => OpenKind::Text,
+            BlockRequest::Reasoning => OpenKind::Reasoning,
+            BlockRequest::ToolCall { slot, .. } => OpenKind::ToolCall(*slot),
+        }
+    }
+}
+
+/// The block channel's accumulated content for one opened block, mirrored
+/// independently of [`OpenAiStreamAcc::text`]/`reasoning`/`tool_calls` (which
+/// remain the sole source of truth for [`OpenAiStreamAcc::into_response`]).
+/// This exists only to assemble the [`ModelStreamItem::BlockEnd`] payload.
+#[derive(Clone, Debug)]
+enum BlockBuf {
+    Text(String),
+    Reasoning(String),
+    ToolCall { id: String, name: String, args: String },
+}
+
+impl BlockBuf {
+    /// Converts a closed block into the [`ContentBlock`] carried on
+    /// [`ModelStreamItem::BlockEnd`]. Mirrors the Anthropic adapter's
+    /// `OpenBlock::into_content_block`: a tool-call block has no dedicated
+    /// [`ContentBlock`] variant, so it is represented as [`ContentBlock::Json`]
+    /// carrying `{id, name, arguments}`.
+    fn into_content_block(self) -> ContentBlock {
+        match self {
+            BlockBuf::Text(text) => ContentBlock::Text(text),
+            BlockBuf::Reasoning(text) => ContentBlock::Thinking {
+                text,
+                signature: None,
+            },
+            BlockBuf::ToolCall { id, name, args } => {
+                let arguments = if args.trim().is_empty() {
+                    Value::Object(Default::default())
+                } else {
+                    serde_json::from_str(&args).unwrap_or(Value::String(args))
+                };
+                ContentBlock::Json(serde_json::json!({
+                    "id": id,
+                    "name": name,
+                    "arguments": arguments,
+                }))
+            }
+        }
+    }
+}
+
 /// Provider-side accumulator that rebuilds the authoritative [`ModelResponse`]
 /// from streamed chunks. Distinct from the generic
 /// [`StreamAccumulator`][crate::model::StreamAccumulator]: it tracks
