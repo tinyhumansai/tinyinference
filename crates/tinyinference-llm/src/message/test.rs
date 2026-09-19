@@ -196,6 +196,47 @@ fn thinking_block_serde_round_trips() {
 }
 
 #[test]
+fn custom_message_text_uses_display_and_carries_no_content_blocks() {
+    let custom = Message::Custom(CustomMessage {
+        kind: "compaction".into(),
+        payload: json!({"summary": "..."}),
+        display: Some("Compacted 40 turns".into()),
+    });
+    assert_eq!(custom.text(), "Compacted 40 turns");
+    assert_eq!(custom.char_len(), "Compacted 40 turns".chars().count());
+    assert_eq!(
+        custom.estimated_char_weight(),
+        "Compacted 40 turns".chars().count()
+    );
+    assert!(custom.artifact().is_none());
+
+    let no_display = Message::Custom(CustomMessage {
+        kind: "label".into(),
+        payload: json!({"name": "checkpoint"}),
+        display: None,
+    });
+    assert_eq!(no_display.text(), "");
+    assert_eq!(no_display.char_len(), 0);
+    assert_eq!(no_display.estimated_char_weight(), 0);
+}
+
+#[test]
+fn custom_message_round_trips_through_serde() {
+    let custom = Message::Custom(CustomMessage {
+        kind: "audit".into(),
+        payload: json!({"note": "reviewed"}),
+        display: None,
+    });
+    let wire = serde_json::to_value(&custom).unwrap();
+    assert_eq!(
+        wire,
+        json!({ "custom": { "kind": "audit", "payload": { "note": "reviewed" } } })
+    );
+    let back: Message = serde_json::from_value(wire).unwrap();
+    assert_eq!(back, custom);
+}
+
+#[test]
 fn legacy_content_without_thinking_still_parses() {
     // Additive tagging: transcripts serialized before thinking blocks existed
     // (only text/json/image/provider_extension) must deserialize unchanged.
