@@ -708,16 +708,12 @@ pub(super) async fn sse_next(mut state: SseState) -> Option<(ModelStreamItem, Ss
                 state.drain_lines();
             }
             Some(Err(error)) => {
-                state.finished = true;
-                state.terminal_emitted = true;
-                let provider_error = ProviderError {
-                    provider: state.provider.clone(),
-                    model: Some(state.model.clone()),
+                let item = state.provider_failure(ProviderError {
                     message: error.to_string(),
                     retryable: true,
                     ..ProviderError::default()
-                };
-                return Some((ModelStreamItem::ProviderFailed(provider_error), state));
+                });
+                return Some((item, state));
             }
             None => {
                 // Drain any final `data:` line the provider sent without a
@@ -726,18 +722,12 @@ pub(super) async fn sse_next(mut state: SseState) -> Option<(ModelStreamItem, Ss
                 if state.terminal_emitted || state.completion_seen {
                     state.finished = true;
                 } else {
-                    state.finished = true;
-                    state.terminal_emitted = true;
-                    return Some((
-                        ModelStreamItem::ProviderFailed(ProviderError {
-                            provider: state.provider.clone(),
-                            model: Some(state.model.clone()),
-                            message: "provider stream ended before a completion signal".into(),
-                            retryable: true,
-                            ..ProviderError::default()
-                        }),
-                        state,
-                    ));
+                    let item = state.provider_failure(ProviderError {
+                        message: "provider stream ended before a completion signal".into(),
+                        retryable: true,
+                        ..ProviderError::default()
+                    });
+                    return Some((item, state));
                 }
             }
         }
