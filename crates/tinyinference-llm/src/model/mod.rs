@@ -690,6 +690,13 @@ impl StreamAccumulator {
             ModelStreamItem::UsageDelta(usage) => {
                 self.usage = Some(*usage);
             }
+            // Block-boundary items carry no information the accumulator needs:
+            // every fragment a block-aware adapter emits as `BlockDelta` is
+            // also folded into the compatibility `MessageDelta`/`ToolCallDelta`
+            // channel handled above, so reconstruction here is unaffected.
+            ModelStreamItem::BlockStart { .. }
+            | ModelStreamItem::BlockDelta { .. }
+            | ModelStreamItem::BlockEnd { .. } => {}
             ModelStreamItem::Completed(response) => {
                 self.completed = Some(response.clone());
             }
