@@ -1763,7 +1763,8 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
             .map_err(|e| Error::Model(format!("openai response body read failed: {e}")))?;
 
         let value: Value = serde_json::from_str(&text)?;
-        let response = parse_chat_response(value, self.effective_reasoning_tags())?;
+        let mut response = parse_chat_response(value, self.effective_reasoning_tags())?;
+        self.stamp_origin(&mut response, CHAT_COMPLETIONS_API);
         // Prompt-guided tools: recover the model's `<tool_call>` blocks into
         // `message.tool_calls` when native tool calling was suppressed.
         if !self.profile.tool_calling
