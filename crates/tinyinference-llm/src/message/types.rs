@@ -151,7 +151,7 @@ pub fn replay_system_state(messages: &[Message]) -> (String, Vec<ToolSchema>) {
         let Message::System(system) = message else {
             continue;
         };
-        let text = concat_text(&system.content);
+        let text = super::concat_text(&system.content);
         if !text.is_empty() {
             if !leading_content.is_empty() {
                 leading_content.push_str("\n\n");
