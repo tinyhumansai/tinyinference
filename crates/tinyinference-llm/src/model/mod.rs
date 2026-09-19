@@ -705,7 +705,17 @@ impl StreamAccumulator {
                 // `insufficient_quota` / 400 must not be retried as transient).
                 self.failed_provider = Some(error.clone());
             }
+            ModelStreamItem::Deferred(handle) => {
+                self.deferred = Some(handle.clone());
+            }
         }
+    }
+
+    /// Returns the [`DeferredHandle`] folded in by a
+    /// [`ModelStreamItem::Deferred`] item, when one was seen.
+    #[must_use]
+    pub fn deferred(&self) -> Option<&DeferredHandle> {
+        self.deferred.as_ref()
     }
 
     /// Appends a tool-call argument fragment for `call_id`, preserving
