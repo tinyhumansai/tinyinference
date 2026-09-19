@@ -232,6 +232,7 @@ impl AnthropicModel {
     }
 
     async fn post(&self, request: &ModelRequest, streaming: bool) -> Result<reqwest::Response> {
+        crate::network_guard::ensure_network_models_allowed()?;
         let endpoint = reqwest::Url::parse(&self.endpoint())
             .map_err(|error| Error::Validation(format!("invalid Anthropic base URL: {error}")))?;
         match endpoint.scheme() {
