@@ -1781,9 +1781,7 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
             .map_err(|e| Error::Model(format!("openai response body read failed: {e}")))?;
 
         let value: Value = serde_json::from_str(&text)?;
-        if !self.responses_api_primary {
-            self.request_options.observe_response(&value);
-        }
+        self.request_options.observe_response(&value);
         let response = parse_chat_response(value, self.effective_reasoning_tags())?;
         // Prompt-guided tools: recover the model's `<tool_call>` blocks into
         // `message.tool_calls` when native tool calling was suppressed.
