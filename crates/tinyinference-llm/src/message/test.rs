@@ -302,10 +302,14 @@ fn replay_system_state_section_removal_drops_it_from_the_effective_prompt() {
 
 #[test]
 fn replay_system_state_later_tool_schema_for_same_name_wins() {
-    let mut first = SystemMessage::default();
-    first.tools_added = vec![ToolSchema::new("search", "v1", json!({"type": "object"}))];
-    let mut second = SystemMessage::default();
-    second.tools_added = vec![ToolSchema::new("search", "v2", json!({"type": "object"}))];
+    let first = SystemMessage {
+        tools_added: vec![ToolSchema::new("search", "v1", json!({"type": "object"}))],
+        ..SystemMessage::default()
+    };
+    let second = SystemMessage {
+        tools_added: vec![ToolSchema::new("search", "v2", json!({"type": "object"}))],
+        ..SystemMessage::default()
+    };
 
     let messages = vec![Message::System(first), Message::System(second)];
     let (_, tools) = replay_system_state(&messages);
