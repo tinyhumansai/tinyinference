@@ -289,6 +289,10 @@ impl AnthropicStreamAcc {
                 content,
                 tool_calls,
                 usage,
+                // Stamped by the `sse_next` call site (which owns
+                // `SseState::model`); this accumulator has no provider/model
+                // context of its own.
+                origin: None,
             },
             usage,
             finish_reason: self.stop_reason,
