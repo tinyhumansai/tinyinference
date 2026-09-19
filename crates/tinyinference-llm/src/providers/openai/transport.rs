@@ -999,6 +999,26 @@ impl OpenAiModel {
         Ok(())
     }
 
+    /// Stamps [`crate::message::AssistantMessage::origin`] on a freshly built
+    /// response with this instance's configured provider/model and the given
+    /// API surface (see [`CHAT_COMPLETIONS_API`]/[`RESPONSES_API`]).
+    ///
+    /// Every response-building path (unary, the non-streaming SSE fallback,
+    /// and the Responses API) funnels through here (or the analogous
+    /// `sse_next` streamed-terminal site) so a later cross-provider handoff
+    /// transform can detect when a message was produced by a different
+    /// provider/model than the one it is about to be replayed against. Local
+    /// OpenAI-compatible runtimes (Ollama, LM Studio, …) share this transport
+    /// and are stamped with their own `provider` (e.g. `"ollama"`), not
+    /// `"openai"`.
+    pub(super) fn stamp_origin(&self, response: &mut ModelResponse, api: &str) {
+        response.message.origin = Some(crate::message::MessageOrigin {
+            provider: self.provider.clone(),
+            api: api.to_string(),
+            model: self.model.clone(),
+        });
+    }
+
     /// Returns the default model id this instance will request.
     pub fn model(&self) -> &str {
         &self.model
