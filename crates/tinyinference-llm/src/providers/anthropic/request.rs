@@ -282,3 +282,41 @@ fn image_block(image: &ImageRef) -> Value {
         "source": { "type": "url", "url": image.url },
     })
 }
+
+/// Renders a document reference as Anthropic's `document` content block.
+/// `MediaRef::Path` has no wire representation (the harness never reads
+/// local files) and falls back to a placeholder text block instead of being
+/// silently dropped.
+fn document_block(media: &crate::message::MediaRef) -> Value {
+    use crate::message::MediaRef;
+    match media {
+        MediaRef::Base64 { data, media_type } => json!({
+            "type": "document",
+            "source": { "type": "base64", "media_type": media_type, "data": data },
+        }),
+        MediaRef::Url { url, .. } => json!({
+            "type": "document",
+            "source": { "type": "url", "url": url },
+        }),
+        MediaRef::Path { path, .. } => json!({
+            "type": "text",
+            "text": format!("[document attachment omitted: local path {path} was not resolved]"),
+        }),
+    }
+}
+
+/// Renders an audio or video reference as a placeholder text block: neither
+/// has a wire representation in Anthropic's Messages API.
+fn unsupported_media_placeholder(kind: &str, media: &crate::message::MediaRef) -> Value {
+    let descriptor = match media {
+        crate::message::MediaRef::Url { url, .. } => url.clone(),
+        crate::message::MediaRef::Base64 { media_type, .. } => {
+            format!("inline {media_type} data")
+        }
+        crate::message::MediaRef::Path { path, .. } => path.clone(),
+    };
+    json!({
+        "type": "text",
+        "text": format!("[{kind} attachment omitted: {descriptor}]"),
+    })
+}
