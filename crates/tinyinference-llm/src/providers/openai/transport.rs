@@ -287,6 +287,18 @@ pub(super) fn derive_profile(provider: &str, model: &str) -> ModelProfile {
         reasoning,
         reasoning_effort: reasoning,
         max_input_tokens: crate::model::context_window_for_model_id(model),
+        // The Chat Completions wire format translates every `Message::System`
+        // independently, at its transcript position, into a `role: "system"`
+        // wire message (`convert::translate_message`) — there is no single
+        // "the" system slot the way Anthropic's Messages API has one. A
+        // system message placed mid-transcript is therefore genuinely
+        // effective where it sits, not silently dropped or hoisted, so this
+        // defaults `true` for the OpenAI-compatible chat path. It is turned
+        // back off by `with_merge_system_into_user`, which folds every system
+        // message into the leading user turn and drops the role entirely —
+        // at that point there is no wire position for a mid-transcript patch
+        // to occupy.
+        mid_conversation_system_messages: true,
         ..ModelProfile::default()
     }
 }
