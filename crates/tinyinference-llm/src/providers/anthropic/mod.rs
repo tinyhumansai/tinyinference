@@ -85,6 +85,7 @@ pub struct AnthropicModel {
     temperature_override: Option<f64>,
     temperature_unsupported: Vec<String>,
     allow_insecure_http: bool,
+    request_options: crate::providers::ProviderRequestOptions,
 }
 
 impl std::fmt::Debug for AnthropicModel {
