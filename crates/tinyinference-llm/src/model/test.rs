@@ -512,6 +512,25 @@ fn model_stream_item_roundtrips_every_variant() {
         ..Default::default()
     }));
     roundtrip_stream_item(ModelStreamItem::UsageDelta(Usage::new(3, 5)));
+    roundtrip_stream_item(ModelStreamItem::BlockStart {
+        index: 0,
+        kind: crate::model::BlockKind::Text,
+    });
+    roundtrip_stream_item(ModelStreamItem::BlockStart {
+        index: 1,
+        kind: crate::model::BlockKind::ToolCall {
+            id: "call-1".into(),
+            name: "search".into(),
+        },
+    });
+    roundtrip_stream_item(ModelStreamItem::BlockDelta {
+        index: 0,
+        delta: crate::model::BlockDelta::ToolArgs("{}".into()),
+    });
+    roundtrip_stream_item(ModelStreamItem::BlockEnd {
+        index: 0,
+        block: crate::message::ContentBlock::Text("done".into()),
+    });
     roundtrip_stream_item(ModelStreamItem::Completed(ModelResponse::assistant("done")));
     // The scalar-carrying variant an internally tagged enum could not encode.
     roundtrip_stream_item(ModelStreamItem::Failed("boom".to_string()));
