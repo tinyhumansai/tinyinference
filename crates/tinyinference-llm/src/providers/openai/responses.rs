@@ -603,6 +603,23 @@ mod tests {
     }
 
     #[test]
+    fn build_input_skips_custom_messages() {
+        let messages = vec![
+            Message::user("hi"),
+            Message::Custom(crate::message::CustomMessage {
+                kind: "compaction".into(),
+                payload: json!({"summary": "..."}),
+                display: Some("Compacted".into()),
+            }),
+            Message::assistant("hello"),
+        ];
+        let (_, input) = build_responses_input(&messages);
+        assert_eq!(input.len(), 2);
+        assert_eq!(input[0].content[0].text, "hi");
+        assert_eq!(input[1].content[0].text, "hello");
+    }
+
+    #[test]
     fn extract_text_prefers_output_text_then_scans_content() {
         let with_convenience = ResponsesResponse {
             status: None,
