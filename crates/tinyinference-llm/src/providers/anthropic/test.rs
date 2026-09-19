@@ -687,3 +687,168 @@ async fn oversized_sse_content_block_index_is_rejected() {
         Some(ModelStreamItem::ProviderFailed(error)) if error.message.contains("exceeds limit")
     ));
 }
+
+#[tokio::test]
+async fn streaming_emits_block_boundaries_for_interleaved_thinking_text_and_tool_call() {
+    // A recorded-shape SSE fixture with three content blocks in wire order:
+    // thinking (0), text (1), tool_use (2). Asserts `BlockStart`/`BlockDelta`/
+    // `BlockEnd` map 1:1 onto `content_block_start`/`_delta`/`_stop` and that
+    // `ToolCallDelta` fragments carry the wire `content_index`.
+    let events = [
+        json!({"type":"message_start","message":{"id":"msg_b","usage":{"input_tokens":2,"output_tokens":0}}}),
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}),
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"plan it"}}),
+        json!({"type":"content_block_stop","index":0}),
+        json!({"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}),
+        json!({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Sure, "}}),
+        json!({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"let me check."}}),
+        json!({"type":"content_block_stop","index":1}),
+        json!({"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"toolu_1","name":"lookup","input":{}}}),
+        json!({"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"q\":"}}),
+        json!({"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"1}"}}),
+        json!({"type":"content_block_stop","index":2}),
+        json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":9}}),
+        json!({"type":"message_stop"}),
+    ];
+    let items: Vec<ModelStreamItem> = stream::stream_from_bytes(vec![sse(&events)], "m")
+        .collect()
+        .await;
+
+    let starts: Vec<(usize, &BlockKind)> = items
+        .iter()
+        .filter_map(|item| match item {
+            ModelStreamItem::BlockStart { index, kind } => Some((*index, kind)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(starts.len(), 3);
+    assert_eq!(starts[0], (0, &BlockKind::Thinking));
+    assert_eq!(starts[1], (1, &BlockKind::Text));
+    assert_eq!(
+        starts[2],
+        (
+            2,
+            &BlockKind::ToolCall {
+                id: "toolu_1".to_string(),
+                name: "lookup".to_string(),
+            }
+        )
+    );
+
+    let deltas: Vec<(usize, &BlockDelta)> = items
+        .iter()
+        .filter_map(|item| match item {
+            ModelStreamItem::BlockDelta { index, delta } => Some((*index, delta)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        deltas,
+        vec![
+            (0, &BlockDelta::Thinking("plan it".to_string())),
+            (1, &BlockDelta::Text("Sure, ".to_string())),
+            (1, &BlockDelta::Text("let me check.".to_string())),
+            (2, &BlockDelta::ToolArgs("{\"q\":".to_string())),
+            (2, &BlockDelta::ToolArgs("1}".to_string())),
+        ]
+    );
+
+    let ends: Vec<usize> = items
+        .iter()
+        .filter_map(|item| match item {
+            ModelStreamItem::BlockEnd { index, .. } => Some(*index),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ends, vec![0, 1, 2]);
+    let Some(ModelStreamItem::BlockEnd {
+        block: ContentBlock::Thinking { text, .. },
+        ..
+    }) = items
+        .iter()
+        .find(|item| matches!(item, ModelStreamItem::BlockEnd { index: 0, .. }))
+    else {
+        panic!("expected thinking BlockEnd at index 0");
+    };
+    assert_eq!(text, "plan it");
+    let Some(ModelStreamItem::BlockEnd {
+        block: ContentBlock::Text(text),
+        ..
+    }) = items
+        .iter()
+        .find(|item| matches!(item, ModelStreamItem::BlockEnd { index: 1, .. }))
+    else {
+        panic!("expected text BlockEnd at index 1");
+    };
+    assert_eq!(text, "Sure, let me check.");
+    let Some(ModelStreamItem::BlockEnd {
+        block: ContentBlock::Json(value),
+        ..
+    }) = items
+        .iter()
+        .find(|item| matches!(item, ModelStreamItem::BlockEnd { index: 2, .. }))
+    else {
+        panic!("expected tool-call BlockEnd at index 2");
+    };
+    assert_eq!(value["id"], "toolu_1");
+    assert_eq!(value["name"], "lookup");
+    assert_eq!(value["arguments"], json!({"q": 1}));
+
+    // Every ToolCallDelta for the tool-use block carries its wire index.
+    let tool_indices: Vec<Option<usize>> = items
+        .iter()
+        .filter_map(|item| match item {
+            ModelStreamItem::ToolCallDelta(delta) => Some(delta.content_index),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(tool_indices, vec![Some(2), Some(2)]);
+
+    // Compatibility: MessageDelta still carries the flat text/reasoning.
+    let text: String = items
+        .iter()
+        .filter_map(|item| match item {
+            ModelStreamItem::MessageDelta(delta) => Some(delta.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(text, "Sure, let me check.");
+    let reasoning: String = items
+        .iter()
+        .filter_map(|item| match item {
+            ModelStreamItem::MessageDelta(delta) => Some(delta.reasoning.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reasoning, "plan it");
+}
+
+#[tokio::test]
+async fn provider_failed_terminal_carries_partial_message_and_stop_reason() {
+    // A mid-stream `error` event after some content has already arrived must
+    // surface the partial assistant message and last-known stop reason, so a
+    // caller can decide whether to keep or discard the partial turn instead
+    // of losing it outright.
+    let events = [
+        json!({"type":"message_start","message":{"id":"msg_e","usage":{"input_tokens":1,"output_tokens":0}}}),
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial answer"}}),
+        json!({"type":"message_delta","delta":{"stop_reason":"pause_turn"},"usage":{"output_tokens":2}}),
+        json!({"type":"error","error":{"type":"overloaded_error","message":"the server is overloaded"}}),
+    ];
+    let items: Vec<ModelStreamItem> = stream::stream_from_bytes(vec![sse(&events)], "m")
+        .collect()
+        .await;
+    let Some(ModelStreamItem::ProviderFailed(error)) = items.last() else {
+        panic!("expected ProviderFailed, got {:?}", items.last());
+    };
+    assert_eq!(error.stop_reason.as_deref(), Some("pause_turn"));
+    let partial = error
+        .partial_message
+        .as_ref()
+        .expect("partial message must be present");
+    assert_eq!(
+        partial.content,
+        vec![ContentBlock::Text("partial answer".to_string())]
+    );
+}
