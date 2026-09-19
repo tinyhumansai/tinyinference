@@ -1868,19 +1868,30 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
         if self.prompt_guided_for(&request) {
             let tools = request.tools.clone();
             let mut scrubber = crate::prompt_tools::TextScrubber::new(&tools);
-            let stream = ModelStream::new(Box::pin(stream.map(move |item| match item {
-                ModelStreamItem::MessageDelta(mut delta) if !delta.text.is_empty() => {
-                    let (text, _released) = scrubber.feed(&delta.text);
-                    delta.text = text;
-                    ModelStreamItem::MessageDelta(delta)
-                }
-                ModelStreamItem::Completed(response) => {
-                    let _ = scrubber.flush();
-                    ModelStreamItem::Completed(crate::prompt_tools::recover_tool_calls(
-                        response, &tools,
-                    ))
-                }
-                other => other,
+            let stream = ModelStream::new(Box::pin(stream.filter_map(move |item| {
+                let mapped = match item {
+                    ModelStreamItem::MessageDelta(mut delta) if !delta.text.is_empty() => {
+                        let (text, _released) = scrubber.feed(&delta.text);
+                        delta.text = text;
+                        // A delta the scrubber emptied carries nothing worth
+                        // waking a consumer for.
+                        if delta.text.is_empty()
+                            && delta.reasoning.is_empty()
+                            && delta.tool_call.is_none()
+                        {
+                            return futures::future::ready(None);
+                        }
+                        ModelStreamItem::MessageDelta(delta)
+                    }
+                    ModelStreamItem::Completed(response) => {
+                        let _ = scrubber.flush();
+                        ModelStreamItem::Completed(crate::prompt_tools::recover_tool_calls(
+                            response, &tools,
+                        ))
+                    }
+                    other => other,
+                };
+                futures::future::ready(Some(mapped))
             })));
             return Ok(match correlation {
                 Some(correlation) => stream.with_correlation(correlation),

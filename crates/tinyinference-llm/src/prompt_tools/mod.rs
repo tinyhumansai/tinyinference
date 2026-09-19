@@ -257,10 +257,8 @@ pub fn recover_tool_calls(mut response: ModelResponse, tools: &[ToolSchema]) -> 
         .enumerate()
         .map(|(index, call)| to_tool_call(call, index + 1));
     response.message.tool_calls.extend(calls);
-    response.message.content = replace_text_blocks(
-        std::mem::take(&mut response.message.content),
-        outcome.text,
-    );
+    response.message.content =
+        replace_text_blocks(std::mem::take(&mut response.message.content), outcome.text);
     response
 }
 
