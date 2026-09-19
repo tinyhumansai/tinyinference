@@ -12,6 +12,7 @@ pub mod error;
 pub mod failure;
 pub mod message;
 pub mod model;
+pub mod prompt_tools;
 pub mod providers;
 pub mod sentiment;
 pub mod tool;

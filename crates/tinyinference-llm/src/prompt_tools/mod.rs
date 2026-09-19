@@ -24,9 +24,9 @@
 
 use std::sync::Arc;
 
-use tinytools::ToolSpec;
 use tinytools_agent::render;
-use tinytools_agent::types::{CallSource, ParseOptions, ParsedToolCall};
+use tinytools_agent::tinytools::ToolSpec;
+use tinytools_agent::types::{ParseOptions, ParsedToolCall};
 use tinytools_agent::{PFormatRegistry, StreamScrubber, StreamStep};
 
 use crate::message::{ContentBlock, Message};
@@ -343,13 +343,6 @@ impl TextScrubber {
             .collect();
         (step.text, calls)
     }
-}
-
-/// Whether a recovered call came through a text grammar rather than the
-/// provider's structured channel.
-#[must_use]
-pub fn is_text_recovered(source: CallSource) -> bool {
-    source != CallSource::Native
 }
 
 #[cfg(test)]
