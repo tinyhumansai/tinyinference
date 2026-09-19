@@ -163,6 +163,12 @@ pub struct Modalities {
     pub audio_in: bool,
     /// Produces audio output.
     pub audio_out: bool,
+    /// Accepts video input.
+    pub video_in: bool,
+    /// Produces video output.
+    pub video_out: bool,
+    /// Accepts document input (PDF and similar).
+    pub document_in: bool,
 }
 
 impl Default for Modalities {
@@ -174,6 +180,9 @@ impl Default for Modalities {
             image_out: false,
             audio_in: false,
             audio_out: false,
+            video_in: false,
+            video_out: false,
+            document_in: false,
         }
     }
 }
