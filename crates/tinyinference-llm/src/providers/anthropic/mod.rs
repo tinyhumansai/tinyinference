@@ -75,6 +75,12 @@ const PROVIDER: &str = "anthropic";
 /// [`crate::message::MessageOrigin::api`] value stamped on every response
 /// this adapter builds (unary and streamed terminal).
 pub(super) const MESSAGES_API: &str = "messages";
+/// Anthropic's accepted `tool_use.id`/`tool_result.tool_use_id` shape.
+const TOOL_CALL_ID_PATTERN: &str = "^[a-zA-Z0-9_-]{1,64}$";
+/// Anthropic's accepted tool-call id length ceiling (also encoded in
+/// [`TOOL_CALL_ID_PATTERN`], but kept as a plain number for callers that
+/// truncate without parsing the regex).
+const TOOL_CALL_ID_MAX_LEN: usize = 64;
 
 /// A chat model backed by Anthropic's native Messages API.
 pub struct AnthropicModel {
