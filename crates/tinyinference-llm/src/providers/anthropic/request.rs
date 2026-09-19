@@ -262,7 +262,10 @@ fn assistant_blocks(content: &[ContentBlock]) -> Vec<Value> {
                 signature: None, ..
             }
             | ContentBlock::Image(_)
-            | ContentBlock::ProviderExtension(_) => None,
+            | ContentBlock::ProviderExtension(_)
+            | ContentBlock::Audio(_)
+            | ContentBlock::Video(_)
+            | ContentBlock::Document(_) => None,
         })
         .collect()
 }
