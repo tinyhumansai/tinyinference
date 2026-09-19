@@ -334,6 +334,8 @@ pub(super) fn build_responses_input(messages: &[Message]) -> (Option<String>, Ve
                     format!("[tool_result id={} ]\n{body}", m.tool_call_id)
                 }
             }
+            // Host-side out-of-band record; never sent to the provider.
+            Message::Custom(_) => continue,
         };
         if text.trim().is_empty() {
             continue;
