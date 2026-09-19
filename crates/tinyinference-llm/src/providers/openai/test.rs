@@ -1894,7 +1894,7 @@ fn prompt_guided_streaming_emits_the_scrubbers_flushed_suffix_before_completed()
     let tools = vec![ToolSchema::new("x", "x", json!({"type": "object"}))];
     let mut scrubber = crate::prompt_tools::TextScrubber::new(&tools);
 
-    let delta_items = scrub_prompt_guided_item(
+    let delta_items = transport::scrub_prompt_guided_item(
         ModelStreamItem::MessageDelta(crate::message::MessageDelta::text("before <tool_")),
         &mut scrubber,
         &tools,
@@ -1907,7 +1907,7 @@ fn prompt_guided_streaming_emits_the_scrubbers_flushed_suffix_before_completed()
 
     let response = crate::model::ModelResponse::assistant("before <tool_");
     let completed_items =
-        scrub_prompt_guided_item(ModelStreamItem::Completed(response), &mut scrubber, &tools);
+        transport::scrub_prompt_guided_item(ModelStreamItem::Completed(response), &mut scrubber, &tools);
     assert_eq!(completed_items.len(), 2);
     match &completed_items[0] {
         ModelStreamItem::MessageDelta(delta) => assert_eq!(delta.text, "<tool_"),
@@ -1923,7 +1923,7 @@ fn prompt_guided_streaming_completed_without_buffered_text_emits_one_item() {
     let tools = vec![ToolSchema::new("x", "x", json!({"type": "object"}))];
     let mut scrubber = crate::prompt_tools::TextScrubber::new(&tools);
 
-    let delta_items = scrub_prompt_guided_item(
+    let delta_items = transport::scrub_prompt_guided_item(
         ModelStreamItem::MessageDelta(crate::message::MessageDelta::text("plain text")),
         &mut scrubber,
         &tools,
@@ -1932,7 +1932,7 @@ fn prompt_guided_streaming_completed_without_buffered_text_emits_one_item() {
 
     let response = crate::model::ModelResponse::assistant("plain text");
     let completed_items =
-        scrub_prompt_guided_item(ModelStreamItem::Completed(response), &mut scrubber, &tools);
+        transport::scrub_prompt_guided_item(ModelStreamItem::Completed(response), &mut scrubber, &tools);
     assert_eq!(completed_items.len(), 1);
     assert!(matches!(completed_items[0], ModelStreamItem::Completed(_)));
 }
