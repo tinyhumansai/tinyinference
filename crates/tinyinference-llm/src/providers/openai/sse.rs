@@ -465,7 +465,12 @@ pub(super) async fn sse_next(mut state: SseState) -> Option<(ModelStreamItem, Ss
             // Reconstruction is infallible: malformed tool arguments become an
             // `ToolCall::invalid` call inside the response (not a stream
             // failure), so the agent loop recovers instead of aborting the run.
-            let response = std::mem::take(&mut state.acc).into_response();
+            let mut response = std::mem::take(&mut state.acc).into_response();
+            response.message.origin = Some(crate::message::MessageOrigin {
+                provider: state.provider.clone(),
+                api: super::CHAT_COMPLETIONS_API.to_string(),
+                model: state.model.clone(),
+            });
             return Some((ModelStreamItem::Completed(response), state));
         }
         match state.bytes.next().await {
