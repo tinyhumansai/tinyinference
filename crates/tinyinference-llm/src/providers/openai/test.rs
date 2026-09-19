@@ -244,6 +244,7 @@ fn translates_structured_tool_result_content() {
 fn translates_structured_system_content_and_rejects_images() {
     let request = ModelRequest::new(vec![Message::System(crate::message::SystemMessage {
         content: vec![ContentBlock::Json(json!({"policy": "strict"}))],
+        ..Default::default()
     })]);
     let value = serde_json::to_value(model().translate_request(&request).unwrap()).unwrap();
     assert_eq!(
