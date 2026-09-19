@@ -125,6 +125,10 @@ pub struct OpenAiModel {
     /// default: hosted OpenAI rejects unknown part fields, and its own cache is
     /// automatic. See [`Self::with_explicit_cache_control`].
     pub(super) explicit_cache_control: bool,
+    /// Host-supplied request hooks and HTTP client override. See
+    /// [`crate::providers::ProviderRequestOptions`]. Currently applied to the
+    /// Chat Completions transport path only ([`Self::post_json`]).
+    request_options: crate::providers::ProviderRequestOptions,
 }
 
 impl std::fmt::Debug for OpenAiModel {
