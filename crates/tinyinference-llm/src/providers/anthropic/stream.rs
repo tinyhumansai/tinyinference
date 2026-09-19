@@ -421,7 +421,12 @@ async fn sse_next(mut state: SseState) -> Option<(ModelStreamItem, SseState)> {
                 return None;
             }
             state.terminal_emitted = true;
-            let response = std::mem::take(&mut state.acc).into_response();
+            let mut response = std::mem::take(&mut state.acc).into_response();
+            response.message.origin = Some(crate::message::MessageOrigin {
+                provider: PROVIDER.to_string(),
+                api: super::MESSAGES_API.to_string(),
+                model: state.model.clone(),
+            });
             return Some((ModelStreamItem::Completed(response), state));
         }
         match state.bytes.next().await {
