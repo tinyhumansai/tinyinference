@@ -1525,6 +1525,8 @@ impl OpenAiModel {
             retryable,
             raw,
             retry_after_ms: None,
+            partial_message: None,
+            stop_reason: None,
         }
     }
 

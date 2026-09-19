@@ -312,6 +312,8 @@ impl AnthropicModel {
             retryable,
             retry_after_ms: tinyinference_core::parse_retry_after_ms(retry_after),
             raw,
+            partial_message: None,
+            stop_reason: None,
         }
     }
 

@@ -457,11 +457,13 @@ fn finish_names_reconstructed_tool_call_from_the_call_opening_delta_name() {
         call_id: "call-1".into(),
         content: String::new(),
         tool_name: Some("search".into()),
+        ..Default::default()
     }));
     acc.push(&ModelStreamItem::ToolCallDelta(ToolDelta {
         call_id: "call-1".into(),
         content: r#"{"q":"rust"}"#.into(),
         tool_name: None,
+        ..Default::default()
     }));
 
     let finished = acc.finish().unwrap();
@@ -479,6 +481,7 @@ fn finish_marks_malformed_reconstructed_tool_arguments_invalid() {
         call_id: "call-1".into(),
         content: "{broken".into(),
         tool_name: Some("search".into()),
+        ..Default::default()
     }));
     let response = accumulator.finish().unwrap();
     let call = &response.message.tool_calls[0];
@@ -506,8 +509,28 @@ fn model_stream_item_roundtrips_every_variant() {
         call_id: "call-1".into(),
         content: "{\"q\":1}".into(),
         tool_name: None,
+        ..Default::default()
     }));
     roundtrip_stream_item(ModelStreamItem::UsageDelta(Usage::new(3, 5)));
+    roundtrip_stream_item(ModelStreamItem::BlockStart {
+        index: 0,
+        kind: crate::model::BlockKind::Text,
+    });
+    roundtrip_stream_item(ModelStreamItem::BlockStart {
+        index: 1,
+        kind: crate::model::BlockKind::ToolCall {
+            id: "call-1".into(),
+            name: "search".into(),
+        },
+    });
+    roundtrip_stream_item(ModelStreamItem::BlockDelta {
+        index: 0,
+        delta: crate::model::BlockDelta::ToolArgs("{}".into()),
+    });
+    roundtrip_stream_item(ModelStreamItem::BlockEnd {
+        index: 0,
+        block: crate::message::ContentBlock::Text("done".into()),
+    });
     roundtrip_stream_item(ModelStreamItem::Completed(ModelResponse::assistant("done")));
     // The scalar-carrying variant an internally tagged enum could not encode.
     roundtrip_stream_item(ModelStreamItem::Failed("boom".to_string()));
@@ -516,6 +539,39 @@ fn model_stream_item_roundtrips_every_variant() {
         message: "nope".into(),
         ..ProviderError::default()
     }));
+    roundtrip_stream_item(ModelStreamItem::ProviderFailed(ProviderError {
+        provider: "anthropic".into(),
+        message: "overloaded".into(),
+        stop_reason: Some("pause_turn".into()),
+        partial_message: Some(crate::message::AssistantMessage {
+            id: Some("msg_1".into()),
+            content: vec![crate::message::ContentBlock::Text("partial".into())],
+            tool_calls: Vec::new(),
+            usage: None,
+        }),
+        ..ProviderError::default()
+    }));
+}
+
+#[test]
+fn block_delta_to_message_delta_maps_each_channel() {
+    use crate::model::{BlockDelta, block_delta_to_message_delta};
+
+    let text = block_delta_to_message_delta(&BlockDelta::Text("hi".into()), "", None);
+    assert_eq!(text.text, "hi");
+    assert!(text.reasoning.is_empty());
+    assert!(text.tool_call.is_none());
+
+    let thinking = block_delta_to_message_delta(&BlockDelta::Thinking("plan".into()), "", None);
+    assert_eq!(thinking.reasoning, "plan");
+    assert!(thinking.text.is_empty());
+
+    let args =
+        block_delta_to_message_delta(&BlockDelta::ToolArgs("{}".into()), "call-1", Some("s"));
+    let tool_call = args.tool_call.expect("tool_call fragment");
+    assert_eq!(tool_call.call_id, "call-1");
+    assert_eq!(tool_call.content, "{}");
+    assert_eq!(tool_call.tool_name.as_deref(), Some("s"));
 }
 
 #[test]

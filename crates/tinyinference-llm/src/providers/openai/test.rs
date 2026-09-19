@@ -8,10 +8,10 @@
 use serde_json::json;
 
 use super::*;
-use crate::message::Message;
+use crate::message::{ContentBlock, Message};
 use crate::model::{
-    ChatModel, ModelRequest, ModelStreamItem, ProviderError, ResponseFormat, StreamAccumulator,
-    ToolChoice,
+    BlockDelta, BlockKind, ChatModel, ModelRequest, ModelStreamItem, ProviderError, ResponseFormat,
+    StreamAccumulator, ToolChoice,
 };
 use crate::providers::{ProviderKind, ProviderSpec};
 use crate::tool::ToolSchema;
@@ -671,6 +671,8 @@ fn provider_failed_stream_item_finishes_as_provider_error() {
         retryable: true,
         retry_after_ms: None,
         raw: None,
+        partial_message: None,
+        stop_reason: None,
     }));
 
     match accumulator.finish().unwrap_err() {
@@ -2495,4 +2497,293 @@ fn a_null_tool_calls_delta_is_read_as_no_fragments() {
     .expect("a null tool_calls must not fail the chunk");
     assert!(chunk.choices[0].delta.tool_calls.is_empty());
     assert_eq!(chunk.choices[0].delta.content.as_deref(), Some("Hi"));
+}
+
+/// Unwraps a [`ModelStreamItem::BlockStart`], panicking with the actual item
+/// on a mismatch (used by the block-derivation tests below).
+fn expect_block_start(item: &ModelStreamItem) -> (usize, &BlockKind) {
+    match item {
+        ModelStreamItem::BlockStart { index, kind } => (*index, kind),
+        other => panic!("expected BlockStart, got {other:?}"),
+    }
+}
+
+/// Unwraps a [`ModelStreamItem::BlockDelta`], panicking with the actual item
+/// on a mismatch.
+fn expect_block_delta(item: &ModelStreamItem) -> (usize, &BlockDelta) {
+    match item {
+        ModelStreamItem::BlockDelta { index, delta } => (*index, delta),
+        other => panic!("expected BlockDelta, got {other:?}"),
+    }
+}
+
+/// Unwraps a [`ModelStreamItem::BlockEnd`], panicking with the actual item on
+/// a mismatch.
+fn expect_block_end(item: &ModelStreamItem) -> (usize, &ContentBlock) {
+    match item {
+        ModelStreamItem::BlockEnd { index, block } => (*index, block),
+        other => panic!("expected BlockEnd, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn sse_stream_derives_block_boundaries_for_reasoning_text_and_tool_calls() {
+    // Interleaved reasoning → text → two tool calls (the second split so a
+    // block continues across chunks, matching how OpenAI streams parallel
+    // calls), then `finish_reason`. Exercises the OpenAI chat-completions
+    // block derivation: `BlockStart`/`BlockDelta`/`BlockEnd` should appear in
+    // first-open order, sharing one dense index space across text, reasoning,
+    // and every tool call — mirroring the Anthropic adapter's
+    // `content_block_start`/`_delta`/`_stop` triplets.
+    let raw: Vec<Vec<u8>> = vec![
+        format!(
+            "data: {}\n\n",
+            json!({ "choices": [{ "delta": { "reasoning_content": "Let me think. " } }] })
+        )
+        .into_bytes(),
+        format!(
+            "data: {}\n\n",
+            json!({ "choices": [{ "delta": { "content": "The answer is 42." } }] })
+        )
+        .into_bytes(),
+        format!(
+            "data: {}\n\n",
+            json!({
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "id": "call-1",
+                            "function": { "name": "get_weather", "arguments": "{\"city\":" }
+                        }]
+                    }
+                }]
+            })
+        )
+        .into_bytes(),
+        format!(
+            "data: {}\n\n",
+            json!({
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "function": { "arguments": "\"NYC\"}" }
+                        }]
+                    }
+                }]
+            })
+        )
+        .into_bytes(),
+        format!(
+            "data: {}\n\n",
+            json!({
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 1,
+                            "id": "call-2",
+                            "function": { "name": "get_time", "arguments": "{\"tz\":\"UTC\"}" }
+                        }]
+                    },
+                    "finish_reason": "tool_calls"
+                }]
+            })
+        )
+        .into_bytes(),
+        b"data: [DONE]\n\n".to_vec(),
+    ];
+
+    let items = collect_sse(raw).await;
+
+    let blocks: Vec<&ModelStreamItem> = items
+        .iter()
+        .filter(|item| {
+            matches!(
+                item,
+                ModelStreamItem::BlockStart { .. }
+                    | ModelStreamItem::BlockDelta { .. }
+                    | ModelStreamItem::BlockEnd { .. }
+            )
+        })
+        .collect();
+    assert_eq!(blocks.len(), 13, "unexpected block sequence: {blocks:#?}");
+
+    // Reasoning block (index 0): opens first, one delta, closes when the text
+    // block takes over.
+    let (index, kind) = expect_block_start(blocks[0]);
+    assert_eq!(index, 0);
+    assert_eq!(*kind, BlockKind::Thinking);
+    let (index, delta) = expect_block_delta(blocks[1]);
+    assert_eq!(index, 0);
+    assert_eq!(*delta, BlockDelta::Thinking("Let me think. ".to_string()));
+    let (index, block) = expect_block_end(blocks[2]);
+    assert_eq!(index, 0);
+    assert_eq!(
+        *block,
+        ContentBlock::Thinking {
+            text: "Let me think. ".to_string(),
+            signature: None,
+        }
+    );
+
+    // Text block (index 1): opens, one delta, closes when the first tool
+    // call's id/name arrives.
+    let (index, kind) = expect_block_start(blocks[3]);
+    assert_eq!(index, 1);
+    assert_eq!(*kind, BlockKind::Text);
+    let (index, delta) = expect_block_delta(blocks[4]);
+    assert_eq!(index, 1);
+    assert_eq!(*delta, BlockDelta::Text("The answer is 42.".to_string()));
+    let (index, block) = expect_block_end(blocks[5]);
+    assert_eq!(index, 1);
+    assert_eq!(*block, ContentBlock::Text("The answer is 42.".to_string()));
+
+    // First tool call (index 2): opens on the fragment carrying its id/name,
+    // gets two argument deltas split across chunks, closes when the second
+    // tool call's id/name arrives.
+    let (index, kind) = expect_block_start(blocks[6]);
+    assert_eq!(index, 2);
+    assert_eq!(
+        *kind,
+        BlockKind::ToolCall {
+            id: "call-1".to_string(),
+            name: "get_weather".to_string(),
+        }
+    );
+    let (index, delta) = expect_block_delta(blocks[7]);
+    assert_eq!(index, 2);
+    assert_eq!(*delta, BlockDelta::ToolArgs("{\"city\":".to_string()));
+    let (index, delta) = expect_block_delta(blocks[8]);
+    assert_eq!(index, 2);
+    assert_eq!(*delta, BlockDelta::ToolArgs("\"NYC\"}".to_string()));
+    let (index, block) = expect_block_end(blocks[9]);
+    assert_eq!(index, 2);
+    assert_eq!(
+        *block,
+        ContentBlock::Json(json!({
+            "id": "call-1",
+            "name": "get_weather",
+            "arguments": { "city": "NYC" },
+        }))
+    );
+
+    // Second tool call (index 3): opens, one argument delta, closes on
+    // `finish_reason`.
+    let (index, kind) = expect_block_start(blocks[10]);
+    assert_eq!(index, 3);
+    assert_eq!(
+        *kind,
+        BlockKind::ToolCall {
+            id: "call-2".to_string(),
+            name: "get_time".to_string(),
+        }
+    );
+    let (index, delta) = expect_block_delta(blocks[11]);
+    assert_eq!(index, 3);
+    assert_eq!(*delta, BlockDelta::ToolArgs("{\"tz\":\"UTC\"}".to_string()));
+    let (index, block) = expect_block_end(blocks[12]);
+    assert_eq!(index, 3);
+    assert_eq!(
+        *block,
+        ContentBlock::Json(json!({
+            "id": "call-2",
+            "name": "get_time",
+            "arguments": { "tz": "UTC" },
+        }))
+    );
+
+    // Reducing just the block items — the `BlockEnd` payloads, in index
+    // order — reproduces the terminal `AssistantMessage`: the content blocks
+    // in order, and the tool calls with their reassembled arguments.
+    let mut reduced_content = Vec::new();
+    let mut reduced_calls: Vec<(String, String, Value)> = Vec::new();
+    for item in &blocks {
+        if let ModelStreamItem::BlockEnd { block, .. } = item {
+            match block {
+                ContentBlock::Json(value) => {
+                    reduced_calls.push((
+                        value["id"].as_str().unwrap().to_string(),
+                        value["name"].as_str().unwrap().to_string(),
+                        value["arguments"].clone(),
+                    ));
+                }
+                other => reduced_content.push(other.clone()),
+            }
+        }
+    }
+
+    let response = items
+        .iter()
+        .find_map(|item| match item {
+            ModelStreamItem::Completed(response) => Some(response.clone()),
+            _ => None,
+        })
+        .expect("stream must complete");
+
+    assert_eq!(response.message.content, reduced_content);
+    assert_eq!(response.message.tool_calls.len(), reduced_calls.len());
+    for (call, (id, name, arguments)) in response.message.tool_calls.iter().zip(&reduced_calls) {
+        assert_eq!(&call.id, id);
+        assert_eq!(&call.name, name);
+        assert_eq!(&call.arguments, arguments);
+    }
+}
+
+#[tokio::test]
+async fn sse_stream_mid_stream_error_preserves_partial_message() {
+    // Text and a tool call arrive, then the provider streams a mid-stream
+    // `{"error": ...}` payload instead of a completion.
+    // `ProviderError::partial_message` must carry whatever had already
+    // accumulated (mirrors the Anthropic adapter's contract) instead of
+    // discarding it.
+    let raw: Vec<Vec<u8>> = vec![
+        b"data: {\"choices\":[{\"delta\":{\"content\":\"partial answer\"}}]}\n\n".to_vec(),
+        format!(
+            "data: {}\n\n",
+            json!({
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "id": "call-1",
+                            "function": { "name": "lookup", "arguments": "{\"q\":1}" }
+                        }]
+                    }
+                }]
+            })
+        )
+        .into_bytes(),
+        b"data: {\"error\":{\"message\":\"upstream exploded\"}}\n\n".to_vec(),
+        b"data: [DONE]\n\n".to_vec(),
+    ];
+
+    let items = collect_sse(raw).await;
+    let failed = items
+        .iter()
+        .find_map(|item| match item {
+            ModelStreamItem::ProviderFailed(error) => Some(error),
+            _ => None,
+        })
+        .expect("mid-stream error should emit ProviderFailed");
+    assert!(failed.message.contains("upstream exploded"));
+
+    let partial = failed
+        .partial_message
+        .as_ref()
+        .expect("partial content accumulated before the failure must not be discarded");
+    assert_eq!(
+        partial.content,
+        vec![ContentBlock::Text("partial answer".to_string())]
+    );
+    assert_eq!(partial.tool_calls.len(), 1);
+    assert_eq!(partial.tool_calls[0].id, "call-1");
+    assert_eq!(partial.tool_calls[0].name, "lookup");
+    assert_eq!(partial.tool_calls[0].arguments, json!({ "q": 1 }));
+
+    // No terminal Completed follows the failure.
+    assert!(matches!(
+        items.last(),
+        Some(ModelStreamItem::ProviderFailed(_))
+    ));
 }

@@ -53,8 +53,8 @@ use serde_json::{Map, Value, json};
 
 use crate::message::{AssistantMessage, ContentBlock, Message, MessageDelta};
 use crate::model::{
-    ChatModel, Modalities, ModelProfile, ModelRequest, ModelResponse, ModelStatus, ModelStream,
-    ModelStreamItem, ProviderError, ResponseFormat, ToolChoice,
+    BlockDelta, BlockKind, ChatModel, Modalities, ModelProfile, ModelRequest, ModelResponse,
+    ModelStatus, ModelStream, ModelStreamItem, ProviderError, ResponseFormat, ToolChoice,
 };
 use crate::tool::{ToolCall, ToolDelta};
 use crate::usage::Usage;
