@@ -885,6 +885,59 @@ pub enum ModelStreamItem {
     Failed(String),
     /// Terminal failure with normalized provider details.
     ProviderFailed(ProviderError),
+    /// Terminal deferral: the provider accepted the request but will finish
+    /// it asynchronously (for example an OpenAI batch or background
+    /// response). The caller polls or otherwise resolves the response later
+    /// via [`ChatModel::fetch_deferred`].
+    Deferred(DeferredHandle),
+}
+
+/// An opaque, provider-issued handle to a model call whose response is not
+/// yet available (for example a queued batch job or a background response).
+///
+/// The handle is deliberately provider-neutral and serializable so a host can
+/// persist it and resume polling after a process restart. `id` is the only
+/// field callers must treat as meaningful to the provider; `kind` and
+/// `metadata` are informational.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeferredHandle {
+    /// Provider family identifier (for example `openai`).
+    pub provider: String,
+    /// Provider-issued identifier for the deferred call (batch id, response
+    /// id, or similar).
+    pub id: String,
+    /// Provider-specific deferral kind (for example `"batch"` or
+    /// `"background"`), when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Additional provider-specific metadata needed to resolve the handle.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub metadata: serde_json::Map<String, Value>,
+}
+
+impl DeferredHandle {
+    /// Creates a handle for `provider`/`id` with no kind or metadata.
+    #[must_use]
+    pub fn new(provider: impl Into<String>, id: impl Into<String>) -> Self {
+        Self {
+            provider: provider.into(),
+            id: id.into(),
+            kind: None,
+            metadata: serde_json::Map::new(),
+        }
+    }
+}
+
+/// The current status of a previously deferred model call.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "status")]
+pub enum DeferredStatus {
+    /// Still queued or in progress; not yet ready.
+    Pending,
+    /// Finished successfully.
+    Completed(ModelResponse),
+    /// Finished with a failure.
+    Failed(String),
 }
 
 /// A cancellation guard owned by a model stream.
