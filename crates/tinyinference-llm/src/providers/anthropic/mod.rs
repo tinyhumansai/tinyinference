@@ -137,6 +137,10 @@ impl AnthropicModel {
                 streaming: true,
                 streaming_tool_chunks: true,
                 reasoning: true,
+                // Anthropic rejects a `tool_use`/`tool_result` id outside
+                // this shape with a 400.
+                tool_call_id_pattern: Some(TOOL_CALL_ID_PATTERN.to_string()),
+                max_tool_call_id_len: Some(TOOL_CALL_ID_MAX_LEN),
                 ..ModelProfile::default()
             },
             model,
