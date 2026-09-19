@@ -746,9 +746,10 @@ async fn streamed_terminal_response_carries_origin() {
         json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}),
         json!({"type":"message_stop"}),
     ];
-    let items: Vec<ModelStreamItem> = stream::stream_from_bytes(vec![sse(&events)], "claude-opus-4-6")
-        .collect()
-        .await;
+    let items: Vec<ModelStreamItem> =
+        stream::stream_from_bytes(vec![sse(&events)], "claude-opus-4-6")
+            .collect()
+            .await;
     let completed = items
         .into_iter()
         .find_map(|item| match item {

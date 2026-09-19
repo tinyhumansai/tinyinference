@@ -2576,7 +2576,8 @@ fn stamp_origin_prefers_a_per_request_model_override() {
 #[tokio::test]
 async fn streamed_terminal_response_carries_origin() {
     let raw: Vec<Vec<u8>> = vec![
-        b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\n".to_vec(),
+        b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\n"
+            .to_vec(),
         b"data: [DONE]\n\n".to_vec(),
     ];
     let items = collect_sse(raw).await;
@@ -2587,7 +2588,10 @@ async fn streamed_terminal_response_carries_origin() {
             _ => None,
         })
         .expect("a terminal Completed item");
-    let origin = completed.message.origin.expect("origin stamped on stream terminal");
+    let origin = completed
+        .message
+        .origin
+        .expect("origin stamped on stream terminal");
     assert_eq!(origin.provider, "openai");
     assert_eq!(origin.api, "chat_completions");
     assert_eq!(origin.model, "gpt-4.1-mini");
