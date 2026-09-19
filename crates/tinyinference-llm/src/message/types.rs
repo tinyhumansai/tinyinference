@@ -9,10 +9,12 @@
 //! Ergonomic constructors ([`Message::system`], [`Message::user`], …) and a
 //! [`Message::text`] accessor keep the public surface easy to use.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::tool::ToolCall;
+use crate::tool::{ToolCall, ToolSchema};
 use crate::usage::Usage;
 
 /// A typed unit of message content.
