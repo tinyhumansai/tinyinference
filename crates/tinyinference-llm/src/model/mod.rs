@@ -84,6 +84,37 @@ fn matches_context_pattern(lower: &str, pattern: &str, mode: ContextPatternMatch
     }
 }
 
+/// Derives the compatibility [`MessageDelta`] for a block-aware
+/// [`ModelStreamItem::BlockDelta`] fragment.
+///
+/// Block-aware adapters (Anthropic and, incrementally, the OpenAI adapters)
+/// emit both channels for the same fragment: the block-indexed item for
+/// consumers that track block boundaries, and the flat delta this helper
+/// builds for consumers (including [`StreamAccumulator`]) that only
+/// understand the pre-existing shape. `call_id` and `tool_name` are only
+/// meaningful for [`BlockDelta::ToolArgs`] and are ignored otherwise.
+#[must_use]
+pub fn block_delta_to_message_delta(
+    delta: &BlockDelta,
+    call_id: &str,
+    tool_name: Option<&str>,
+) -> crate::message::MessageDelta {
+    match delta {
+        BlockDelta::Text(text) => crate::message::MessageDelta::text(text.clone()),
+        BlockDelta::Thinking(text) => crate::message::MessageDelta::reasoning(text.clone()),
+        BlockDelta::ToolArgs(content) => crate::message::MessageDelta {
+            text: String::new(),
+            reasoning: String::new(),
+            tool_call: Some(crate::tool::ToolDelta {
+                call_id: call_id.to_string(),
+                content: content.clone(),
+                tool_name: tool_name.map(str::to_string),
+                content_index: None,
+            }),
+        },
+    }
+}
+
 /// Returns a generic context-window hint for a raw provider model id.
 ///
 /// Returns `None` for unknown ids rather than guessing. Hosts with product tier
