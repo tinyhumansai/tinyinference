@@ -246,19 +246,25 @@ fn system_message_text_constructor_is_a_no_op_patch() {
 #[test]
 fn replay_system_state_folds_sections_and_tool_deltas_in_order() {
     // Turn 1: baseline persona plus two tools.
-    let mut base = SystemMessage::text("You are Aria.");
-    base.tools_added = vec![tool("search"), tool("read_file")];
+    let base = SystemMessage {
+        tools_added: vec![tool("search"), tool("read_file")],
+        ..SystemMessage::text("You are Aria.")
+    };
     let turn1 = vec![Message::System(base), Message::user("hi")];
 
     // Turn 2: a patch adds a "browse" tool, drops "read_file", and adds a
     // named instructions section.
-    let mut patch = SystemMessage::default();
-    patch.tools_added = vec![tool("browse")];
-    patch.tools_removed = vec!["read_file".to_string()];
-    patch.sections.insert(
+    let mut sections = std::collections::BTreeMap::new();
+    sections.insert(
         "tool_changes".to_string(),
         Some("browse is now available.".to_string()),
     );
+    let patch = SystemMessage {
+        tools_added: vec![tool("browse")],
+        tools_removed: vec!["read_file".to_string()],
+        sections,
+        ..SystemMessage::default()
+    };
     let mut messages = turn1;
     messages.push(Message::assistant("ok"));
     messages.push(Message::System(patch));
