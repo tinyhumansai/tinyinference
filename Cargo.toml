@@ -59,7 +59,7 @@ url = "2"
 # Isolated filesystem fixtures for local-runtime state tests.
 tempfile = "3"
 uuid = { version = "1", features = ["v4"] }
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
 
 # Lints apply to every member that opts in with `[lints] workspace = true`, and
 # to every target of that member. CI runs clippy with `-D warnings`, so anything
