@@ -121,6 +121,7 @@ impl Message {
             content: vec![ContentBlock::Text(content.into())],
             tool_calls: Vec::new(),
             usage: None,
+            origin: None,
         })
     }
 
