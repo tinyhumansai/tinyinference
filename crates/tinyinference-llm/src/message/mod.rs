@@ -135,12 +135,16 @@ impl Message {
     }
 
     /// Returns the concatenated text of all text content blocks.
+    ///
+    /// [`Message::Custom`] carries no [`ContentBlock`]s; this returns its
+    /// `display` rendering (or an empty string when none was set).
     pub fn text(&self) -> String {
         match self {
             Message::System(m) => concat_text(&m.content),
             Message::User(m) => concat_text(&m.content),
             Message::Assistant(m) => concat_text(&m.content),
             Message::Tool(m) => concat_text(&m.content),
+            Message::Custom(m) => m.display.clone().unwrap_or_default(),
         }
     }
 
