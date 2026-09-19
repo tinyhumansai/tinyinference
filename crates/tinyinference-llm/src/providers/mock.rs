@@ -239,6 +239,7 @@ impl<State: Send + Sync> ChatModel<State> for MockModel {
                     content: Vec::new(),
                     tool_calls: vec![tool_call],
                     usage: Some(usage),
+                    origin: None,
                 };
                 ModelResponse {
                     message,
@@ -354,6 +355,7 @@ impl MockModel {
                 content: vec![ContentBlock::Text(s)],
                 tool_calls: Vec::new(),
                 usage: Some(Usage::new(10, output_tokens)),
+                origin: None,
             },
             usage: Some(Usage::new(10, output_tokens)),
             finish_reason: Some("stop".to_string()),

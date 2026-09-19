@@ -96,6 +96,7 @@ fn assistant_holds_tool_calls_and_usage() {
         content: vec![ContentBlock::Text("calling".into())],
         tool_calls: vec![ToolCall::new("c-1", "lookup", json!({}))],
         usage: Some(Usage::new(5, 5)),
+        origin: None,
     });
     if let Message::Assistant(a) = &msg {
         assert_eq!(a.tool_calls.len(), 1);
@@ -137,6 +138,7 @@ fn text_ignores_thinking_blocks() {
         ],
         tool_calls: Vec::new(),
         usage: None,
+        origin: None,
     });
     // Reasoning blocks must never leak into visible text.
     assert_eq!(msg.text(), "the answer is 42");

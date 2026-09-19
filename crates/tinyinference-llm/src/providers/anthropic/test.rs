@@ -290,6 +290,7 @@ fn signed_thinking_is_replayed_and_unsigned_thinking_is_dropped() {
         ],
         tool_calls: vec![],
         usage: None,
+        origin: None,
     });
     let body = request_body(&ModelRequest::new(vec![Message::user("q"), assistant]), "m");
     let content = body["messages"][1]["content"].as_array().unwrap();

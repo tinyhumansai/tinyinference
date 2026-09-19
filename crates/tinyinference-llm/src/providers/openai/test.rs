@@ -215,6 +215,7 @@ fn translates_assistant_tool_calls_to_stringified_arguments() {
                 invalid: None,
             }],
             usage: None,
+            origin: None,
         }),
         Message::tool("call-1", "sunny, 21C"),
     ]);

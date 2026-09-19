@@ -365,6 +365,9 @@ pub(super) fn parse_chat_response(
         content,
         tool_calls,
         usage,
+        // Stamped by the transport call site, which knows the configured
+        // provider/model; this parser is provider-agnostic wire decoding.
+        origin: None,
     };
 
     Ok(ModelResponse {
