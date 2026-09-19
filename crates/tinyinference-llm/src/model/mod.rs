@@ -661,6 +661,8 @@ pub struct StreamAccumulator {
     /// [`crate::Error::Provider`] and preserve the
     /// status/code/`retryable` classification the retry layer needs.
     failed_provider: Option<ProviderError>,
+    /// Terminal deferral, when a [`ModelStreamItem::Deferred`] item was seen.
+    deferred: Option<DeferredHandle>,
 }
 
 impl StreamAccumulator {
