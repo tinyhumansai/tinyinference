@@ -944,7 +944,7 @@ pub enum DeferredStatus {
     /// Still queued or in progress; not yet ready.
     Pending,
     /// Finished successfully.
-    Completed(ModelResponse),
+    Completed(Box<ModelResponse>),
     /// Finished with a failure.
     Failed(String),
 }
