@@ -26,7 +26,7 @@ use futures::{Stream, StreamExt};
 use serde_json::Value;
 
 use crate::message::{AssistantMessage, ContentBlock, MessageDelta};
-use crate::model::{ModelResponse, ModelStream, ModelStreamItem, ProviderError};
+use crate::model::{BlockDelta, BlockKind, ModelResponse, ModelStream, ModelStreamItem, ProviderError};
 use crate::tool::{ToolCall, ToolDelta};
 use crate::usage::Usage;
 use crate::{Error, Result};
