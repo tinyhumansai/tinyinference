@@ -539,6 +539,39 @@ fn model_stream_item_roundtrips_every_variant() {
         message: "nope".into(),
         ..ProviderError::default()
     }));
+    roundtrip_stream_item(ModelStreamItem::ProviderFailed(ProviderError {
+        provider: "anthropic".into(),
+        message: "overloaded".into(),
+        stop_reason: Some("pause_turn".into()),
+        partial_message: Some(crate::message::AssistantMessage {
+            id: Some("msg_1".into()),
+            content: vec![crate::message::ContentBlock::Text("partial".into())],
+            tool_calls: Vec::new(),
+            usage: None,
+        }),
+        ..ProviderError::default()
+    }));
+}
+
+#[test]
+fn block_delta_to_message_delta_maps_each_channel() {
+    use crate::model::{BlockDelta, block_delta_to_message_delta};
+
+    let text = block_delta_to_message_delta(&BlockDelta::Text("hi".into()), "", None);
+    assert_eq!(text.text, "hi");
+    assert!(text.reasoning.is_empty());
+    assert!(text.tool_call.is_none());
+
+    let thinking = block_delta_to_message_delta(&BlockDelta::Thinking("plan".into()), "", None);
+    assert_eq!(thinking.reasoning, "plan");
+    assert!(thinking.text.is_empty());
+
+    let args =
+        block_delta_to_message_delta(&BlockDelta::ToolArgs("{}".into()), "call-1", Some("s"));
+    let tool_call = args.tool_call.expect("tool_call fragment");
+    assert_eq!(tool_call.call_id, "call-1");
+    assert_eq!(tool_call.content, "{}");
+    assert_eq!(tool_call.tool_name.as_deref(), Some("s"));
 }
 
 #[test]
