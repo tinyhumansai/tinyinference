@@ -34,9 +34,7 @@ pub(crate) fn request_body(request: &ModelRequest, default_model: &str) -> Value
 
     let mut system = Vec::new();
     let mut messages: Vec<Value> = Vec::new();
-    // `Message::Custom` is a host-side out-of-band record (e.g. a compaction
-    // marker) and is never sent to the provider.
-    for message in request.messages.iter().filter(|m| !matches!(m, Message::Custom(_))) {
+    for message in &request.messages {
         match message {
             Message::System(system_message) => {
                 system.extend(text_only_blocks(&system_message.content));
