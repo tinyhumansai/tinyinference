@@ -1906,8 +1906,11 @@ fn prompt_guided_streaming_emits_the_scrubbers_flushed_suffix_before_completed()
     }
 
     let response = crate::model::ModelResponse::assistant("before <tool_");
-    let completed_items =
-        transport::scrub_prompt_guided_item(ModelStreamItem::Completed(response), &mut scrubber, &tools);
+    let completed_items = transport::scrub_prompt_guided_item(
+        ModelStreamItem::Completed(response),
+        &mut scrubber,
+        &tools,
+    );
     assert_eq!(completed_items.len(), 2);
     match &completed_items[0] {
         ModelStreamItem::MessageDelta(delta) => assert_eq!(delta.text, "<tool_"),
@@ -1931,8 +1934,11 @@ fn prompt_guided_streaming_completed_without_buffered_text_emits_one_item() {
     assert_eq!(delta_items.len(), 1);
 
     let response = crate::model::ModelResponse::assistant("plain text");
-    let completed_items =
-        transport::scrub_prompt_guided_item(ModelStreamItem::Completed(response), &mut scrubber, &tools);
+    let completed_items = transport::scrub_prompt_guided_item(
+        ModelStreamItem::Completed(response),
+        &mut scrubber,
+        &tools,
+    );
     assert_eq!(completed_items.len(), 1);
     assert!(matches!(completed_items[0], ModelStreamItem::Completed(_)));
 }
