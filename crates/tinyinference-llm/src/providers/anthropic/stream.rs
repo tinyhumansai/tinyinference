@@ -444,6 +444,11 @@ impl SseState {
         };
         provider_error.provider = PROVIDER.to_string();
         provider_error.model = Some(self.model.clone());
+        provider_error.stop_reason = self.acc.stop_reason.clone();
+        let partial = std::mem::take(&mut self.acc).into_response().message;
+        if !partial.content.is_empty() || !partial.tool_calls.is_empty() {
+            provider_error.partial_message = Some(partial);
+        }
         ModelStreamItem::ProviderFailed(provider_error)
     }
 
