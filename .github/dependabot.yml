@@ -4,6 +4,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-patch"]
     open-pull-requests-limit: 5
     commit-message:
       prefix: "deps"
@@ -18,6 +21,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-patch"]
     open-pull-requests-limit: 5
     commit-message:
       prefix: "ci"
