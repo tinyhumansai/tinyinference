@@ -659,6 +659,26 @@ impl SseState {
             ..ProviderError::default()
         }
     }
+
+    /// Builds the terminal failure item, discarding any block/message deltas
+    /// still queued: a failure must be the last item a consumer sees, not
+    /// followed by fragments parsed before it surfaced (mirrors the
+    /// Anthropic adapter's `provider_failure`). Populates
+    /// `partial_message`/`stop_reason` from whatever had accumulated so a
+    /// mid-stream failure does not discard already-streamed content.
+    fn provider_failure(&mut self, mut error: ProviderError) -> ModelStreamItem {
+        self.pending.clear();
+        self.finished = true;
+        self.terminal_emitted = true;
+        error.provider = self.provider.clone();
+        error.model = Some(self.model.clone());
+        error.stop_reason = self.acc.finish_reason.clone();
+        let partial = std::mem::take(&mut self.acc).into_response().message;
+        if !partial.content.is_empty() || !partial.tool_calls.is_empty() {
+            error.partial_message = Some(partial);
+        }
+        ModelStreamItem::ProviderFailed(error)
+    }
 }
 
 /// Advances the SSE [`SseState`] by one item for [`futures::stream::unfold`].
