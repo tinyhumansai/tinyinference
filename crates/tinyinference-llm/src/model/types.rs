@@ -279,7 +279,7 @@ pub struct ModelProfile {
 /// A named, serializable JSON-schema transform applied before a schema is
 /// sent to a provider.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", tag = "kind")]
+#[serde(rename_all = "snake_case", tag = "kind", content = "value")]
 pub enum SchemaTransform {
     /// Removes the top-level `$defs`/`definitions` map from the schema.
     StripDefs,
