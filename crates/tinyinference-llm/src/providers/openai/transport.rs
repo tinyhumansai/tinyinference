@@ -1864,12 +1864,16 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
         // deltas as they arrive, and recover the calls from the terminal
         // `Completed` response into `message.tool_calls`. Calls are dispatched
         // from the terminal response only, so a consumer sees each exactly
-        // once; the scrubber's own releases are dropped.
+        // once; the scrubber's own releases are dropped. Any narrative text
+        // the scrubber was withholding pending disambiguation (an in-progress
+        // marker prefix that never completed) is flushed as one final delta
+        // ahead of `Completed`, so a streaming consumer sees the same visible
+        // suffix the terminal response carries.
         if self.prompt_guided_for(&request) {
             let tools = request.tools.clone();
             let mut scrubber = crate::prompt_tools::TextScrubber::new(&tools);
-            let stream = ModelStream::new(Box::pin(stream.filter_map(move |item| {
-                let mapped = match item {
+            let stream = ModelStream::new(Box::pin(stream.flat_map(move |item| {
+                let mapped: Vec<ModelStreamItem> = match item {
                     ModelStreamItem::MessageDelta(mut delta) if !delta.text.is_empty() => {
                         let (text, _released) = scrubber.feed(&delta.text);
                         delta.text = text;
@@ -1879,19 +1883,27 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
                             && delta.reasoning.is_empty()
                             && delta.tool_call.is_none()
                         {
-                            return futures::future::ready(None);
+                            Vec::new()
+                        } else {
+                            vec![ModelStreamItem::MessageDelta(delta)]
                         }
-                        ModelStreamItem::MessageDelta(delta)
                     }
                     ModelStreamItem::Completed(response) => {
-                        let _ = scrubber.flush();
-                        ModelStreamItem::Completed(crate::prompt_tools::recover_tool_calls(
-                            response, &tools,
-                        ))
+                        let (flushed_text, _released) = scrubber.flush();
+                        let mut items = Vec::with_capacity(2);
+                        if !flushed_text.is_empty() {
+                            items.push(ModelStreamItem::MessageDelta(MessageDelta::text(
+                                flushed_text,
+                            )));
+                        }
+                        items.push(ModelStreamItem::Completed(
+                            crate::prompt_tools::recover_tool_calls(response, &tools),
+                        ));
+                        items
                     }
-                    other => other,
+                    other => vec![other],
                 };
-                futures::future::ready(Some(mapped))
+                futures::stream::iter(mapped)
             })));
             return Ok(match correlation {
                 Some(correlation) => stream.with_correlation(correlation),
