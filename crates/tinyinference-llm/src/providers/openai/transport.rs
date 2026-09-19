@@ -1458,7 +1458,10 @@ impl OpenAiModel {
     ) -> Result<reqwest::Response> {
         crate::network_guard::ensure_network_models_allowed()?;
         let url = format!("{}/chat/completions", self.base_url);
-        let mut builder = self.authorized(self.client.post(&url)).json(body);
+        let mut payload = serde_json::to_value(body)?;
+        self.request_options.apply_payload(&mut payload);
+        let client = self.request_options.http.as_ref().unwrap_or(&self.client);
+        let mut builder = self.authorized(client.post(&url)).json(&payload);
         if let Some(timeout) = request_timeout(timeout_ms, streaming) {
             builder = builder.timeout(timeout);
         }
