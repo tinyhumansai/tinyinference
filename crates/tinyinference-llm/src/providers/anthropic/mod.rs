@@ -224,6 +224,18 @@ impl AnthropicModel {
         request.model.as_deref().unwrap_or(&self.model)
     }
 
+    /// Builds the [`crate::message::MessageOrigin`] to stamp on a response to
+    /// this request: this adapter's fixed provider/API plus the model that
+    /// actually served the call (a request-level override, when set, else
+    /// the instance default).
+    pub(super) fn origin_for(&self, request: &ModelRequest) -> crate::message::MessageOrigin {
+        crate::message::MessageOrigin {
+            provider: PROVIDER.to_string(),
+            api: MESSAGES_API.to_string(),
+            model: self.request_model(request).to_string(),
+        }
+    }
+
     fn request_body(&self, request: &ModelRequest) -> Value {
         let mut body = request_body(request, &self.model);
         match effective_temperature(
