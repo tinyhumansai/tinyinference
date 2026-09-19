@@ -269,8 +269,9 @@ impl AnthropicModel {
         if streaming {
             body["stream"] = Value::Bool(true);
         }
-        let request_builder = self
-            .client
+        self.request_options.apply_payload(&mut body);
+        let client = self.request_options.http.as_ref().unwrap_or(&self.client);
+        let request_builder = client
             .post(endpoint)
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", ANTHROPIC_VERSION)
