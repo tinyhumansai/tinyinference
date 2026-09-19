@@ -240,6 +240,25 @@ pub struct ModelProfile {
     /// Maximum output tokens, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u64>,
+    /// Regex a tool-call id must match to be accepted by this provider, when
+    /// the provider constrains the shape (for example Anthropic's
+    /// `^[a-zA-Z0-9_-]{1,64}$`). `None` means the provider imposes no shape
+    /// constraint beyond an opaque string.
+    ///
+    /// Consulted by a cross-provider handoff transform
+    /// (`tinyagents_harness::agent_loop::handoff_transform`) to decide
+    /// whether a tool-call id minted by a different provider needs
+    /// normalizing before replay; not enforced by this crate's own request
+    /// building.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id_pattern: Option<String>,
+    /// Maximum accepted tool-call id length, when the provider constrains it.
+    /// Often redundant with a bound already encoded in
+    /// [`tool_call_id_pattern`](Self::tool_call_id_pattern) (as it is for
+    /// Anthropic's `{1,64}`), but kept separate so a normalizer can truncate
+    /// without needing to parse the regex.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tool_call_id_len: Option<usize>,
 }
 
 /// A set of required capabilities used to validate a request against a
