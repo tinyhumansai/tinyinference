@@ -53,6 +53,7 @@ enum OpenBlock {
         signature: Option<String>,
     },
     Redacted(String),
+    ProviderExtension(Value),
 }
 
 /// Provider-side accumulator rebuilding the terminal [`ModelResponse`].
@@ -137,7 +138,7 @@ impl AnthropicStreamAcc {
                     Some("redacted_thinking") => {
                         OpenBlock::Redacted(block["data"].as_str().unwrap_or_default().to_string())
                     }
-                    _ => {
+                    Some("text") => {
                         let text = block["text"].as_str().unwrap_or_default().to_string();
                         if !text.is_empty() {
                             pending.push_back(ModelStreamItem::MessageDelta(MessageDelta::text(
@@ -146,6 +147,7 @@ impl AnthropicStreamAcc {
                         }
                         OpenBlock::Text(text)
                     }
+                    _ => OpenBlock::ProviderExtension(block.clone()),
                 };
                 *self.slot(index) = Some(open);
             }
@@ -245,6 +247,9 @@ impl AnthropicStreamAcc {
                     content.push(ContentBlock::Thinking { text, signature });
                 }
                 OpenBlock::Redacted(data) => content.push(ContentBlock::RedactedThinking { data }),
+                OpenBlock::ProviderExtension(value) => {
+                    content.push(ContentBlock::ProviderExtension(value));
+                }
                 OpenBlock::ToolUse {
                     id,
                     name,
@@ -277,6 +282,7 @@ impl AnthropicStreamAcc {
             "stop_reason": self.stop_reason,
             "content": content.iter().filter_map(|block| match block {
                 ContentBlock::Text(text) => Some(serde_json::json!({"type": "text", "text": text})),
+                ContentBlock::ProviderExtension(value) => Some(value.clone()),
                 _ => None,
             }).chain(tool_calls.iter().map(|call| serde_json::json!({
                 "type": "tool_use", "id": call.id, "name": call.name, "input": call.arguments,

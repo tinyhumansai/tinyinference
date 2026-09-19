@@ -152,6 +152,7 @@ pub(crate) fn request_body(request: &ModelRequest, default_model: &str) -> Value
                     ReasoningEffort::Low => "low",
                     ReasoningEffort::Medium => "medium",
                     ReasoningEffort::High => "high",
+                    ReasoningEffort::XHigh => "max",
                     ReasoningEffort::None => unreachable!(),
                 },
             });
@@ -212,9 +213,8 @@ fn text_only_blocks(content: &[ContentBlock]) -> Vec<Value> {
         .collect()
 }
 
-/// User-side content: text and images. Thinking blocks never appear in user
-/// content; provider extensions have no faithful representation and are
-/// dropped.
+/// User-side content: text, images, and opaque native blocks. Thinking blocks
+/// never appear in user content.
 fn content_blocks(content: &[ContentBlock]) -> Vec<Value> {
     content
         .iter()
@@ -222,9 +222,8 @@ fn content_blocks(content: &[ContentBlock]) -> Vec<Value> {
             ContentBlock::Text(text) => text_block(text),
             ContentBlock::Json(value) => text_block(&value.to_string()),
             ContentBlock::Image(image) => Some(image_block(image)),
-            ContentBlock::Thinking { .. }
-            | ContentBlock::RedactedThinking { .. }
-            | ContentBlock::ProviderExtension(_) => None,
+            ContentBlock::ProviderExtension(value) => provider_extension_block(value),
+            ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => None,
         })
         .collect()
 }
@@ -250,13 +249,23 @@ fn assistant_blocks(content: &[ContentBlock]) -> Vec<Value> {
             ContentBlock::RedactedThinking { data } => {
                 Some(json!({ "type": "redacted_thinking", "data": data }))
             }
+            ContentBlock::ProviderExtension(value) => provider_extension_block(value),
             ContentBlock::Thinking {
                 signature: None, ..
             }
-            | ContentBlock::Image(_)
-            | ContentBlock::ProviderExtension(_) => None,
+            | ContentBlock::Image(_) => None,
         })
         .collect()
+}
+
+/// Returns an opaque Anthropic content block when it has the object shape the
+/// Messages API requires. Keeping the full object intact lets hosts persist and
+/// replay newer block types without waiting for a TinyInference release.
+fn provider_extension_block(value: &Value) -> Option<Value> {
+    value
+        .as_object()
+        .filter(|object| object.get("type").is_some_and(Value::is_string))
+        .map(|_| value.clone())
 }
 
 /// Renders an image reference: a `data:` URI becomes an inline base64 source,

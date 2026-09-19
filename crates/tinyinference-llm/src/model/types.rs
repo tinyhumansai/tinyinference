@@ -84,6 +84,9 @@ pub enum ReasoningEffort {
     Medium,
     /// Above-default effort.
     High,
+    /// Maximum provider-supported effort.
+    #[serde(rename = "xhigh")]
+    XHigh,
     /// Explicitly disable reasoning.
     None,
 }
@@ -96,6 +99,7 @@ impl ReasoningEffort {
             Self::Low => "low",
             Self::Medium => "medium",
             Self::High => "high",
+            Self::XHigh => "xhigh",
             Self::None => "none",
         }
     }

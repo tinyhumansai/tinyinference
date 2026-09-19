@@ -19,6 +19,8 @@ pub struct AnthropicConfig<'a> {
     pub temperature_override: Option<f64>,
     /// Model-id glob patterns whose targets reject temperature.
     pub temperature_unsupported_models: &'a [String],
+    /// Static headers attached to every request.
+    pub extra_headers: &'a [(String, String)],
 }
 
 impl std::fmt::Debug for AnthropicConfig<'_> {
@@ -34,6 +36,14 @@ impl std::fmt::Debug for AnthropicConfig<'_> {
                 "temperature_unsupported_models",
                 &self.temperature_unsupported_models,
             )
+            .field(
+                "extra_header_names",
+                &self
+                    .extra_headers
+                    .iter()
+                    .map(|(name, _)| name)
+                    .collect::<Vec<_>>(),
+            )
             .finish()
     }
 }
@@ -48,12 +58,12 @@ pub fn endpoint_is_anthropic_messages(endpoint: &str) -> bool {
 
 /// Builds an Anthropic Messages model from fully resolved configuration.
 pub fn build_anthropic_model(config: AnthropicConfig<'_>) -> Arc<dyn ChatModel<()>> {
-    Arc::new(
-        AnthropicModel::with_base_url(config.api_key, config.endpoint)
-            .with_model(config.model)
-            .with_temperature_override(config.temperature_override)
-            .with_temperature_unsupported_models(
-                config.temperature_unsupported_models.iter().cloned(),
-            ),
-    )
+    let mut model = AnthropicModel::with_base_url(config.api_key, config.endpoint)
+        .with_model(config.model)
+        .with_temperature_override(config.temperature_override)
+        .with_temperature_unsupported_models(config.temperature_unsupported_models.iter().cloned());
+    for (name, value) in config.extra_headers {
+        model = model.with_header(name.clone(), value.clone());
+    }
+    Arc::new(model)
 }
