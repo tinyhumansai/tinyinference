@@ -341,7 +341,12 @@ fn document_blocks_render_as_document_source_or_placeholder() {
     // A local path has no wire representation; it becomes a placeholder text
     // block rather than being silently dropped.
     assert_eq!(content[2]["type"], "text");
-    assert!(content[2]["text"].as_str().unwrap().contains("/tmp/local.pdf"));
+    assert!(
+        content[2]["text"]
+            .as_str()
+            .unwrap()
+            .contains("/tmp/local.pdf")
+    );
 }
 
 #[test]
