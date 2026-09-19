@@ -124,6 +124,20 @@ pub(super) struct OpenAiStreamAcc {
     /// opened slot, so id-less argument continuations for that index keep
     /// following the call most recently opened there.
     index_slots: std::collections::HashMap<u32, usize>,
+    /// Block-channel content, one entry per opened block (text, reasoning, or
+    /// a tool call), in first-open order. `content_index` on the flat
+    /// [`ToolDelta`]/compatibility channel is this vector's index, so it
+    /// matches [`ModelStreamItem::BlockStart`]/`BlockDelta`/`BlockEnd`.
+    blocks: Vec<BlockBuf>,
+    /// The currently open block (its index into `blocks` and its kind), or
+    /// `None` between blocks and before the first one opens. OpenAI chat
+    /// completions gives no explicit "block closed" signal the way Anthropic's
+    /// `content_block_stop` does, so a block is considered closed exactly when
+    /// a fragment for a *different* block arrives, or when `finish_reason`/the
+    /// stream ends — never reopened once closed (a later fragment for the same
+    /// conceptual channel opens a fresh block instead, matching how densely
+    /// each block gets its own [`ModelStreamItem::BlockStart`]).
+    current_block: Option<(usize, OpenKind)>,
 }
 
 impl OpenAiStreamAcc {
