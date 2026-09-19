@@ -1087,6 +1087,9 @@ impl OpenAiModel {
         };
         let mut messages = source_messages
             .iter()
+            // `Message::Custom` is a host-side out-of-band record; never sent
+            // to the provider.
+            .filter(|message| !matches!(message, Message::Custom(_)))
             .map(translate_message)
             .collect::<Result<Vec<_>>>()?;
         if self.explicit_cache_control && request.wants_prompt_cache_breakpoints() {
