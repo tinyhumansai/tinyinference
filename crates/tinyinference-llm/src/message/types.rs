@@ -184,21 +184,25 @@ pub fn replay_system_state(messages: &[Message]) -> (String, Vec<ToolSchema>) {
         }
     }
 
-    let sections = section_order
-        .into_iter()
-        .map(|name| {
-            let text = section_text.remove(&name).unwrap_or_default();
-            (name, text)
-        })
-        .collect();
-    let tools = tool_order
+    let tools: Vec<ToolSchema> = tool_order
         .into_iter()
         .filter_map(|name| tool_by_name.remove(&name))
         .collect();
 
-    let state = SystemState { sections, tools };
-    let prompt = state.prompt_text(&leading_content);
-    (prompt, state.tools)
+    let mut parts = Vec::new();
+    if !leading_content.is_empty() {
+        parts.push(leading_content);
+    }
+    for name in section_order {
+        if let Some(text) = section_text.remove(&name)
+            && !text.is_empty()
+        {
+            parts.push(format!("{name}\n\n{text}"));
+        }
+    }
+    let prompt = parts.join("\n\n");
+
+    (prompt, tools)
 }
 
 /// A user/human input message.
