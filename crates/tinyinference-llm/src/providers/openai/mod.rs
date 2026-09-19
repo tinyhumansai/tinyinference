@@ -78,7 +78,6 @@ pub mod codex;
 mod config;
 mod convert;
 mod local;
-mod prompt_tools;
 mod reasoning_tags;
 mod responses;
 mod sse;
