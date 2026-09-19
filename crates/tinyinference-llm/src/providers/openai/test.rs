@@ -1462,6 +1462,54 @@ fn user_image_blocks_render_as_content_parts() {
 }
 
 #[test]
+fn user_audio_blocks_render_as_input_audio_parts() {
+    use crate::message::{ContentBlock, MediaRef, UserMessage};
+
+    let request = ModelRequest::new(vec![Message::User(UserMessage {
+        content: vec![
+            ContentBlock::Text("transcribe this".to_string()),
+            ContentBlock::Audio(MediaRef::base64("AAAA", "audio/wav")),
+        ],
+    })]);
+
+    let value = serde_json::to_value(model().translate_request(&request).unwrap()).unwrap();
+    let content = &value["messages"][0]["content"];
+    assert!(content.is_array(), "expected content parts, got {content}");
+    assert_eq!(content[1]["type"], json!("input_audio"));
+    assert_eq!(content[1]["input_audio"]["data"], json!("AAAA"));
+    assert_eq!(content[1]["input_audio"]["format"], json!("wav"));
+}
+
+#[test]
+fn user_audio_block_by_url_fails_closed() {
+    use crate::message::{ContentBlock, MediaRef, UserMessage};
+
+    let request = ModelRequest::new(vec![Message::User(UserMessage {
+        content: vec![ContentBlock::Audio(MediaRef::url(
+            "https://example.test/a.wav",
+        ))],
+    })]);
+
+    let error = model().translate_request(&request).unwrap_err();
+    assert!(matches!(error, Error::Validation(_)));
+}
+
+#[test]
+fn user_document_block_fails_closed() {
+    use crate::message::{ContentBlock, MediaRef, UserMessage};
+
+    let request = ModelRequest::new(vec![Message::User(UserMessage {
+        content: vec![ContentBlock::Document(MediaRef::base64(
+            "QQ==",
+            "application/pdf",
+        ))],
+    })]);
+
+    let error = model().translate_request(&request).unwrap_err();
+    assert!(matches!(error, Error::Validation(_)));
+}
+
+#[test]
 fn text_only_user_message_stays_a_plain_string() {
     // The common text-only case keeps its historical plain-string wire shape.
     let request = ModelRequest::new(vec![Message::user("hi")]);
