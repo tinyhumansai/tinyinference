@@ -90,6 +90,35 @@ pub struct AssistantMessage {
     /// Token usage reported for this message, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<Usage>,
+    /// The provider/api/model that produced this message, when known.
+    ///
+    /// Stamped by the provider adapter that built the response (unary or the
+    /// terminal item of a stream). Absent for messages authored by the host
+    /// (for example a synthesized system/user turn) or replayed from a
+    /// journal written before this field existed — both are `None` rather
+    /// than a guessed value. A cross-provider harness compares this against
+    /// the target model's origin before replaying the message on a different
+    /// provider; see `tinyagents_harness::agent_loop::handoff_transform`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<MessageOrigin>,
+}
+
+/// The provider/api/model that produced an [`AssistantMessage`].
+///
+/// Used to detect a mid-session provider or model switch so a cross-provider
+/// handoff transform can drop or rewrite content the new target cannot
+/// replay (signed thinking, provider-specific tool-call id shapes, and so
+/// on). Equality is structural: two origins are the same only when all three
+/// fields match exactly.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageOrigin {
+    /// Provider family identifier (for example `openai`, `anthropic`).
+    pub provider: String,
+    /// API surface used for the call (for example `chat_completions`,
+    /// `responses`, `messages`).
+    pub api: String,
+    /// Provider model id that produced the message.
+    pub model: String,
 }
 
 /// A tool result message correlated to a prior tool call.
