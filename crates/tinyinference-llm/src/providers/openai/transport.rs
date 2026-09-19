@@ -1843,6 +1843,7 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
             })?;
             let value: Value = serde_json::from_str(&text)?;
             let mut parsed = parse_chat_response(value, self.effective_reasoning_tags())?;
+            self.stamp_origin(&mut parsed, CHAT_COMPLETIONS_API);
             if !self.profile.tool_calling
                 && !request.tools.is_empty()
                 && request.tool_choice != ToolChoice::None
