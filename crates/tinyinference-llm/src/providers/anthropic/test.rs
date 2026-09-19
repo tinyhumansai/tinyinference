@@ -728,7 +728,7 @@ fn origin_for_prefers_a_per_request_model_override() {
 #[test]
 fn default_profile_advertises_the_tool_call_id_shape() {
     let model = AnthropicModel::new("key");
-    let profile = model.profile().expect("anthropic always has a profile");
+    let profile = &model.profile;
     assert_eq!(
         profile.tool_call_id_pattern.as_deref(),
         Some("^[a-zA-Z0-9_-]{1,64}$")
