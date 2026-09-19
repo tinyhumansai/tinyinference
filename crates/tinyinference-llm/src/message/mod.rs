@@ -102,9 +102,7 @@ fn concat_text(content: &[ContentBlock]) -> String {
 impl Message {
     /// Creates a system message from text.
     pub fn system(content: impl Into<String>) -> Self {
-        Message::System(SystemMessage {
-            content: vec![ContentBlock::Text(content.into())],
-        })
+        Message::System(SystemMessage::text(content))
     }
 
     /// Creates a user message from text.

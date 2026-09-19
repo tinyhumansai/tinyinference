@@ -9,10 +9,12 @@
 //! Ergonomic constructors ([`Message::system`], [`Message::user`], …) and a
 //! [`Message::text`] accessor keep the public surface easy to use.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::tool::ToolCall;
+use crate::tool::{ToolCall, ToolSchema};
 use crate::usage::Usage;
 
 /// A typed unit of message content.
@@ -63,10 +65,144 @@ pub struct ImageRef {
 }
 
 /// A system/developer instruction message.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+///
+/// A transcript may carry more than one `SystemMessage`: the leading one
+/// establishes the run's baseline instructions, and any later one is a
+/// **patch** that layers additively onto everything before it (see
+/// [`replay_system_state`]). This is what lets a mid-run change — a toolset
+/// gaining or losing a tool, an instructions section being added or revised —
+/// be expressed as a small delta appended to (or inserted into) the
+/// transcript instead of rewriting the leading system message and busting a
+/// provider's cached prefix.
+///
+/// The additional fields are all `#[serde(default)]` so a transcript
+/// persisted before this type gained them deserializes unchanged (every
+/// existing `SystemMessage` reads back with empty `sections`,
+/// `tools_added`, and `tools_removed` — i.e. a no-op patch).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SystemMessage {
     /// Ordered content blocks.
+    #[serde(default)]
     pub content: Vec<ContentBlock>,
+    /// Named content sections this message contributes.
+    ///
+    /// Keyed by a stable section name (for example `"tool_changes"` or
+    /// `"persona"`). `Some(text)` sets or replaces the section's content;
+    /// `None` removes a section a prior message in the transcript
+    /// established. [`BTreeMap`] keeps replay deterministic regardless of
+    /// insertion order.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sections: BTreeMap<String, Option<String>>,
+    /// Tool schemas this message adds to the effective tool set.
+    ///
+    /// A name already present is replaced (the newer declaration wins), so a
+    /// patch can both add a brand-new tool and republish a changed schema for
+    /// an existing one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools_added: Vec<ToolSchema>,
+    /// Names of tools this message removes from the effective tool set.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools_removed: Vec<String>,
+}
+
+impl SystemMessage {
+    /// Creates a plain-text system message with no sections or tool deltas.
+    pub fn text(content: impl Into<String>) -> Self {
+        Self {
+            content: vec![ContentBlock::Text(content.into())],
+            sections: BTreeMap::new(),
+            tools_added: Vec::new(),
+            tools_removed: Vec::new(),
+        }
+    }
+
+    /// Returns `true` when this message carries no content, sections, or tool
+    /// deltas — i.e. replaying it would be a pure no-op.
+    pub fn is_empty_patch(&self) -> bool {
+        self.content.is_empty()
+            && self.sections.is_empty()
+            && self.tools_added.is_empty()
+            && self.tools_removed.is_empty()
+    }
+}
+
+/// Walks `messages` and folds every [`SystemMessage`] in order into one
+/// effective [`SystemState`]: the reconstructed named sections and tool set a
+/// live run would have after processing the same sequence of patches.
+///
+/// This is the read-side counterpart to a `declare_tool_changes`-style
+/// writer (see `tinyagents-harness::agent_loop`): given only the transcript,
+/// it answers "what system prompt and tool set was actually in effect" —
+/// which is what makes the transcript itself the durable record of tool
+/// loadout changes, rather than requiring an out-of-band log.
+///
+/// Non-system messages are ignored. The leading free-form `content` text of
+/// every `SystemMessage` (patches included) is concatenated in order,
+/// separated by blank lines, ahead of the rendered named sections — a patch
+/// that only adds `content` (no `sections`) still contributes its text.
+pub fn replay_system_state(messages: &[Message]) -> (String, Vec<ToolSchema>) {
+    let mut leading_content = String::new();
+    let mut section_order: Vec<String> = Vec::new();
+    let mut section_text: BTreeMap<String, String> = BTreeMap::new();
+    let mut tool_order: Vec<String> = Vec::new();
+    let mut tool_by_name: BTreeMap<String, ToolSchema> = BTreeMap::new();
+
+    for message in messages {
+        let Message::System(system) = message else {
+            continue;
+        };
+        let text = super::concat_text(&system.content);
+        if !text.is_empty() {
+            if !leading_content.is_empty() {
+                leading_content.push_str("\n\n");
+            }
+            leading_content.push_str(&text);
+        }
+        for (name, value) in &system.sections {
+            match value {
+                Some(text) => {
+                    if !section_text.contains_key(name) {
+                        section_order.push(name.clone());
+                    }
+                    section_text.insert(name.clone(), text.clone());
+                }
+                None => {
+                    section_text.remove(name);
+                    section_order.retain(|existing| existing != name);
+                }
+            }
+        }
+        for tool in &system.tools_added {
+            if !tool_by_name.contains_key(&tool.name) {
+                tool_order.push(tool.name.clone());
+            }
+            tool_by_name.insert(tool.name.clone(), tool.clone());
+        }
+        for name in &system.tools_removed {
+            tool_by_name.remove(name);
+            tool_order.retain(|existing| existing != name);
+        }
+    }
+
+    let tools: Vec<ToolSchema> = tool_order
+        .into_iter()
+        .filter_map(|name| tool_by_name.remove(&name))
+        .collect();
+
+    let mut parts = Vec::new();
+    if !leading_content.is_empty() {
+        parts.push(leading_content);
+    }
+    for name in section_order {
+        if let Some(text) = section_text.remove(&name)
+            && !text.is_empty()
+        {
+            parts.push(format!("{name}\n\n{text}"));
+        }
+    }
+    let prompt = parts.join("\n\n");
+
+    (prompt, tools)
 }
 
 /// A user/human input message.
