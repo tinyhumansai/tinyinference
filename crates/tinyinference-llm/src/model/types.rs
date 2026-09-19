@@ -598,6 +598,50 @@ pub struct ProviderError {
     /// Raw provider payload, when available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw: Option<Value>,
+    /// The assistant message accumulated from stream items before the
+    /// failure, when any content had arrived. Lets a caller keep (or discard)
+    /// partial work instead of losing every block a mid-stream failure
+    /// interrupted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partial_message: Option<AssistantMessage>,
+    /// The stop/finish reason reported before the failure, when the provider
+    /// sent one (for example Anthropic's `message_delta.stop_reason`) prior
+    /// to the error that ended the stream.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
+}
+
+/// The syntactic category of a streamed content block, established when the
+/// block opens ([`ModelStreamItem::BlockStart`]).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum BlockKind {
+    /// Visible assistant text.
+    Text,
+    /// Model reasoning/thinking content.
+    Thinking,
+    /// A tool call. The id and name are known as soon as the block opens
+    /// (Anthropic's `content_block_start`; OpenAI's first `tool_calls[]`
+    /// fragment for a wire index), before any argument fragments arrive.
+    ToolCall {
+        /// Provider-assigned call identifier.
+        id: String,
+        /// Tool name.
+        name: String,
+    },
+}
+
+/// An incremental fragment belonging to the open block named in the
+/// accompanying [`ModelStreamItem::BlockDelta::index`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "type", content = "content")]
+pub enum BlockDelta {
+    /// Visible text fragment.
+    Text(String),
+    /// Thinking/reasoning fragment.
+    Thinking(String),
+    /// Incremental tool-call argument JSON fragment.
+    ToolArgs(String),
 }
 
 /// A single item produced by a real, asynchronous model stream.
