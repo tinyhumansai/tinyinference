@@ -1888,6 +1888,53 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
     }
 }
 
+/// Applies prompt-guided scrubbing/recovery to one streamed item, returning
+/// zero or more items to forward.
+///
+/// * A `MessageDelta` is fed through the scrubber; a delta the scrubber
+///   emptied entirely (and that carries no reasoning or tool-call fragment
+///   either) is dropped rather than waking a consumer for nothing.
+/// * The terminal `Completed` response runs tool-call recovery. Any
+///   narrative text the scrubber was withholding pending disambiguation — an
+///   in-progress marker prefix that never resolved — is flushed and emitted
+///   as one final `MessageDelta` immediately before `Completed`, so a
+///   streaming consumer sees the same visible suffix the terminal response
+///   carries. The scrubber's own recovered calls are discarded here: calls
+///   are dispatched from the terminal response only, so a consumer sees each
+///   exactly once.
+/// * Every other item passes through unchanged.
+pub(super) fn scrub_prompt_guided_item(
+    item: ModelStreamItem,
+    scrubber: &mut crate::prompt_tools::TextScrubber,
+    tools: &[ToolSchema],
+) -> Vec<ModelStreamItem> {
+    match item {
+        ModelStreamItem::MessageDelta(mut delta) if !delta.text.is_empty() => {
+            let (text, _released) = scrubber.feed(&delta.text);
+            delta.text = text;
+            if delta.text.is_empty() && delta.reasoning.is_empty() && delta.tool_call.is_none() {
+                Vec::new()
+            } else {
+                vec![ModelStreamItem::MessageDelta(delta)]
+            }
+        }
+        ModelStreamItem::Completed(response) => {
+            let (flushed_text, _released) = scrubber.flush();
+            let mut items = Vec::with_capacity(2);
+            if !flushed_text.is_empty() {
+                items.push(ModelStreamItem::MessageDelta(MessageDelta::text(
+                    flushed_text,
+                )));
+            }
+            items.push(ModelStreamItem::Completed(
+                crate::prompt_tools::recover_tool_calls(response, tools),
+            ));
+            items
+        }
+        other => vec![other],
+    }
+}
+
 fn responses_sse_failure(body: &str, model: &OpenAiModel) -> Option<ProviderError> {
     for line in body.lines() {
         let Some(payload) = line.strip_prefix("data:").map(str::trim) else {
