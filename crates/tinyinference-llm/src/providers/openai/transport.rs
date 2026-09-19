@@ -1011,11 +1011,11 @@ impl OpenAiModel {
     /// OpenAI-compatible runtimes (Ollama, LM Studio, …) share this transport
     /// and are stamped with their own `provider` (e.g. `"ollama"`), not
     /// `"openai"`.
-    pub(super) fn stamp_origin(&self, response: &mut ModelResponse, api: &str) {
+    pub(super) fn stamp_origin(&self, response: &mut ModelResponse, request: &ModelRequest, api: &str) {
         response.message.origin = Some(crate::message::MessageOrigin {
             provider: self.provider.clone(),
             api: api.to_string(),
-            model: self.model.clone(),
+            model: request.model.clone().unwrap_or_else(|| self.model.clone()),
         });
     }
 
