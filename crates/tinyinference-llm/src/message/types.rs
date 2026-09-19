@@ -126,41 +126,6 @@ impl SystemMessage {
     }
 }
 
-/// The effective system prompt text and tool set reconstructed by folding
-/// every [`SystemMessage`] in a transcript, in order.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct SystemState {
-    /// Named sections, keyed by section name, in first-insertion order.
-    ///
-    /// A later patch that sets `Some(text)` for an existing key replaces its
-    /// text in place (keeping its original position); a later patch that
-    /// sets `None` removes the key entirely.
-    pub sections: Vec<(String, String)>,
-    /// The effective tool set, keyed by tool name, in first-insertion order.
-    /// A later `tools_added` entry for an existing name replaces its schema
-    /// in place; a later `tools_removed` entry drops it.
-    pub tools: Vec<ToolSchema>,
-}
-
-impl SystemState {
-    /// Renders the effective system prompt text: the leading messages'
-    /// concatenated free-form `content` text, followed by every surviving
-    /// named section (in first-insertion order), each rendered as
-    /// `"{name}\n\n{text}"` and joined with a blank line.
-    pub fn prompt_text(&self, leading_content: &str) -> String {
-        let mut parts = Vec::new();
-        if !leading_content.is_empty() {
-            parts.push(leading_content.to_string());
-        }
-        for (name, text) in &self.sections {
-            if !text.is_empty() {
-                parts.push(format!("{name}\n\n{text}"));
-            }
-        }
-        parts.join("\n\n")
-    }
-}
-
 /// Walks `messages` and folds every [`SystemMessage`] in order into one
 /// effective [`SystemState`]: the reconstructed named sections and tool set a
 /// live run would have after processing the same sequence of patches.
