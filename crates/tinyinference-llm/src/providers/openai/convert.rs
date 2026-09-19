@@ -67,6 +67,14 @@ pub(super) fn translate_message(message: &Message) -> Result<ChatMessageWire> {
             tool_calls: Vec::new(),
             tool_call_id: Some(tool.tool_call_id.clone()),
         },
+        // Callers filter `Message::Custom` out of the messages slice before
+        // calling this function; it is a host-side out-of-band record that is
+        // never sent to a provider.
+        Message::Custom(_) => {
+            return Err(Error::Validation(
+                "Message::Custom must be filtered before wire translation".to_string(),
+            ));
+        }
     };
     Ok(wire)
 }
