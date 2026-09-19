@@ -166,12 +166,14 @@ impl OpenAiStreamAcc {
             pending.push_back(ModelStreamItem::UsageDelta(usage));
         }
         for mut choice in chunk.choices.into_iter().filter(|choice| choice.index == 0) {
+            let finished = choice.finish_reason.is_some();
             if let Some(reason) = choice.finish_reason {
                 self.finish_reason = Some(reason);
             }
             let reasoning = delta_reasoning_text(&mut choice.delta);
             if !reasoning.is_empty() {
                 self.reasoning.push_str(&reasoning);
+                self.push_block_delta(BlockRequest::Reasoning, &reasoning, pending);
                 pending.push_back(ModelStreamItem::MessageDelta(MessageDelta {
                     text: String::new(),
                     reasoning,
@@ -191,6 +193,7 @@ impl OpenAiStreamAcc {
                         let mut reasoning = String::new();
                         extractor.push(&content, &mut visible, &mut reasoning);
                         if !reasoning.is_empty() {
+                            self.push_block_delta(BlockRequest::Reasoning, &reasoning, pending);
                             pending.push_back(ModelStreamItem::MessageDelta(MessageDelta {
                                 text: String::new(),
                                 reasoning,
@@ -198,6 +201,7 @@ impl OpenAiStreamAcc {
                             }));
                         }
                         if !visible.is_empty() {
+                            self.push_block_delta(BlockRequest::Text, &visible, pending);
                             pending.push_back(ModelStreamItem::MessageDelta(MessageDelta {
                                 text: visible,
                                 reasoning: String::new(),
@@ -206,6 +210,7 @@ impl OpenAiStreamAcc {
                         }
                     }
                     None => {
+                        self.push_block_delta(BlockRequest::Text, &content, pending);
                         pending.push_back(ModelStreamItem::MessageDelta(MessageDelta {
                             text: content,
                             reasoning: String::new(),
@@ -216,32 +221,156 @@ impl OpenAiStreamAcc {
             }
             for fragment in choice.delta.tool_calls {
                 let idx = self.resolve_slot(&fragment);
-                let slot = &mut self.tool_calls[idx];
+                let id_present = fragment.id.as_deref().is_some_and(|id| !id.is_empty());
+                let name_present = fragment
+                    .function
+                    .as_ref()
+                    .and_then(|function| function.name.as_deref())
+                    .is_some_and(|name| !name.is_empty());
                 if let Some(id) = fragment.id.filter(|id| !id.is_empty()) {
-                    slot.id = id;
+                    self.tool_calls[idx].id = id;
                 }
                 if let Some(function) = fragment.function {
                     if let Some(name) = function.name.filter(|n| !n.is_empty()) {
-                        slot.name = name;
+                        self.tool_calls[idx].name = name;
+                    }
+                    // Open the tool-call's block as soon as either its id or
+                    // its name is known, even if no argument fragment has
+                    // arrived yet, mirroring the Anthropic adapter's
+                    // `content_block_start` for `tool_use`.
+                    if id_present || name_present {
+                        if self.tool_calls[idx].id.is_empty() {
+                            self.tool_calls[idx].id = tool_call_id(idx, "");
+                        }
+                        let call_id = tool_call_id(idx, &self.tool_calls[idx].id);
+                        let name = self.tool_calls[idx].name.clone();
+                        self.ensure_block(
+                            BlockRequest::ToolCall {
+                                slot: idx,
+                                id: call_id,
+                                name,
+                            },
+                            pending,
+                        );
                     }
                     if let Some(args) = function.arguments.filter(|a| !a.is_empty()) {
-                        slot.args.push_str(&args);
-                        if slot.id.is_empty() {
-                            slot.id = tool_call_id(idx, "");
+                        self.tool_calls[idx].args.push_str(&args);
+                        if self.tool_calls[idx].id.is_empty() {
+                            self.tool_calls[idx].id = tool_call_id(idx, "");
                         }
-                        let call_id = tool_call_id(idx, &slot.id);
+                        let call_id = tool_call_id(idx, &self.tool_calls[idx].id);
+                        let name = self.tool_calls[idx].name.clone();
+                        let block_index = self.ensure_block(
+                            BlockRequest::ToolCall {
+                                slot: idx,
+                                id: call_id.clone(),
+                                name: name.clone(),
+                            },
+                            pending,
+                        );
+                        if let Some(BlockBuf::ToolCall { args: buf, .. }) =
+                            self.blocks.get_mut(block_index)
+                        {
+                            buf.push_str(&args);
+                        }
+                        pending.push_back(ModelStreamItem::BlockDelta {
+                            index: block_index,
+                            delta: BlockDelta::ToolArgs(args.clone()),
+                        });
                         pending.push_back(ModelStreamItem::ToolCallDelta(ToolDelta {
                             call_id,
                             content: args,
-                            // Surface the tool name (captured into `slot.name` from
-                            // the call-opening fragment) so consumers can label the
-                            // call as it streams; the accumulator keeps the first.
-                            tool_name: Some(slot.name.clone()).filter(|n| !n.is_empty()),
-                            content_index: Some(idx),
+                            // Surface the tool name (captured into `slot.name`
+                            // from the call-opening fragment) so consumers can
+                            // label the call as it streams; the accumulator
+                            // keeps the first.
+                            tool_name: Some(name).filter(|n| !n.is_empty()),
+                            content_index: Some(block_index),
                         }));
                     }
                 }
             }
+            if finished {
+                self.close_current_block(pending);
+            }
+        }
+    }
+
+    /// Routes a text or reasoning fragment onto the block channel: opens (or
+    /// continues) the matching block via [`Self::ensure_block`], appends the
+    /// fragment into its buffer, and emits the corresponding
+    /// [`ModelStreamItem::BlockDelta`].
+    fn push_block_delta(
+        &mut self,
+        request: BlockRequest,
+        fragment: &str,
+        pending: &mut VecDeque<ModelStreamItem>,
+    ) {
+        let delta = match &request {
+            BlockRequest::Text => BlockDelta::Text(fragment.to_string()),
+            BlockRequest::Reasoning => BlockDelta::Thinking(fragment.to_string()),
+            BlockRequest::ToolCall { .. } => {
+                debug_assert!(false, "push_block_delta is only used for text/reasoning");
+                return;
+            }
+        };
+        let index = self.ensure_block(request, pending);
+        match self.blocks.get_mut(index) {
+            Some(BlockBuf::Text(buf)) => buf.push_str(fragment),
+            Some(BlockBuf::Reasoning(buf)) => buf.push_str(fragment),
+            _ => {}
+        }
+        pending.push_back(ModelStreamItem::BlockDelta { index, delta });
+    }
+
+    /// Returns the index of the block matching `request`, opening a new one
+    /// (emitting [`ModelStreamItem::BlockStart`] and closing whatever block
+    /// was previously open) if the requested kind is not already the current
+    /// block.
+    fn ensure_block(
+        &mut self,
+        request: BlockRequest,
+        pending: &mut VecDeque<ModelStreamItem>,
+    ) -> usize {
+        let kind = request.kind();
+        if let Some((index, open)) = self.current_block
+            && open == kind
+        {
+            return index;
+        }
+        self.close_current_block(pending);
+        let (buf, start_kind) = match request {
+            BlockRequest::Text => (BlockBuf::Text(String::new()), BlockKind::Text),
+            BlockRequest::Reasoning => (BlockBuf::Reasoning(String::new()), BlockKind::Thinking),
+            BlockRequest::ToolCall { id, name, .. } => (
+                BlockBuf::ToolCall {
+                    id: id.clone(),
+                    name: name.clone(),
+                    args: String::new(),
+                },
+                BlockKind::ToolCall { id, name },
+            ),
+        };
+        let index = self.blocks.len();
+        self.blocks.push(buf);
+        pending.push_back(ModelStreamItem::BlockStart {
+            index,
+            kind: start_kind,
+        });
+        self.current_block = Some((index, kind));
+        index
+    }
+
+    /// Closes whichever block is currently open (if any), emitting its
+    /// [`ModelStreamItem::BlockEnd`]. A no-op when no block is open.
+    fn close_current_block(&mut self, pending: &mut VecDeque<ModelStreamItem>) {
+        if let Some((index, _)) = self.current_block.take()
+            && let Some(buf) = self.blocks.get(index)
+        {
+            pending.push_back(ModelStreamItem::BlockEnd {
+                index,
+                block: buf.clone().into_content_block(),
+            });
         }
     }
 
