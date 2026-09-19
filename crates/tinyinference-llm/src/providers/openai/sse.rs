@@ -38,7 +38,11 @@ enum OpenKind {
 enum BlockRequest {
     Text,
     Reasoning,
-    ToolCall { slot: usize, id: String, name: String },
+    ToolCall {
+        slot: usize,
+        id: String,
+        name: String,
+    },
 }
 
 impl BlockRequest {
@@ -59,7 +63,11 @@ impl BlockRequest {
 enum BlockBuf {
     Text(String),
     Reasoning(String),
-    ToolCall { id: String, name: String, args: String },
+    ToolCall {
+        id: String,
+        name: String,
+        args: String,
+    },
 }
 
 impl BlockBuf {

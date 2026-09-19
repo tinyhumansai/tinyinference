@@ -10,8 +10,8 @@ use serde_json::json;
 use super::*;
 use crate::message::{ContentBlock, Message};
 use crate::model::{
-    BlockDelta, BlockKind, ChatModel, ModelRequest, ModelStreamItem, ProviderError,
-    ResponseFormat, StreamAccumulator, ToolChoice,
+    BlockDelta, BlockKind, ChatModel, ModelRequest, ModelStreamItem, ProviderError, ResponseFormat,
+    StreamAccumulator, ToolChoice,
 };
 use crate::providers::{ProviderKind, ProviderSpec};
 use crate::tool::ToolSchema;
