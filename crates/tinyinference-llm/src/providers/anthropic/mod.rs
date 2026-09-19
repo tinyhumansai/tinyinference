@@ -142,7 +142,20 @@ impl AnthropicModel {
             temperature_override: None,
             temperature_unsupported: Vec::new(),
             allow_insecure_http: false,
+            request_options: crate::providers::ProviderRequestOptions::default(),
         }
+    }
+
+    /// Sets host-supplied request hooks and an optional HTTP client override
+    /// applied around every call this adapter makes. See
+    /// [`crate::providers::ProviderRequestOptions`].
+    #[must_use]
+    pub fn with_request_options(
+        mut self,
+        options: crate::providers::ProviderRequestOptions,
+    ) -> Self {
+        self.request_options = options;
+        self
     }
 
     /// Overrides the default model id used when a request does not specify one.
