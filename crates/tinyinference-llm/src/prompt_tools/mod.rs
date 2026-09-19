@@ -86,15 +86,23 @@ pub fn with_tool_instructions(
     if block.is_empty() {
         return messages.to_vec();
     }
+    append_system_block(messages, &block)
+}
+
+/// Returns `messages` with `block` appended to the first system message as a
+/// distinct text block (so the original prompt is intact), or as a new
+/// leading system message when there is none. This is how any protocol
+/// block — the JSON one above, a host's P-Format block — reaches the model.
+#[must_use]
+pub fn append_system_block(messages: &[Message], block: &str) -> Vec<Message> {
     let mut out = messages.to_vec();
     if let Some(Message::System(system)) = out.iter_mut().find(|m| matches!(m, Message::System(_)))
     {
-        // A distinct text block, so the original system prompt is intact.
         system
             .content
             .push(ContentBlock::Text(format!("\n\n{block}")));
     } else {
-        out.insert(0, Message::system(block));
+        out.insert(0, Message::system(block.to_string()));
     }
     out
 }
