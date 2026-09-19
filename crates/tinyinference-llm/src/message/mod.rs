@@ -104,6 +104,7 @@ impl Message {
     pub fn system(content: impl Into<String>) -> Self {
         Message::System(SystemMessage {
             content: vec![ContentBlock::Text(content.into())],
+            ..SystemMessage::default()
         })
     }
 
