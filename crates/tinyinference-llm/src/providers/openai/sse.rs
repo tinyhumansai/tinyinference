@@ -270,6 +270,10 @@ impl OpenAiStreamAcc {
             content,
             tool_calls,
             usage: self.usage,
+            // Stamped by the `sse_next` call site (which owns
+            // `SseState::provider`/`model`); this accumulator has no
+            // provider/model context of its own.
+            origin: None,
         };
         ModelResponse {
             message,
