@@ -11,10 +11,7 @@
 //!
 //! The guard is a single process-wide `AtomicBool`. It is intended for test
 //! setup (for example a `#[ctor]`-style fixture or the first line of a test
-//! module) rather than per-request policy; use [`CredentialStore`] or
-//! request-level configuration for finer-grained control.
-//!
-//! [`CredentialStore`]: crate::providers::CredentialStore
+//! module) rather than per-request policy.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
