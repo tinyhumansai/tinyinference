@@ -929,7 +929,7 @@ impl DeferredHandle {
 }
 
 /// The current status of a previously deferred model call.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "status")]
 pub enum DeferredStatus {
     /// Still queued or in progress; not yet ready.
