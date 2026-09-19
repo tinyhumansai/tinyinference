@@ -1873,37 +1873,7 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
             let tools = request.tools.clone();
             let mut scrubber = crate::prompt_tools::TextScrubber::new(&tools);
             let stream = ModelStream::new(Box::pin(stream.flat_map(move |item| {
-                let mapped: Vec<ModelStreamItem> = match item {
-                    ModelStreamItem::MessageDelta(mut delta) if !delta.text.is_empty() => {
-                        let (text, _released) = scrubber.feed(&delta.text);
-                        delta.text = text;
-                        // A delta the scrubber emptied carries nothing worth
-                        // waking a consumer for.
-                        if delta.text.is_empty()
-                            && delta.reasoning.is_empty()
-                            && delta.tool_call.is_none()
-                        {
-                            Vec::new()
-                        } else {
-                            vec![ModelStreamItem::MessageDelta(delta)]
-                        }
-                    }
-                    ModelStreamItem::Completed(response) => {
-                        let (flushed_text, _released) = scrubber.flush();
-                        let mut items = Vec::with_capacity(2);
-                        if !flushed_text.is_empty() {
-                            items.push(ModelStreamItem::MessageDelta(MessageDelta::text(
-                                flushed_text,
-                            )));
-                        }
-                        items.push(ModelStreamItem::Completed(
-                            crate::prompt_tools::recover_tool_calls(response, &tools),
-                        ));
-                        items
-                    }
-                    other => vec![other],
-                };
-                futures::stream::iter(mapped)
+                futures::stream::iter(scrub_prompt_guided_item(item, &mut scrubber, &tools))
             })));
             return Ok(match correlation {
                 Some(correlation) => stream.with_correlation(correlation),
