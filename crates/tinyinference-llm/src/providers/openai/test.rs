@@ -110,6 +110,25 @@ fn translates_request_to_openai_json_shape() {
 }
 
 #[test]
+fn custom_messages_are_never_sent_to_the_provider() {
+    let request = ModelRequest::new(vec![
+        Message::system("sys"),
+        Message::Custom(crate::message::CustomMessage {
+            kind: "compaction".into(),
+            payload: json!({"summary": "..."}),
+            display: Some("Compacted 12 turns".into()),
+        }),
+        Message::user("hi"),
+    ]);
+    let body = model().translate_request(&request).unwrap();
+    let value = serde_json::to_value(&body).unwrap();
+    let messages = value["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0]["role"], json!("system"));
+    assert_eq!(messages[1]["role"], json!("user"));
+}
+
+#[test]
 fn translates_provider_options_for_local_openai_compatible_models() {
     let request = ModelRequest::new(vec![Message::user("hi")])
         .with_temperature(0.1)
