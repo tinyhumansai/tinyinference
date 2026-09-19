@@ -677,12 +677,46 @@ pub enum ModelStreamItem {
     /// The stream has opened; no content has arrived yet.
     Started,
     /// An incremental message fragment (text and/or a tool-call fragment).
+    ///
+    /// Kept alongside [`ModelStreamItem::BlockDelta`] for backward
+    /// compatibility: every fragment a block-aware adapter emits as a
+    /// `BlockDelta` is also folded into a `MessageDelta` on the same channel
+    /// (see [`crate::model::block_delta_to_message_delta`]), so consumers that
+    /// only understand the flat delta shape keep working unchanged.
     MessageDelta(MessageDelta),
-    /// An incremental tool-call argument fragment correlated by call id.
+    /// An incremental tool-call argument fragment correlated by call id. When
+    /// the provider reports block-indexed content, [`ToolDelta::content_index`]
+    /// names the block this fragment belongs to.
     ToolCallDelta(ToolDelta),
     /// A usage update. Providers may send cumulative usage; the accumulator
     /// keeps the most recent value.
     UsageDelta(Usage),
+    /// A new content block has opened at `index`. Anthropic's
+    /// `content_block_start` maps to this 1:1; the OpenAI adapters derive it
+    /// from a delta's shape changing (text starting, or a new `tool_calls[]`
+    /// wire index appearing).
+    BlockStart {
+        /// Zero-based position of this block within the assistant message,
+        /// stable for the life of the block.
+        index: usize,
+        /// The block's syntactic category.
+        kind: BlockKind,
+    },
+    /// An incremental fragment for the open block at `index`.
+    BlockDelta {
+        /// Position of the block this fragment belongs to.
+        index: usize,
+        /// The fragment payload.
+        delta: BlockDelta,
+    },
+    /// The block at `index` has closed; `block` is its fully assembled
+    /// content, ready to append to an [`AssistantMessage::content`] in order.
+    BlockEnd {
+        /// Position of the closed block.
+        index: usize,
+        /// The finished content block.
+        block: ContentBlock,
+    },
     /// Terminal success: the fully merged response.
     Completed(ModelResponse),
     /// Terminal failure with a human-readable error message.
