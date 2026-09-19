@@ -469,3 +469,81 @@ fn provider_spec_defaults_and_overrides_are_normalized() {
     assert_eq!(tinyhumans.base_url, "https://api.tinyhumans.ai/openai/v1");
     assert!(tinyhumans.model.is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// ProviderRequestOptions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn provider_request_options_default_has_no_hooks_or_client_override() {
+    use crate::providers::ProviderRequestOptions;
+
+    let options = ProviderRequestOptions::default();
+    let mut payload = json!({"a": 1});
+    options.apply_payload(&mut payload);
+    assert_eq!(payload, json!({"a": 1}), "no on_payload hook: unchanged");
+    // observe_response must not panic when unset.
+    options.observe_response(&json!({"b": 2}));
+    assert!(options.http.is_none());
+}
+
+#[test]
+fn provider_request_options_on_payload_mutates_the_wire_body() {
+    use crate::providers::ProviderRequestOptions;
+    use std::sync::Arc;
+
+    let options = ProviderRequestOptions {
+        on_payload: Some(Arc::new(|payload: &mut serde_json::Value| {
+            payload["injected"] = json!(true);
+        })),
+        ..ProviderRequestOptions::default()
+    };
+    let mut payload = json!({"model": "m"});
+    options.apply_payload(&mut payload);
+    assert_eq!(payload, json!({"model": "m", "injected": true}));
+}
+
+#[test]
+fn provider_request_options_on_response_observes_without_mutating() {
+    use crate::providers::ProviderRequestOptions;
+    use std::sync::{Arc, Mutex};
+
+    let seen = Arc::new(Mutex::new(None));
+    let seen_clone = seen.clone();
+    let options = ProviderRequestOptions {
+        on_response: Some(Arc::new(move |response: &serde_json::Value| {
+            *seen_clone.lock().unwrap() = Some(response.clone());
+        })),
+        ..ProviderRequestOptions::default()
+    };
+    options.observe_response(&json!({"id": "resp_1"}));
+    assert_eq!(*seen.lock().unwrap(), Some(json!({"id": "resp_1"})));
+}
+
+#[test]
+fn provider_request_options_debug_redacts_closures() {
+    use crate::providers::ProviderRequestOptions;
+    use std::sync::Arc;
+
+    let options = ProviderRequestOptions {
+        on_payload: Some(Arc::new(|_: &mut serde_json::Value| {})),
+        ..ProviderRequestOptions::default()
+    };
+    let rendered = format!("{options:?}");
+    assert!(rendered.contains("<fn>"));
+    assert!(!rendered.contains("closure"));
+}
+
+#[test]
+fn anthropic_and_openai_adapters_accept_request_options() {
+    use crate::providers::ProviderRequestOptions;
+    use crate::providers::anthropic::AnthropicModel;
+    use crate::providers::openai::OpenAiModel;
+
+    // Builder methods compile and construct successfully; the hooks
+    // themselves are exercised in isolation above since these adapters have
+    // no network-free way to observe an outbound request body.
+    let _anthropic =
+        AnthropicModel::new("key").with_request_options(ProviderRequestOptions::default());
+    let _openai = OpenAiModel::new("key").with_request_options(ProviderRequestOptions::default());
+}
