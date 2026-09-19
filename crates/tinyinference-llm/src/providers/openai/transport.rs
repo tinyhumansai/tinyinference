@@ -125,6 +125,10 @@ pub struct OpenAiModel {
     /// default: hosted OpenAI rejects unknown part fields, and its own cache is
     /// automatic. See [`Self::with_explicit_cache_control`].
     pub(super) explicit_cache_control: bool,
+    /// Host-supplied request hooks and HTTP client override. See
+    /// [`crate::providers::ProviderRequestOptions`]. Currently applied to the
+    /// Chat Completions transport path only ([`Self::post_json`]).
+    request_options: crate::providers::ProviderRequestOptions,
 }
 
 impl std::fmt::Debug for OpenAiModel {
@@ -342,7 +346,20 @@ impl OpenAiModel {
             json_schema_strict: AtomicBool::new(true),
             native_tools_on_wire: AtomicBool::new(true),
             responses_requires_stream: AtomicBool::new(false),
+            request_options: crate::providers::ProviderRequestOptions::default(),
         }
+    }
+
+    /// Sets host-supplied request hooks and an optional HTTP client override
+    /// applied around Chat Completions calls this adapter makes. See
+    /// [`crate::providers::ProviderRequestOptions`].
+    #[must_use]
+    pub fn with_request_options(
+        mut self,
+        options: crate::providers::ProviderRequestOptions,
+    ) -> Self {
+        self.request_options = options;
+        self
     }
 
     /// Routes calls to the OpenAI **Responses API** (`/v1/responses`) instead of
@@ -1457,8 +1474,12 @@ impl OpenAiModel {
         streaming: bool,
         what: &str,
     ) -> Result<reqwest::Response> {
+        crate::network_guard::ensure_network_models_allowed()?;
         let url = format!("{}/chat/completions", self.base_url);
-        let mut builder = self.authorized(self.client.post(&url)).json(body);
+        let mut payload = serde_json::to_value(body)?;
+        self.request_options.apply_payload(&mut payload);
+        let client = self.request_options.http.as_ref().unwrap_or(&self.client);
+        let mut builder = self.authorized(client.post(&url)).json(&payload);
         if let Some(timeout) = request_timeout(timeout_ms, streaming) {
             builder = builder.timeout(timeout);
         }
@@ -1780,6 +1801,7 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
             .map_err(|e| Error::Model(format!("openai response body read failed: {e}")))?;
 
         let value: Value = serde_json::from_str(&text)?;
+        self.request_options.observe_response(&value);
         let response = parse_chat_response(value, self.effective_reasoning_tags())?;
         // Prompt-guided tools: recover the model's `<tool_call>` blocks into
         // `message.tool_calls` when native tool calling was suppressed.

@@ -52,6 +52,12 @@ pub enum ContentBlock {
     },
     /// An opaque provider-specific block preserved verbatim.
     ProviderExtension(Value),
+    /// A reference to an audio clip.
+    Audio(MediaRef),
+    /// A reference to a video clip.
+    Video(MediaRef),
+    /// A reference to a document (PDF and similar).
+    Document(MediaRef),
 }
 
 /// A reference to an image, either by URL or inline base64 data.
@@ -62,6 +68,83 @@ pub struct ImageRef {
     /// Optional MIME type (for example `image/png`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
+}
+
+/// A reference to a non-text media asset (audio, video, or document),
+/// carried by [`ContentBlock::Audio`]/[`ContentBlock::Video`]/
+/// [`ContentBlock::Document`].
+///
+/// The harness itself never fetches [`MediaRef::Url`] or
+/// [`MediaRef::Path`] content; a host that needs to resolve those into bytes
+/// (for example to inline them for a provider whose wire format requires
+/// base64) owns that fetch and its safety policy.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "source")]
+pub enum MediaRef {
+    /// A remote or data URL.
+    Url {
+        /// The URL (or data URI) to fetch.
+        url: String,
+        /// Optional MIME type (for example `audio/wav`), when known.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        media_type: Option<String>,
+    },
+    /// Inline base64-encoded content.
+    Base64 {
+        /// Base64-encoded bytes.
+        data: String,
+        /// MIME type of the decoded content (for example
+        /// `application/pdf`).
+        media_type: String,
+    },
+    /// A local filesystem path. Only meaningful to a host that has
+    /// filesystem access and chooses to resolve it; providers never see raw
+    /// paths and a host must inline the file's bytes before sending it.
+    Path {
+        /// The filesystem path.
+        path: String,
+        /// Optional MIME type, when known.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        media_type: Option<String>,
+    },
+}
+
+impl MediaRef {
+    /// Creates a [`MediaRef::Url`] reference.
+    #[must_use]
+    pub fn url(url: impl Into<String>) -> Self {
+        Self::Url {
+            url: url.into(),
+            media_type: None,
+        }
+    }
+
+    /// Creates a [`MediaRef::Base64`] reference.
+    #[must_use]
+    pub fn base64(data: impl Into<String>, media_type: impl Into<String>) -> Self {
+        Self::Base64 {
+            data: data.into(),
+            media_type: media_type.into(),
+        }
+    }
+
+    /// Creates a [`MediaRef::Path`] reference.
+    #[must_use]
+    pub fn path(path: impl Into<String>) -> Self {
+        Self::Path {
+            path: path.into(),
+            media_type: None,
+        }
+    }
+
+    /// Returns the MIME type, when known.
+    #[must_use]
+    pub fn media_type(&self) -> Option<&str> {
+        match self {
+            Self::Url { media_type, .. } | Self::Path { media_type, .. } => media_type.as_deref(),
+            Self::Base64 { media_type, .. } => Some(media_type.as_str()),
+        }
+    }
 }
 
 /// A system/developer instruction message.

@@ -85,6 +85,7 @@ pub struct AnthropicModel {
     temperature_override: Option<f64>,
     temperature_unsupported: Vec<String>,
     allow_insecure_http: bool,
+    request_options: crate::providers::ProviderRequestOptions,
 }
 
 impl std::fmt::Debug for AnthropicModel {
@@ -99,6 +100,7 @@ impl std::fmt::Debug for AnthropicModel {
             .field("temperature_override", &self.temperature_override)
             .field("temperature_unsupported", &self.temperature_unsupported)
             .field("allow_insecure_http", &self.allow_insecure_http)
+            .field("request_options", &self.request_options)
             .finish()
     }
 }
@@ -140,7 +142,20 @@ impl AnthropicModel {
             temperature_override: None,
             temperature_unsupported: Vec::new(),
             allow_insecure_http: false,
+            request_options: crate::providers::ProviderRequestOptions::default(),
         }
+    }
+
+    /// Sets host-supplied request hooks and an optional HTTP client override
+    /// applied around every call this adapter makes. See
+    /// [`crate::providers::ProviderRequestOptions`].
+    #[must_use]
+    pub fn with_request_options(
+        mut self,
+        options: crate::providers::ProviderRequestOptions,
+    ) -> Self {
+        self.request_options = options;
+        self
     }
 
     /// Overrides the default model id used when a request does not specify one.
@@ -232,6 +247,7 @@ impl AnthropicModel {
     }
 
     async fn post(&self, request: &ModelRequest, streaming: bool) -> Result<reqwest::Response> {
+        crate::network_guard::ensure_network_models_allowed()?;
         let endpoint = reqwest::Url::parse(&self.endpoint())
             .map_err(|error| Error::Validation(format!("invalid Anthropic base URL: {error}")))?;
         match endpoint.scheme() {
@@ -253,8 +269,9 @@ impl AnthropicModel {
         if streaming {
             body["stream"] = Value::Bool(true);
         }
-        let request_builder = self
-            .client
+        self.request_options.apply_payload(&mut body);
+        let client = self.request_options.http.as_ref().unwrap_or(&self.client);
+        let request_builder = client
             .post(endpoint)
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", ANTHROPIC_VERSION)
@@ -363,6 +380,7 @@ impl<State: Send + Sync> ChatModel<State> for AnthropicModel {
             .json()
             .await
             .map_err(|error| Error::Model(format!("anthropic response was not JSON: {error}")))?;
+        self.request_options.observe_response(&body);
         parse_response(body).map(|response| response.inherit_correlation(request.correlation))
     }
 

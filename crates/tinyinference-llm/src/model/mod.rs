@@ -370,6 +370,9 @@ impl ModelProfile {
                 image_out: true,
                 audio_in: true,
                 audio_out: true,
+                video_in: true,
+                video_out: true,
+                document_in: true,
             },
             tool_calling: true,
             parallel_tool_calls: true,
@@ -692,6 +695,8 @@ pub struct StreamAccumulator {
     /// [`crate::Error::Provider`] and preserve the
     /// status/code/`retryable` classification the retry layer needs.
     failed_provider: Option<ProviderError>,
+    /// Terminal deferral, when a [`ModelStreamItem::Deferred`] item was seen.
+    deferred: Option<DeferredHandle>,
 }
 
 impl StreamAccumulator {
@@ -741,7 +746,17 @@ impl StreamAccumulator {
                 // `insufficient_quota` / 400 must not be retried as transient).
                 self.failed_provider = Some(error.clone());
             }
+            ModelStreamItem::Deferred(handle) => {
+                self.deferred = Some(handle.clone());
+            }
         }
+    }
+
+    /// Returns the [`DeferredHandle`] folded in by a
+    /// [`ModelStreamItem::Deferred`] item, when one was seen.
+    #[must_use]
+    pub fn deferred(&self) -> Option<&DeferredHandle> {
+        self.deferred.as_ref()
     }
 
     /// Appends a tool-call argument fragment for `call_id`, preserving
@@ -793,6 +808,13 @@ impl StreamAccumulator {
 
         if let Some(message) = self.failed {
             return Err(crate::Error::Model(message));
+        }
+
+        if let Some(handle) = self.deferred {
+            return Err(crate::Error::Unsupported(format!(
+                "stream deferred call {handle:?}; call `deferred()` before `finish()` and \
+                 resolve it via `ChatModel::fetch_deferred`"
+            )));
         }
 
         if let Some(mut response) = self.completed {

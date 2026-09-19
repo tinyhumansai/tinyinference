@@ -317,6 +317,63 @@ fn images_become_base64_or_url_sources() {
 }
 
 #[test]
+fn document_blocks_render_as_document_source_or_placeholder() {
+    use crate::message::MediaRef;
+
+    let request = ModelRequest::new(vec![Message::User(crate::message::UserMessage {
+        content: vec![
+            ContentBlock::Document(MediaRef::base64("QQ==", "application/pdf")),
+            ContentBlock::Document(MediaRef::url("https://example.com/a.pdf")),
+            ContentBlock::Document(MediaRef::path("/tmp/local.pdf")),
+        ],
+    })]);
+    let body = request_body(&request, "m");
+    let content = body["messages"][0]["content"].as_array().unwrap();
+    assert_eq!(content[0]["type"], "document");
+    assert_eq!(
+        content[0]["source"],
+        json!({ "type": "base64", "media_type": "application/pdf", "data": "QQ==" })
+    );
+    assert_eq!(content[1]["type"], "document");
+    assert_eq!(
+        content[1]["source"],
+        json!({ "type": "url", "url": "https://example.com/a.pdf" })
+    );
+    // A local path has no wire representation; it becomes a placeholder text
+    // block rather than being silently dropped.
+    assert_eq!(content[2]["type"], "text");
+    assert!(
+        content[2]["text"]
+            .as_str()
+            .unwrap()
+            .contains("/tmp/local.pdf")
+    );
+}
+
+#[test]
+fn audio_and_video_blocks_become_placeholder_text() {
+    use crate::message::MediaRef;
+
+    let request = ModelRequest::new(vec![Message::User(crate::message::UserMessage {
+        content: vec![
+            ContentBlock::Audio(MediaRef::url("https://example.com/a.wav")),
+            ContentBlock::Video(MediaRef::base64("AAAA", "video/mp4")),
+        ],
+    })]);
+    let body = request_body(&request, "m");
+    let content = body["messages"][0]["content"].as_array().unwrap();
+    assert_eq!(content[0]["type"], "text");
+    assert!(
+        content[0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("https://example.com/a.wav")
+    );
+    assert_eq!(content[1]["type"], "text");
+    assert!(content[1]["text"].as_str().unwrap().contains("video"));
+}
+
+#[test]
 fn provider_options_flatten_except_reserved_and_the_routing_hint() {
     let request = ModelRequest::new(vec![Message::user("hi")]).with_provider_options(json!({
         "thinking": { "type": "enabled", "budget_tokens": 1024 },

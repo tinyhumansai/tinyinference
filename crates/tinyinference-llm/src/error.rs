@@ -25,4 +25,7 @@ pub enum Error {
     /// A provider model catalog used an invalid response envelope.
     #[error("catalog error: {0}")]
     Catalog(String),
+    /// The requested operation is not supported by this adapter.
+    #[error("unsupported operation: {0}")]
+    Unsupported(String),
 }

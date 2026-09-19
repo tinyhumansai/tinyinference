@@ -196,6 +196,39 @@ fn thinking_block_serde_round_trips() {
 }
 
 #[test]
+fn media_ref_constructors_and_media_type_accessor() {
+    let url = MediaRef::url("https://example.com/a.wav");
+    assert_eq!(url.media_type(), None);
+
+    let base64 = MediaRef::base64("AAAA", "audio/wav");
+    assert_eq!(base64.media_type(), Some("audio/wav"));
+
+    let path = MediaRef::path("/tmp/a.pdf");
+    assert_eq!(path.media_type(), None);
+}
+
+#[test]
+fn audio_video_document_blocks_round_trip_through_json() {
+    let blocks = vec![
+        ContentBlock::Audio(MediaRef::base64("AAAA", "audio/wav")),
+        ContentBlock::Video(MediaRef::url("https://example.com/v.mp4")),
+        ContentBlock::Document(MediaRef::path("/tmp/doc.pdf")),
+    ];
+    for block in blocks {
+        let wire = serde_json::to_value(&block).unwrap();
+        let back: ContentBlock = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, block);
+    }
+}
+
+#[test]
+fn non_text_media_blocks_are_not_reasoning_and_carry_no_visible_text() {
+    let block = ContentBlock::Audio(MediaRef::url("https://example.com/a.wav"));
+    assert!(!block.is_reasoning());
+    assert_eq!(block.as_text(), None);
+}
+
+#[test]
 fn legacy_content_without_thinking_still_parses() {
     // Additive tagging: transcripts serialized before thinking blocks existed
     // (only text/json/image/provider_extension) must deserialize unchanged.
