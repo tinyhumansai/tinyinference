@@ -769,6 +769,13 @@ impl StreamAccumulator {
             return Err(crate::Error::Model(message));
         }
 
+        if let Some(handle) = self.deferred {
+            return Err(crate::Error::Unsupported(format!(
+                "stream deferred call {handle:?}; call `deferred()` before `finish()` and \
+                 resolve it via `ChatModel::fetch_deferred`"
+            )));
+        }
+
         if let Some(mut response) = self.completed {
             // Reconcile the response and message usage with any streamed
             // `UsageDelta`, preferring an already-present value and never
