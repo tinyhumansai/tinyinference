@@ -209,6 +209,41 @@ pub(super) fn unrepresentable_block_error() -> Error {
     )
 }
 
+/// Renders an audio [`crate::message::MediaRef`] as an OpenAI Chat
+/// Completions `input_audio` content part.
+///
+/// The wire format requires inline base64 data, so a [`MediaRef::Url`] or
+/// [`MediaRef::Path`] reference — which the harness never fetches or reads
+/// itself — fails closed rather than being silently dropped or sent
+/// malformed.
+fn input_audio_part(media: &crate::message::MediaRef) -> Result<ContentPartWire> {
+    use crate::message::MediaRef;
+    match media {
+        MediaRef::Base64 { data, media_type } => Ok(ContentPartWire::InputAudio {
+            input_audio: InputAudioWire {
+                data: data.clone(),
+                format: audio_format_from_media_type(media_type),
+            },
+        }),
+        MediaRef::Url { .. } | MediaRef::Path { .. } => Err(Error::Validation(
+            "OpenAI input_audio requires inline base64 data; resolve the \
+             audio reference to bytes before sending it"
+                .to_string(),
+        )),
+    }
+}
+
+/// Derives the OpenAI `input_audio.format` token (`"wav"`, `"mp3"`, …) from a
+/// MIME type such as `audio/wav`, defaulting to `"wav"` when unrecognized.
+fn audio_format_from_media_type(media_type: &str) -> String {
+    media_type
+        .rsplit('/')
+        .next()
+        .filter(|format| !format.is_empty())
+        .unwrap_or("wav")
+        .to_string()
+}
+
 /// Translates a [`ToolChoice`] into the OpenAI `tool_choice` JSON value.
 pub(super) fn translate_tool_choice(choice: &ToolChoice) -> Value {
     match choice {
