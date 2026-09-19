@@ -132,7 +132,7 @@ impl ToolCall {
 }
 
 /// An incremental tool-call fragment emitted by a model stream.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ToolDelta {
     /// Call identifier this fragment belongs to.
     pub call_id: String,
@@ -141,6 +141,11 @@ pub struct ToolDelta {
     /// Tool name when the provider supplies it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
+    /// Position of this tool call's content block within the assistant
+    /// message, when the provider reports block-indexed content (Anthropic's
+    /// `content_block` index, or the OpenAI `tool_calls[].index`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_index: Option<usize>,
 }
 
 fn validate_schema_value(schema: &Value, value: &Value, path: &str) -> crate::Result<()> {
