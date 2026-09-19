@@ -802,7 +802,7 @@ async fn streaming_emits_block_boundaries_for_interleaved_thinking_text_and_tool
             _ => None,
         })
         .collect();
-    assert_eq!(tool_indices, vec![Some(2), Some(2)]);
+    assert_eq!(tool_indices, vec![Some(2), Some(2), Some(2)]);
 
     // Compatibility: MessageDelta still carries the flat text/reasoning.
     let text: String = items
