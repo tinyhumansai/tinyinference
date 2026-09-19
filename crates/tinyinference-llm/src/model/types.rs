@@ -387,10 +387,7 @@ fn inline_refs(value: &mut Value, defs: &serde_json::Map<String, Value>) {
     match value {
         Value::Object(map) => {
             if let Some(Value::String(reference)) = map.get("$ref").cloned() {
-                let name = reference
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or(reference.as_str());
+                let name = reference.rsplit('/').next().unwrap_or(reference.as_str());
                 if let Some(resolved) = defs.get(name) {
                     let mut resolved = resolved.clone();
                     inline_refs(&mut resolved, defs);
