@@ -26,7 +26,9 @@ use futures::{Stream, StreamExt};
 use serde_json::Value;
 
 use crate::message::{AssistantMessage, ContentBlock, MessageDelta};
-use crate::model::{BlockDelta, BlockKind, ModelResponse, ModelStream, ModelStreamItem, ProviderError};
+use crate::model::{
+    BlockDelta, BlockKind, ModelResponse, ModelStream, ModelStreamItem, ProviderError,
+};
 use crate::tool::{ToolCall, ToolDelta};
 use crate::usage::Usage;
 use crate::{Error, Result};
@@ -77,8 +79,7 @@ impl OpenBlock {
                 let arguments = if partial_json.trim().is_empty() {
                     Value::Object(Default::default())
                 } else {
-                    serde_json::from_str(&partial_json)
-                        .unwrap_or(Value::String(partial_json))
+                    serde_json::from_str(&partial_json).unwrap_or(Value::String(partial_json))
                 };
                 ContentBlock::Json(serde_json::json!({
                     "id": id,
