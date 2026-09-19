@@ -240,6 +240,26 @@ pub struct ModelProfile {
     /// Maximum output tokens, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u64>,
+    /// Whether the provider accepts a `system`/developer-role message
+    /// anywhere in the transcript's message list, not only as a single
+    /// leading block.
+    ///
+    /// This is `false` by default and must be opted into explicitly, because
+    /// getting it wrong silently drops content: an OpenAI-style chat API
+    /// (`Message::System` translated 1:1 to a `role: "system"` wire message
+    /// at its transcript position — see `providers::openai::convert::
+    /// translate_message`) genuinely honors a system message wherever it
+    /// appears, so `true` is correct there. Anthropic's Messages API has no
+    /// such slot: every `Message::System` in the transcript, wherever it
+    /// occurs, is collected into one top-level `system` array ahead of the
+    /// `messages` list (see `providers::anthropic::request`), so a "mid-
+    /// conversation" system message is actually hoisted to the front on the
+    /// wire — `false` here is what tells a caller (the transcript-carried
+    /// system-patch mechanism, `docs/runtime-comparison/plan.md`'s B6) to
+    /// fold a patch into the leading system message instead of inserting it
+    /// in place.
+    #[serde(default)]
+    pub mid_conversation_system_messages: bool,
 }
 
 /// A set of required capabilities used to validate a request against a
