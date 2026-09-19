@@ -55,6 +55,41 @@ enum OpenBlock {
     Redacted(String),
 }
 
+impl OpenBlock {
+    /// Converts a closed block into the [`ContentBlock`] carried on
+    /// [`ModelStreamItem::BlockEnd`].
+    ///
+    /// [`ContentBlock`] has no dedicated tool-call variant (tool calls live on
+    /// [`AssistantMessage::tool_calls`]), so a closed tool-use block is
+    /// represented as [`ContentBlock::Json`] carrying `{id, name, arguments}`;
+    /// consumers that want the parsed [`crate::tool::ToolCall`] already saw the
+    /// id and name on the matching [`ModelStreamItem::BlockStart`].
+    fn into_content_block(self) -> ContentBlock {
+        match self {
+            OpenBlock::Text(text) => ContentBlock::Text(text),
+            OpenBlock::Thinking { text, signature } => ContentBlock::Thinking { text, signature },
+            OpenBlock::Redacted(data) => ContentBlock::RedactedThinking { data },
+            OpenBlock::ToolUse {
+                id,
+                name,
+                partial_json,
+            } => {
+                let arguments = if partial_json.trim().is_empty() {
+                    Value::Object(Default::default())
+                } else {
+                    serde_json::from_str(&partial_json)
+                        .unwrap_or(Value::String(partial_json))
+                };
+                ContentBlock::Json(serde_json::json!({
+                    "id": id,
+                    "name": name,
+                    "arguments": arguments,
+                }))
+            }
+        }
+    }
+}
+
 /// Provider-side accumulator rebuilding the terminal [`ModelResponse`].
 #[derive(Debug, Default)]
 struct AnthropicStreamAcc {
