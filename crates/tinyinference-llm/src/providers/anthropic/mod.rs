@@ -364,7 +364,14 @@ impl<State: Send + Sync> ChatModel<State> for AnthropicModel {
             .json()
             .await
             .map_err(|error| Error::Model(format!("anthropic response was not JSON: {error}")))?;
-        parse_response(body).map(|response| response.inherit_correlation(request.correlation))
+        parse_response(body).map(|mut response| {
+            response.message.origin = Some(crate::message::MessageOrigin {
+                provider: PROVIDER.to_string(),
+                api: MESSAGES_API.to_string(),
+                model: self.model.clone(),
+            });
+            response.inherit_correlation(request.correlation)
+        })
     }
 
     async fn stream(&self, _state: &State, request: ModelRequest) -> Result<ModelStream> {
