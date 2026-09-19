@@ -378,6 +378,7 @@ impl<State: Send + Sync> ChatModel<State> for AnthropicModel {
             .json()
             .await
             .map_err(|error| Error::Model(format!("anthropic response was not JSON: {error}")))?;
+        self.request_options.observe_response(&body);
         parse_response(body).map(|response| response.inherit_correlation(request.correlation))
     }
 
