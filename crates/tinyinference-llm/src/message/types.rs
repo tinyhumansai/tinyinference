@@ -123,6 +123,27 @@ pub enum Message {
     Assistant(AssistantMessage),
     /// Tool result.
     Tool(ToolMessage),
+    /// Host-defined out-of-band record (e.g. a compaction marker, a label, or
+    /// an audit note) that rides in the same message stream as ordinary
+    /// conversation turns but is never sent to a provider.
+    ///
+    /// Every request-building path (provider `convert`/`request` modules)
+    /// filters these out before serializing a provider payload; see the
+    /// `sanitize_history` / request-conversion call sites in each provider
+    /// module for the enforcement point.
+    Custom(CustomMessage),
+}
+
+/// Payload for [`Message::Custom`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CustomMessage {
+    /// Host-defined discriminator, e.g. `"compaction"` or `"label"`.
+    pub kind: String,
+    /// Host-defined structured payload.
+    pub payload: Value,
+    /// Optional human-readable rendering for transcript display.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
 }
 
 /// An incremental message update used for streaming model output.
