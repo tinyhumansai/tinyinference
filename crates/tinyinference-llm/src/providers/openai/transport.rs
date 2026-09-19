@@ -334,7 +334,20 @@ impl OpenAiModel {
             json_schema_strict: AtomicBool::new(true),
             native_tools_on_wire: AtomicBool::new(true),
             responses_requires_stream: AtomicBool::new(false),
+            request_options: crate::providers::ProviderRequestOptions::default(),
         }
+    }
+
+    /// Sets host-supplied request hooks and an optional HTTP client override
+    /// applied around Chat Completions calls this adapter makes. See
+    /// [`crate::providers::ProviderRequestOptions`].
+    #[must_use]
+    pub fn with_request_options(
+        mut self,
+        options: crate::providers::ProviderRequestOptions,
+    ) -> Self {
+        self.request_options = options;
+        self
     }
 
     /// Routes calls to the OpenAI **Responses API** (`/v1/responses`) instead of
