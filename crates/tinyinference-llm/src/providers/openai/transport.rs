@@ -420,6 +420,12 @@ impl OpenAiModel {
     /// role, for OpenAI-compatible endpoints that reject a `system` role.
     pub fn with_merge_system_into_user(mut self) -> Self {
         self.merge_system_into_user = true;
+        // Once every system message is folded into the leading user turn,
+        // the wire request carries no `system`-role message at all, so
+        // there is no transcript position for a mid-conversation system
+        // patch to occupy — a caller must fold such a patch into the
+        // leading system message before this transform runs instead.
+        self.profile.mid_conversation_system_messages = false;
         self
     }
 
