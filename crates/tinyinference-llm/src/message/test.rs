@@ -281,11 +281,18 @@ fn replay_system_state_folds_sections_and_tool_deltas_in_order() {
 
 #[test]
 fn replay_system_state_section_removal_drops_it_from_the_effective_prompt() {
-    let mut add = SystemMessage::default();
-    add.sections
-        .insert("scratch".to_string(), Some("temporary note".to_string()));
-    let mut remove = SystemMessage::default();
-    remove.sections.insert("scratch".to_string(), None);
+    let mut add_sections = std::collections::BTreeMap::new();
+    add_sections.insert("scratch".to_string(), Some("temporary note".to_string()));
+    let add = SystemMessage {
+        sections: add_sections,
+        ..SystemMessage::default()
+    };
+    let mut remove_sections = std::collections::BTreeMap::new();
+    remove_sections.insert("scratch".to_string(), None);
+    let remove = SystemMessage {
+        sections: remove_sections,
+        ..SystemMessage::default()
+    };
 
     let messages = vec![Message::System(add), Message::System(remove)];
     let (prompt, tools) = replay_system_state(&messages);
