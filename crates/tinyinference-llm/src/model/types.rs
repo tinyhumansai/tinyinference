@@ -20,7 +20,7 @@ use serde_json::Value;
 
 use crate::Result;
 use crate::cache::CachePolicy;
-use crate::message::{AssistantMessage, Message, MessageDelta};
+use crate::message::{AssistantMessage, ContentBlock, Message, MessageDelta};
 use crate::tool::{ToolDelta, ToolSchema};
 use crate::usage::Usage;
 
