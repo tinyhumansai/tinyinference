@@ -251,3 +251,54 @@ fn legacy_content_without_thinking_still_parses() {
     assert_eq!(blocks[0].as_text(), Some("hello"));
     assert!(!blocks[1].is_reasoning());
 }
+
+#[test]
+fn message_origin_round_trips_through_serde() {
+    let assistant = AssistantMessage {
+        id: Some("msg_1".into()),
+        content: vec![ContentBlock::Text("hi".into())],
+        tool_calls: Vec::new(),
+        usage: None,
+        origin: Some(MessageOrigin {
+            provider: "anthropic".into(),
+            api: "messages".into(),
+            model: "claude-sonnet-4-6".into(),
+        }),
+    };
+    let wire = serde_json::to_value(&assistant).unwrap();
+    assert_eq!(
+        wire["origin"],
+        json!({ "provider": "anthropic", "api": "messages", "model": "claude-sonnet-4-6" })
+    );
+    let back: AssistantMessage = serde_json::from_value(wire).unwrap();
+    assert_eq!(back, assistant);
+}
+
+#[test]
+fn message_origin_is_none_by_default_and_omitted_from_wire() {
+    let assistant = AssistantMessage {
+        id: None,
+        content: vec![ContentBlock::Text("hi".into())],
+        tool_calls: Vec::new(),
+        usage: None,
+        origin: None,
+    };
+    let wire = serde_json::to_value(&assistant).unwrap();
+    assert!(
+        wire.get("origin").is_none(),
+        "a None origin must not appear on the wire"
+    );
+}
+
+#[test]
+fn legacy_assistant_message_without_origin_field_deserializes_with_none() {
+    // Additive tagging: a journal serialized before `origin` existed must
+    // still deserialize, with the field defaulting to `None`.
+    let legacy = json!({
+        "id": "msg_1",
+        "content": [{ "text": "hi" }],
+        "tool_calls": [],
+    });
+    let assistant: AssistantMessage = serde_json::from_value(legacy).unwrap();
+    assert_eq!(assistant.origin, None);
+}

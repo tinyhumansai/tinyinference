@@ -2516,3 +2516,79 @@ fn a_null_tool_calls_delta_is_read_as_no_fragments() {
     assert!(chunk.choices[0].delta.tool_calls.is_empty());
     assert_eq!(chunk.choices[0].delta.content.as_deref(), Some("Hi"));
 }
+
+#[test]
+fn stamp_origin_records_provider_api_and_effective_model() {
+    let model = OpenAiModel::new("key").with_model("gpt-4.1");
+    let request = ModelRequest::default();
+    let mut response = ModelResponse {
+        message: crate::message::AssistantMessage {
+            id: None,
+            content: Vec::new(),
+            tool_calls: Vec::new(),
+            usage: None,
+            origin: None,
+        },
+        usage: None,
+        finish_reason: None,
+        raw: None,
+        resolved_model: None,
+        continue_turn: None,
+        served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
+    };
+    model.stamp_origin(&mut response, &request, CHAT_COMPLETIONS_API);
+    let origin = response.message.origin.expect("origin stamped");
+    assert_eq!(origin.provider, "openai");
+    assert_eq!(origin.api, "chat_completions");
+    assert_eq!(origin.model, "gpt-4.1");
+}
+
+#[test]
+fn stamp_origin_prefers_a_per_request_model_override() {
+    let model = OpenAiModel::new("key").with_model("gpt-4.1");
+    let mut request = ModelRequest::default();
+    request.model = Some("gpt-4.1-mini".to_string());
+    let mut response = ModelResponse {
+        message: crate::message::AssistantMessage {
+            id: None,
+            content: Vec::new(),
+            tool_calls: Vec::new(),
+            usage: None,
+            origin: None,
+        },
+        usage: None,
+        finish_reason: None,
+        raw: None,
+        resolved_model: None,
+        continue_turn: None,
+        served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
+    };
+    model.stamp_origin(&mut response, &request, RESPONSES_API);
+    let origin = response.message.origin.expect("origin stamped");
+    assert_eq!(origin.api, "responses");
+    assert_eq!(origin.model, "gpt-4.1-mini");
+}
+
+#[tokio::test]
+async fn streamed_terminal_response_carries_origin() {
+    let raw: Vec<Vec<u8>> = vec![
+        b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\n".to_vec(),
+        b"data: [DONE]\n\n".to_vec(),
+    ];
+    let items = collect_sse(raw).await;
+    let completed = items
+        .into_iter()
+        .find_map(|item| match item {
+            ModelStreamItem::Completed(response) => Some(response),
+            _ => None,
+        })
+        .expect("a terminal Completed item");
+    let origin = completed.message.origin.expect("origin stamped on stream terminal");
+    assert_eq!(origin.provider, "openai");
+    assert_eq!(origin.api, "chat_completions");
+    assert_eq!(origin.model, "gpt-4.1-mini");
+}
