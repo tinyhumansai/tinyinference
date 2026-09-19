@@ -569,3 +569,147 @@ fn stream_accumulator_reconstruct_without_reasoning_has_no_thinking_block() {
         vec![ContentBlock::Text("hi".into())]
     );
 }
+
+#[test]
+fn model_profile_new_fields_default_to_none_or_false() {
+    let profile = ModelProfile::default();
+    assert!(profile.schema_transform.is_none());
+    assert!(profile.default_structured_mode.is_none());
+    assert!(profile.prompted_output_template.is_none());
+    assert!(profile.thinking_tags.is_none());
+    assert!(!profile.ignore_streamed_leading_whitespace);
+    assert!(profile.thinking_level_map.is_empty());
+    assert_eq!(profile.compat, ProviderCompat::default());
+}
+
+#[test]
+fn model_profile_round_trips_new_fields_through_json() {
+    let mut profile = ModelProfile {
+        schema_transform: Some(SchemaTransform::Chain(vec![
+            SchemaTransform::InlineRefs,
+            SchemaTransform::NoAdditionalProperties,
+        ])),
+        default_structured_mode: Some(StructuredMode::Prompted),
+        prompted_output_template: Some("Respond as JSON matching: {schema}".into()),
+        thinking_tags: Some(("<think>".into(), "</think>".into())),
+        ignore_streamed_leading_whitespace: true,
+        ..ModelProfile::default()
+    };
+    profile
+        .thinking_level_map
+        .insert("low".into(), ReasoningConfig::effort(ReasoningEffort::Low));
+    profile.compat = ProviderCompat {
+        mid_conversation_system_messages: true,
+        strict_tools: true,
+        cache_retention: false,
+        session_affinity: true,
+        max_tool_name_length: Some(64),
+        tool_id_pattern: Some("^[a-z0-9_]+$".into()),
+    };
+
+    let json = serde_json::to_string(&profile).unwrap();
+    let round_tripped: ModelProfile = serde_json::from_str(&json).unwrap();
+    assert_eq!(round_tripped, profile);
+}
+
+#[test]
+fn schema_transform_strip_defs_removes_top_level_defs() {
+    let schema = json!({
+        "type": "object",
+        "$defs": {"Foo": {"type": "string"}},
+        "properties": {"a": {"$ref": "#/$defs/Foo"}}
+    });
+    let out = SchemaTransform::StripDefs.apply(&schema);
+    assert!(out.get("$defs").is_none());
+    // Ref itself is left untouched by StripDefs (that's InlineRefs' job).
+    assert_eq!(out["properties"]["a"]["$ref"], "#/$defs/Foo");
+}
+
+#[test]
+fn schema_transform_inline_refs_resolves_and_drops_defs() {
+    let schema = json!({
+        "type": "object",
+        "$defs": {"Foo": {"type": "string", "minLength": 1}},
+        "properties": {"a": {"$ref": "#/$defs/Foo"}}
+    });
+    let out = SchemaTransform::InlineRefs.apply(&schema);
+    assert!(out.get("$defs").is_none());
+    assert_eq!(out["properties"]["a"]["type"], "string");
+    assert_eq!(out["properties"]["a"]["minLength"], 1);
+}
+
+#[test]
+fn schema_transform_no_additional_properties_sets_false_recursively() {
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "nested": {"type": "object", "properties": {"x": {"type": "string"}}}
+        }
+    });
+    let out = SchemaTransform::NoAdditionalProperties.apply(&schema);
+    assert_eq!(out["additionalProperties"], false);
+    assert_eq!(out["properties"]["nested"]["additionalProperties"], false);
+}
+
+#[test]
+fn schema_transform_no_additional_properties_respects_existing_value() {
+    let schema = json!({"type": "object", "additionalProperties": true});
+    let out = SchemaTransform::NoAdditionalProperties.apply(&schema);
+    assert_eq!(out["additionalProperties"], true);
+}
+
+#[test]
+fn schema_transform_gemini_compat_strips_unsupported_keywords() {
+    let schema = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "default": {},
+        "properties": {"a": {"type": "string", "examples": ["x"]}}
+    });
+    let out = SchemaTransform::GeminiCompat.apply(&schema);
+    assert!(out.get("additionalProperties").is_none());
+    assert!(out.get("$schema").is_none());
+    assert!(out.get("default").is_none());
+    assert!(out["properties"]["a"].get("examples").is_none());
+}
+
+#[test]
+fn schema_transform_openai_strict_inlines_forbids_extra_and_requires_all() {
+    let schema = json!({
+        "type": "object",
+        "$defs": {"Foo": {"type": "string"}},
+        "properties": {
+            "a": {"$ref": "#/$defs/Foo"},
+            "b": {"type": "number"}
+        }
+    });
+    let out = SchemaTransform::OpenAiStrict.apply(&schema);
+    assert!(out.get("$defs").is_none());
+    assert_eq!(out["additionalProperties"], false);
+    assert_eq!(out["properties"]["a"]["type"], "string");
+    let required: Vec<String> = out["required"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(required, vec!["a".to_string(), "b".to_string()]);
+}
+
+#[test]
+fn schema_transform_chain_applies_steps_in_order() {
+    let schema = json!({
+        "type": "object",
+        "$defs": {"Foo": {"type": "string"}},
+        "properties": {"a": {"$ref": "#/$defs/Foo"}}
+    });
+    let chained = SchemaTransform::Chain(vec![
+        SchemaTransform::InlineRefs,
+        SchemaTransform::NoAdditionalProperties,
+    ])
+    .apply(&schema);
+    assert!(chained.get("$defs").is_none());
+    assert_eq!(chained["properties"]["a"]["type"], "string");
+    assert_eq!(chained["additionalProperties"], false);
+}
