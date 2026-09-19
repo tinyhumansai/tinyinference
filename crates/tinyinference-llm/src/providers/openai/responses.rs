@@ -563,6 +563,9 @@ pub(super) fn parse_responses_response(value: Value) -> ModelResponse {
             content,
             tool_calls: Vec::new(),
             usage,
+            // Stamped by the transport call site (`invoke_responses`), which
+            // knows the configured provider/model.
+            origin: None,
         },
         usage,
         finish_reason,
