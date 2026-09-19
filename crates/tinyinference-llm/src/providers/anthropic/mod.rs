@@ -72,6 +72,15 @@ const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 30;
 /// prose — the previous 1,024 truncated real tool calls mid-argument.
 const DEFAULT_MAX_TOKENS: u32 = 4096;
 const PROVIDER: &str = "anthropic";
+/// [`crate::message::MessageOrigin::api`] value stamped on every response
+/// this adapter builds (unary and streamed terminal).
+pub(super) const MESSAGES_API: &str = "messages";
+/// Anthropic's accepted `tool_use.id`/`tool_result.tool_use_id` shape.
+const TOOL_CALL_ID_PATTERN: &str = "^[a-zA-Z0-9_-]{1,64}$";
+/// Anthropic's accepted tool-call id length ceiling (also encoded in
+/// [`TOOL_CALL_ID_PATTERN`], but kept as a plain number for callers that
+/// truncate without parsing the regex).
+const TOOL_CALL_ID_MAX_LEN: usize = 64;
 
 /// A chat model backed by Anthropic's native Messages API.
 pub struct AnthropicModel {
@@ -136,6 +145,10 @@ impl AnthropicModel {
                 streaming: true,
                 streaming_tool_chunks: true,
                 reasoning: true,
+                // Anthropic rejects a `tool_use`/`tool_result` id outside
+                // this shape with a 400.
+                tool_call_id_pattern: Some(TOOL_CALL_ID_PATTERN.to_string()),
+                max_tool_call_id_len: Some(TOOL_CALL_ID_MAX_LEN),
                 ..ModelProfile::default()
             },
             model,
@@ -224,6 +237,18 @@ impl AnthropicModel {
 
     fn request_model<'a>(&'a self, request: &'a ModelRequest) -> &'a str {
         request.model.as_deref().unwrap_or(&self.model)
+    }
+
+    /// Builds the [`crate::message::MessageOrigin`] to stamp on a response to
+    /// this request: this adapter's fixed provider/API plus the model that
+    /// actually served the call (a request-level override, when set, else
+    /// the instance default).
+    pub(super) fn origin_for(&self, request: &ModelRequest) -> crate::message::MessageOrigin {
+        crate::message::MessageOrigin {
+            provider: PROVIDER.to_string(),
+            api: MESSAGES_API.to_string(),
+            model: self.request_model(request).to_string(),
+        }
     }
 
     fn request_body(&self, request: &ModelRequest) -> Value {
@@ -381,7 +406,11 @@ impl<State: Send + Sync> ChatModel<State> for AnthropicModel {
             .await
             .map_err(|error| Error::Model(format!("anthropic response was not JSON: {error}")))?;
         self.request_options.observe_response(&body);
-        parse_response(body).map(|response| response.inherit_correlation(request.correlation))
+        let origin = self.origin_for(&request);
+        parse_response(body).map(|mut response| {
+            response.message.origin = Some(origin);
+            response.inherit_correlation(request.correlation)
+        })
     }
 
     async fn stream(&self, _state: &State, request: ModelRequest) -> Result<ModelStream> {

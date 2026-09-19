@@ -1034,6 +1034,31 @@ impl OpenAiModel {
         Ok(())
     }
 
+    /// Stamps [`crate::message::AssistantMessage::origin`] on a freshly built
+    /// response with this instance's configured provider/model and the given
+    /// API surface (see [`CHAT_COMPLETIONS_API`]/[`RESPONSES_API`]).
+    ///
+    /// Every response-building path (unary, the non-streaming SSE fallback,
+    /// and the Responses API) funnels through here (or the analogous
+    /// `sse_next` streamed-terminal site) so a later cross-provider handoff
+    /// transform can detect when a message was produced by a different
+    /// provider/model than the one it is about to be replayed against. Local
+    /// OpenAI-compatible runtimes (Ollama, LM Studio, …) share this transport
+    /// and are stamped with their own `provider` (e.g. `"ollama"`), not
+    /// `"openai"`.
+    pub(super) fn stamp_origin(
+        &self,
+        response: &mut ModelResponse,
+        request: &ModelRequest,
+        api: &str,
+    ) {
+        response.message.origin = Some(crate::message::MessageOrigin {
+            provider: self.provider.clone(),
+            api: api.to_string(),
+            model: request.model.clone().unwrap_or_else(|| self.model.clone()),
+        });
+    }
+
     /// Returns the default model id this instance will request.
     pub fn model(&self) -> &str {
         &self.model
@@ -1122,6 +1147,9 @@ impl OpenAiModel {
         };
         let mut messages = source_messages
             .iter()
+            // `Message::Custom` is a host-side out-of-band record; never sent
+            // to the provider.
+            .filter(|message| !matches!(message, Message::Custom(_)))
             .map(translate_message)
             .collect::<Result<Vec<_>>>()?;
         if self.explicit_cache_control && request.wants_prompt_cache_breakpoints() {
@@ -1413,7 +1441,9 @@ impl OpenAiModel {
                 )
             })?,
         };
-        Ok(responses::parse_responses_response(value))
+        let mut response = responses::parse_responses_response(value);
+        self.stamp_origin(&mut response, request, RESPONSES_API);
+        Ok(response)
     }
 
     /// Shared `POST {responses_url}` with auth, query params, and timeout, mapped
@@ -1802,7 +1832,8 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
 
         let value: Value = serde_json::from_str(&text)?;
         self.request_options.observe_response(&value);
-        let response = parse_chat_response(value, self.effective_reasoning_tags())?;
+        let mut response = parse_chat_response(value, self.effective_reasoning_tags())?;
+        self.stamp_origin(&mut response, &request, CHAT_COMPLETIONS_API);
         // Prompt-guided tools: recover the model's `<tool_call>` blocks into
         // `message.tool_calls` when native tool calling was suppressed.
         if !self.profile.tool_calling
@@ -1881,6 +1912,7 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
             })?;
             let value: Value = serde_json::from_str(&text)?;
             let mut parsed = parse_chat_response(value, self.effective_reasoning_tags())?;
+            self.stamp_origin(&mut parsed, &request, CHAT_COMPLETIONS_API);
             if !self.profile.tool_calling
                 && !request.tools.is_empty()
                 && request.tool_choice != ToolChoice::None

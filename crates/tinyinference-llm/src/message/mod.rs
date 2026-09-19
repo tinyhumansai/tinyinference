@@ -126,6 +126,7 @@ impl Message {
             content: vec![ContentBlock::Text(content.into())],
             tool_calls: Vec::new(),
             usage: None,
+            origin: None,
         })
     }
 
@@ -140,12 +141,16 @@ impl Message {
     }
 
     /// Returns the concatenated text of all text content blocks.
+    ///
+    /// [`Message::Custom`] carries no [`ContentBlock`]s; this returns its
+    /// `display` rendering (or an empty string when none was set).
     pub fn text(&self) -> String {
         match self {
             Message::System(m) => concat_text(&m.content),
             Message::User(m) => concat_text(&m.content),
             Message::Assistant(m) => concat_text(&m.content),
             Message::Tool(m) => concat_text(&m.content),
+            Message::Custom(m) => m.display.clone().unwrap_or_default(),
         }
     }
 
@@ -164,17 +169,27 @@ impl Message {
     /// `String` allocation, which matters on hot paths such as token estimation
     /// over a whole transcript.
     pub fn char_len(&self) -> usize {
-        let content = match self {
+        match self {
+            Message::Custom(m) => m.display.as_deref().map_or(0, |d| d.chars().count()),
+            other => other
+                .content_blocks()
+                .iter()
+                .filter_map(ContentBlock::as_text)
+                .map(|t| t.chars().count())
+                .sum(),
+        }
+    }
+
+    /// Returns the ordered [`ContentBlock`]s for message kinds that carry
+    /// them. [`Message::Custom`] carries none.
+    fn content_blocks(&self) -> &[ContentBlock] {
+        match self {
             Message::System(m) => &m.content,
             Message::User(m) => &m.content,
             Message::Assistant(m) => &m.content,
             Message::Tool(m) => &m.content,
-        };
-        content
-            .iter()
-            .filter_map(ContentBlock::as_text)
-            .map(|t| t.chars().count())
-            .sum()
+            Message::Custom(_) => &[],
+        }
     }
 
     /// Approximate character weight of provider-visible content and structural
@@ -186,13 +201,11 @@ impl Message {
     /// silently never trigger even as the real context window overflows. See
     /// [`ContentBlock::estimated_char_weight`].
     pub fn estimated_char_weight(&self) -> usize {
-        let content = match self {
-            Message::System(m) => &m.content,
-            Message::User(m) => &m.content,
-            Message::Assistant(m) => &m.content,
-            Message::Tool(m) => &m.content,
-        };
-        let content_weight: usize = content
+        if let Message::Custom(m) = self {
+            return m.display.as_deref().map_or(0, |d| d.chars().count());
+        }
+        let content_weight: usize = self
+            .content_blocks()
             .iter()
             .map(ContentBlock::estimated_char_weight)
             .sum();

@@ -110,6 +110,25 @@ fn translates_request_to_openai_json_shape() {
 }
 
 #[test]
+fn custom_messages_are_never_sent_to_the_provider() {
+    let request = ModelRequest::new(vec![
+        Message::system("sys"),
+        Message::Custom(crate::message::CustomMessage {
+            kind: "compaction".into(),
+            payload: json!({"summary": "..."}),
+            display: Some("Compacted 12 turns".into()),
+        }),
+        Message::user("hi"),
+    ]);
+    let body = model().translate_request(&request).unwrap();
+    let value = serde_json::to_value(&body).unwrap();
+    let messages = value["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0]["role"], json!("system"));
+    assert_eq!(messages[1]["role"], json!("user"));
+}
+
+#[test]
 fn translates_provider_options_for_local_openai_compatible_models() {
     let request = ModelRequest::new(vec![Message::user("hi")])
         .with_temperature(0.1)
@@ -196,6 +215,7 @@ fn translates_assistant_tool_calls_to_stringified_arguments() {
                 invalid: None,
             }],
             usage: None,
+            origin: None,
         }),
         Message::tool("call-1", "sunny, 21C"),
     ]);
@@ -2836,4 +2856,86 @@ async fn sse_stream_mid_stream_error_preserves_partial_message() {
         items.last(),
         Some(ModelStreamItem::ProviderFailed(_))
     ));
+}
+
+#[test]
+fn stamp_origin_records_provider_api_and_effective_model() {
+    let model = OpenAiModel::new("key").with_model("gpt-4.1");
+    let request = ModelRequest::default();
+    let mut response = ModelResponse {
+        message: crate::message::AssistantMessage {
+            id: None,
+            content: Vec::new(),
+            tool_calls: Vec::new(),
+            usage: None,
+            origin: None,
+        },
+        usage: None,
+        finish_reason: None,
+        raw: None,
+        resolved_model: None,
+        continue_turn: None,
+        served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
+    };
+    model.stamp_origin(&mut response, &request, CHAT_COMPLETIONS_API);
+    let origin = response.message.origin.expect("origin stamped");
+    assert_eq!(origin.provider, "openai");
+    assert_eq!(origin.api, "chat_completions");
+    assert_eq!(origin.model, "gpt-4.1");
+}
+
+#[test]
+fn stamp_origin_prefers_a_per_request_model_override() {
+    let model = OpenAiModel::new("key").with_model("gpt-4.1");
+    let request = ModelRequest {
+        model: Some("gpt-4.1-mini".to_string()),
+        ..Default::default()
+    };
+    let mut response = ModelResponse {
+        message: crate::message::AssistantMessage {
+            id: None,
+            content: Vec::new(),
+            tool_calls: Vec::new(),
+            usage: None,
+            origin: None,
+        },
+        usage: None,
+        finish_reason: None,
+        raw: None,
+        resolved_model: None,
+        continue_turn: None,
+        served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
+    };
+    model.stamp_origin(&mut response, &request, RESPONSES_API);
+    let origin = response.message.origin.expect("origin stamped");
+    assert_eq!(origin.api, "responses");
+    assert_eq!(origin.model, "gpt-4.1-mini");
+}
+
+#[tokio::test]
+async fn streamed_terminal_response_carries_origin() {
+    let raw: Vec<Vec<u8>> = vec![
+        b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\n"
+            .to_vec(),
+        b"data: [DONE]\n\n".to_vec(),
+    ];
+    let items = collect_sse(raw).await;
+    let completed = items
+        .into_iter()
+        .find_map(|item| match item {
+            ModelStreamItem::Completed(response) => Some(response),
+            _ => None,
+        })
+        .expect("a terminal Completed item");
+    let origin = completed
+        .message
+        .origin
+        .expect("origin stamped on stream terminal");
+    assert_eq!(origin.provider, "openai");
+    assert_eq!(origin.api, "chat_completions");
+    assert_eq!(origin.model, "gpt-4.1-mini");
 }

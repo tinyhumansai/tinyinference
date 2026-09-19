@@ -71,6 +71,8 @@ pub(crate) fn request_body(request: &ModelRequest, default_model: &str) -> Value
                     })],
                 );
             }
+            // Host-side out-of-band record; never sent to the provider.
+            Message::Custom(_) => {}
         }
     }
 

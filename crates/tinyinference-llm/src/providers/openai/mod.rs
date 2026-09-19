@@ -62,6 +62,14 @@ use crate::{Error, Result};
 
 use super::ProviderSpec;
 
+/// [`crate::message::MessageOrigin::api`] value stamped on responses built
+/// from the Chat Completions endpoint (including every OpenAI-compatible
+/// local-runtime preset, which shares this transport).
+pub(super) const CHAT_COMPLETIONS_API: &str = "chat_completions";
+/// [`crate::message::MessageOrigin::api`] value stamped on responses built
+/// from the `/v1/responses` endpoint.
+pub(super) const RESPONSES_API: &str = "responses";
+
 /// Default model id used when neither the request nor the builder override it.
 const DEFAULT_MODEL: &str = "gpt-4.1-mini";
 /// Default OpenAI API base URL.

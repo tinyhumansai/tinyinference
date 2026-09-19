@@ -548,6 +548,7 @@ fn model_stream_item_roundtrips_every_variant() {
             content: vec![crate::message::ContentBlock::Text("partial".into())],
             tool_calls: Vec::new(),
             usage: None,
+            origin: None,
         }),
         ..ProviderError::default()
     }));

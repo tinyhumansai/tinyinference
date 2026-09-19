@@ -383,6 +383,10 @@ impl AnthropicStreamAcc {
                 content,
                 tool_calls,
                 usage,
+                // Stamped by the `sse_next` call site (which owns
+                // `SseState::model`); this accumulator has no provider/model
+                // context of its own.
+                origin: None,
             },
             usage,
             finish_reason: self.stop_reason,
@@ -516,7 +520,12 @@ async fn sse_next(mut state: SseState) -> Option<(ModelStreamItem, SseState)> {
                 return None;
             }
             state.terminal_emitted = true;
-            let response = std::mem::take(&mut state.acc).into_response();
+            let mut response = std::mem::take(&mut state.acc).into_response();
+            response.message.origin = Some(crate::message::MessageOrigin {
+                provider: PROVIDER.to_string(),
+                api: super::MESSAGES_API.to_string(),
+                model: state.model.clone(),
+            });
             return Some((ModelStreamItem::Completed(response), state));
         }
         match state.bytes.next().await {

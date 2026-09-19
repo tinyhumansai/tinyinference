@@ -211,6 +211,24 @@ fn tool_results_use_anthropic_tool_result_blocks() {
     );
 }
 
+#[test]
+fn custom_messages_are_never_sent_to_the_provider() {
+    let request = ModelRequest::new(vec![
+        Message::user("hi"),
+        Message::Custom(crate::message::CustomMessage {
+            kind: "compaction".into(),
+            payload: serde_json::json!({"summary": "..."}),
+            display: Some("Compacted".into()),
+        }),
+        Message::assistant("hello"),
+    ]);
+    let body = request_body(&request, "test-model");
+    let messages = body["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0]["role"], "user");
+    assert_eq!(messages[1]["role"], "assistant");
+}
+
 /// Parallel tool calls answer as consecutive tool messages; the Messages API
 /// requires them merged into one user turn.
 #[test]
@@ -273,6 +291,7 @@ fn signed_thinking_is_replayed_and_unsigned_thinking_is_dropped() {
         ],
         tool_calls: vec![],
         usage: None,
+        origin: None,
     });
     let body = request_body(&ModelRequest::new(vec![Message::user("q"), assistant]), "m");
     let content = body["messages"][1]["content"].as_array().unwrap();
@@ -908,4 +927,66 @@ async fn provider_failed_terminal_carries_partial_message_and_stop_reason() {
         partial.content,
         vec![ContentBlock::Text("partial answer".to_string())]
     );
+}
+
+#[test]
+fn origin_for_records_provider_api_and_effective_model() {
+    let model = AnthropicModel::new("key").with_model("claude-opus-4-6");
+    let request = ModelRequest::default();
+    let origin = model.origin_for(&request);
+    assert_eq!(origin.provider, "anthropic");
+    assert_eq!(origin.api, "messages");
+    assert_eq!(origin.model, "claude-opus-4-6");
+}
+
+#[test]
+fn origin_for_prefers_a_per_request_model_override() {
+    let model = AnthropicModel::new("key").with_model("claude-opus-4-6");
+    let request = ModelRequest {
+        model: Some("claude-sonnet-4-6".to_string()),
+        ..Default::default()
+    };
+    let origin = model.origin_for(&request);
+    assert_eq!(origin.model, "claude-sonnet-4-6");
+}
+
+#[test]
+fn default_profile_advertises_the_tool_call_id_shape() {
+    let model = AnthropicModel::new("key");
+    let profile = &model.profile;
+    assert_eq!(
+        profile.tool_call_id_pattern.as_deref(),
+        Some("^[a-zA-Z0-9_-]{1,64}$")
+    );
+    assert_eq!(profile.max_tool_call_id_len, Some(64));
+}
+
+#[tokio::test]
+async fn streamed_terminal_response_carries_origin() {
+    let events = [
+        json!({"type":"message_start","message":{"id":"msg_o","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}),
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}),
+        json!({"type":"content_block_stop","index":0}),
+        json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}),
+        json!({"type":"message_stop"}),
+    ];
+    let items: Vec<ModelStreamItem> =
+        stream::stream_from_bytes(vec![sse(&events)], "claude-opus-4-6")
+            .collect()
+            .await;
+    let completed = items
+        .into_iter()
+        .find_map(|item| match item {
+            ModelStreamItem::Completed(response) => Some(response),
+            _ => None,
+        })
+        .expect("a terminal Completed item");
+    let origin = completed
+        .message
+        .origin
+        .expect("origin stamped on stream terminal");
+    assert_eq!(origin.provider, "anthropic");
+    assert_eq!(origin.api, "messages");
+    assert_eq!(origin.model, "claude-opus-4-6");
 }

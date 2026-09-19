@@ -584,6 +584,7 @@ impl ModelResponse {
                 content: vec![ContentBlock::Text(content.into())],
                 tool_calls: Vec::new(),
                 usage: None,
+                origin: None,
             },
             usage: None,
             finish_reason: None,
@@ -861,6 +862,7 @@ impl StreamAccumulator {
             content,
             tool_calls,
             usage: self.usage,
+            origin: None,
         };
         Ok(ModelResponse {
             message,

@@ -96,6 +96,7 @@ fn assistant_holds_tool_calls_and_usage() {
         content: vec![ContentBlock::Text("calling".into())],
         tool_calls: vec![ToolCall::new("c-1", "lookup", json!({}))],
         usage: Some(Usage::new(5, 5)),
+        origin: None,
     });
     if let Message::Assistant(a) = &msg {
         assert_eq!(a.tool_calls.len(), 1);
@@ -137,6 +138,7 @@ fn text_ignores_thinking_blocks() {
         ],
         tool_calls: Vec::new(),
         usage: None,
+        origin: None,
     });
     // Reasoning blocks must never leak into visible text.
     assert_eq!(msg.text(), "the answer is 42");
@@ -226,6 +228,47 @@ fn non_text_media_blocks_are_not_reasoning_and_carry_no_visible_text() {
     let block = ContentBlock::Audio(MediaRef::url("https://example.com/a.wav"));
     assert!(!block.is_reasoning());
     assert_eq!(block.as_text(), None);
+}
+
+#[test]
+fn custom_message_text_uses_display_and_carries_no_content_blocks() {
+    let custom = Message::Custom(CustomMessage {
+        kind: "compaction".into(),
+        payload: json!({"summary": "..."}),
+        display: Some("Compacted 40 turns".into()),
+    });
+    assert_eq!(custom.text(), "Compacted 40 turns");
+    assert_eq!(custom.char_len(), "Compacted 40 turns".chars().count());
+    assert_eq!(
+        custom.estimated_char_weight(),
+        "Compacted 40 turns".chars().count()
+    );
+    assert!(custom.artifact().is_none());
+
+    let no_display = Message::Custom(CustomMessage {
+        kind: "label".into(),
+        payload: json!({"name": "checkpoint"}),
+        display: None,
+    });
+    assert_eq!(no_display.text(), "");
+    assert_eq!(no_display.char_len(), 0);
+    assert_eq!(no_display.estimated_char_weight(), 0);
+}
+
+#[test]
+fn custom_message_round_trips_through_serde() {
+    let custom = Message::Custom(CustomMessage {
+        kind: "audit".into(),
+        payload: json!({"note": "reviewed"}),
+        display: None,
+    });
+    let wire = serde_json::to_value(&custom).unwrap();
+    assert_eq!(
+        wire,
+        json!({ "custom": { "kind": "audit", "payload": { "note": "reviewed" } } })
+    );
+    let back: Message = serde_json::from_value(wire).unwrap();
+    assert_eq!(back, custom);
 }
 
 #[test]
@@ -369,4 +412,59 @@ fn model_profile_default_disallows_mid_conversation_system_messages() {
     // the leading system message is always correct while inserting one where
     // the provider does not actually honor it silently loses content.
     assert!(!crate::model::ModelProfile::default().mid_conversation_system_messages);
+}
+
+// ---------------------------------------------------------------------------
+// AssistantMessage origin metadata
+// ---------------------------------------------------------------------------
+
+#[test]
+fn message_origin_round_trips_through_serde() {
+    let assistant = AssistantMessage {
+        id: Some("msg_1".into()),
+        content: vec![ContentBlock::Text("hi".into())],
+        tool_calls: Vec::new(),
+        usage: None,
+        origin: Some(MessageOrigin {
+            provider: "anthropic".into(),
+            api: "messages".into(),
+            model: "claude-sonnet-4-6".into(),
+        }),
+    };
+    let wire = serde_json::to_value(&assistant).unwrap();
+    assert_eq!(
+        wire["origin"],
+        json!({ "provider": "anthropic", "api": "messages", "model": "claude-sonnet-4-6" })
+    );
+    let back: AssistantMessage = serde_json::from_value(wire).unwrap();
+    assert_eq!(back, assistant);
+}
+
+#[test]
+fn message_origin_is_none_by_default_and_omitted_from_wire() {
+    let assistant = AssistantMessage {
+        id: None,
+        content: vec![ContentBlock::Text("hi".into())],
+        tool_calls: Vec::new(),
+        usage: None,
+        origin: None,
+    };
+    let wire = serde_json::to_value(&assistant).unwrap();
+    assert!(
+        wire.get("origin").is_none(),
+        "a None origin must not appear on the wire"
+    );
+}
+
+#[test]
+fn legacy_assistant_message_without_origin_field_deserializes_with_none() {
+    // Additive tagging: a journal serialized before `origin` existed must
+    // still deserialize, with the field defaulting to `None`.
+    let legacy = json!({
+        "id": "msg_1",
+        "content": [{ "text": "hi" }],
+        "tool_calls": [],
+    });
+    let assistant: AssistantMessage = serde_json::from_value(legacy).unwrap();
+    assert_eq!(assistant.origin, None);
 }

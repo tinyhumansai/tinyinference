@@ -309,6 +309,35 @@ pub struct AssistantMessage {
     /// Token usage reported for this message, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<Usage>,
+    /// The provider/api/model that produced this message, when known.
+    ///
+    /// Stamped by the provider adapter that built the response (unary or the
+    /// terminal item of a stream). Absent for messages authored by the host
+    /// (for example a synthesized system/user turn) or replayed from a
+    /// journal written before this field existed — both are `None` rather
+    /// than a guessed value. A cross-provider harness compares this against
+    /// the target model's origin before replaying the message on a different
+    /// provider; see `tinyagents_harness::agent_loop::handoff_transform`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<MessageOrigin>,
+}
+
+/// The provider/api/model that produced an [`AssistantMessage`].
+///
+/// Used to detect a mid-session provider or model switch so a cross-provider
+/// handoff transform can drop or rewrite content the new target cannot
+/// replay (signed thinking, provider-specific tool-call id shapes, and so
+/// on). Equality is structural: two origins are the same only when all three
+/// fields match exactly.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageOrigin {
+    /// Provider family identifier (for example `openai`, `anthropic`).
+    pub provider: String,
+    /// API surface used for the call (for example `chat_completions`,
+    /// `responses`, `messages`).
+    pub api: String,
+    /// Provider model id that produced the message.
+    pub model: String,
 }
 
 /// A tool result message correlated to a prior tool call.
@@ -342,6 +371,27 @@ pub enum Message {
     Assistant(AssistantMessage),
     /// Tool result.
     Tool(ToolMessage),
+    /// Host-defined out-of-band record (e.g. a compaction marker, a label, or
+    /// an audit note) that rides in the same message stream as ordinary
+    /// conversation turns but is never sent to a provider.
+    ///
+    /// Every request-building path (provider `convert`/`request` modules)
+    /// filters these out before serializing a provider payload; see the
+    /// `sanitize_history` / request-conversion call sites in each provider
+    /// module for the enforcement point.
+    Custom(CustomMessage),
+}
+
+/// Payload for [`Message::Custom`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CustomMessage {
+    /// Host-defined discriminator, e.g. `"compaction"` or `"label"`.
+    pub kind: String,
+    /// Host-defined structured payload.
+    pub payload: Value,
+    /// Optional human-readable rendering for transcript display.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
 }
 
 /// An incremental message update used for streaming model output.
