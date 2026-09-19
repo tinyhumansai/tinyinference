@@ -2289,8 +2289,11 @@ mod explicit_cache_control {
     #[test]
     fn openrouter_marks_the_last_system_and_user_messages() {
         let model = OpenAiModel::openrouter("key").with_model("anthropic/claude-sonnet-4-6");
+        let request = cacheable_request().with_provider_options(json!({
+            "prompt_cache_key": "stable-prefix-v1",
+        }));
         let body = model
-            .translate_request_with(&cacheable_request(), Degrade::default())
+            .translate_request_with(&request, Degrade::default())
             .unwrap();
         let json = serde_json::to_value(&body).unwrap();
         let messages = json["messages"].as_array().unwrap();
@@ -2305,6 +2308,29 @@ mod explicit_cache_control {
             json!({ "type": "ephemeral" })
         );
         assert_eq!(json.to_string().matches("cache_control").count(), 2);
+        assert_eq!(json["prompt_cache_key"], "stable-prefix-v1");
+    }
+
+    #[test]
+    fn fireworks_and_tinyhumans_forward_cache_key_without_openrouter_markers() {
+        let request = cacheable_request().with_provider_options(json!({
+            "prompt_cache_key": "stable-prefix-v1",
+        }));
+
+        for model in [
+            OpenAiModel::fireworks("key"),
+            OpenAiModel::tinyhumans("key", "openai/gpt-4.1-mini"),
+        ] {
+            let body = model
+                .translate_request_with(&request, Degrade::default())
+                .unwrap();
+            let json = serde_json::to_value(&body).unwrap();
+            assert_eq!(json["prompt_cache_key"], "stable-prefix-v1");
+            assert!(
+                !json.to_string().contains("cache_control"),
+                "only OpenRouter may receive explicit cache-control markers"
+            );
+        }
     }
 
     #[test]
@@ -2385,6 +2411,16 @@ mod explicit_cache_control {
         );
         assert!(
             !OpenAiModel::from_spec(spec(crate::providers::ProviderKind::Compatible), "k")
+                .unwrap()
+                .explicit_cache_control
+        );
+        assert!(
+            !OpenAiModel::from_spec(spec(crate::providers::ProviderKind::Fireworks), "k")
+                .unwrap()
+                .explicit_cache_control
+        );
+        assert!(
+            !OpenAiModel::from_spec(spec(crate::providers::ProviderKind::TinyHumans), "k")
                 .unwrap()
                 .explicit_cache_control
         );

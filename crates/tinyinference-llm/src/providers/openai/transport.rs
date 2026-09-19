@@ -611,6 +611,11 @@ impl OpenAiModel {
         if let Some(kind) = kind {
             return Self::local_runtime(kind, &spec.provider, spec.base_url, api_key, spec.model);
         }
+        // OpenRouter translates Anthropic-style content breakpoints to the
+        // selected upstream provider. Fireworks and TinyHumans instead use the
+        // OpenAI-compatible top-level `prompt_cache_key`, which is forwarded by
+        // `provider_extra_options` below; sending OpenRouter-only block markers
+        // to either endpoint would be invalid.
         let explicit_cache_control =
             matches!(spec.kind, crate::providers::ProviderKind::OpenRouter);
         Ok(
@@ -765,6 +770,35 @@ impl OpenAiModel {
             "openai/gpt-4o-mini",
         )
         .with_explicit_cache_control(true)
+    }
+
+    /// Fireworks AI (`https://api.fireworks.ai/inference/v1`).
+    ///
+    /// Fireworks uses OpenAI's `prompt_cache_key` as a session-affinity hint.
+    /// A key supplied through [`ModelRequest::provider_options`] is forwarded
+    /// unchanged; unlike OpenRouter, Fireworks does not receive content-level
+    /// `cache_control` markers.
+    pub fn fireworks(api_key: impl Into<String>) -> Self {
+        Self::compatible_provider(
+            "fireworks",
+            api_key,
+            "https://api.fireworks.ai/inference/v1",
+            "accounts/fireworks/models/llama-v3p1-8b-instruct",
+        )
+    }
+
+    /// TinyHumans' OpenAI-compatible gateway.
+    ///
+    /// The gateway accepts a caller-selected upstream model. It forwards the
+    /// OpenAI-compatible `prompt_cache_key` to retain affinity for a stable
+    /// prompt prefix, without OpenRouter-specific `cache_control` markers.
+    pub fn tinyhumans(api_key: impl Into<String>, model: impl Into<String>) -> Self {
+        Self::compatible_provider(
+            "tinyhumans",
+            api_key,
+            "https://api.tinyhumans.ai/openai/v1",
+            model,
+        )
     }
 
     /// Together AI (`https://api.together.xyz/v1`), default model
