@@ -119,11 +119,18 @@ impl AnthropicStreamAcc {
                     Some("tool_use") => {
                         let id = block["id"].as_str().unwrap_or_default().to_string();
                         let name = block["name"].as_str().unwrap_or_default().to_string();
+                        pending.push_back(ModelStreamItem::BlockStart {
+                            index,
+                            kind: BlockKind::ToolCall {
+                                id: id.clone(),
+                                name: name.clone(),
+                            },
+                        });
                         pending.push_back(ModelStreamItem::ToolCallDelta(ToolDelta {
                             call_id: id.clone(),
                             content: String::new(),
                             tool_name: Some(name.clone()),
-                            ..Default::default()
+                            content_index: Some(index),
                         }));
                         OpenBlock::ToolUse {
                             id,
@@ -131,16 +138,44 @@ impl AnthropicStreamAcc {
                             partial_json: String::new(),
                         }
                     }
-                    Some("thinking") => OpenBlock::Thinking {
-                        text: block["thinking"].as_str().unwrap_or_default().to_string(),
-                        signature: None,
-                    },
+                    Some("thinking") => {
+                        pending.push_back(ModelStreamItem::BlockStart {
+                            index,
+                            kind: BlockKind::Thinking,
+                        });
+                        let text = block["thinking"].as_str().unwrap_or_default().to_string();
+                        if !text.is_empty() {
+                            pending.push_back(ModelStreamItem::BlockDelta {
+                                index,
+                                delta: BlockDelta::Thinking(text.clone()),
+                            });
+                            pending.push_back(ModelStreamItem::MessageDelta(
+                                MessageDelta::reasoning(text.clone()),
+                            ));
+                        }
+                        OpenBlock::Thinking {
+                            text,
+                            signature: None,
+                        }
+                    }
                     Some("redacted_thinking") => {
+                        pending.push_back(ModelStreamItem::BlockStart {
+                            index,
+                            kind: BlockKind::Thinking,
+                        });
                         OpenBlock::Redacted(block["data"].as_str().unwrap_or_default().to_string())
                     }
                     _ => {
+                        pending.push_back(ModelStreamItem::BlockStart {
+                            index,
+                            kind: BlockKind::Text,
+                        });
                         let text = block["text"].as_str().unwrap_or_default().to_string();
                         if !text.is_empty() {
+                            pending.push_back(ModelStreamItem::BlockDelta {
+                                index,
+                                delta: BlockDelta::Text(text.clone()),
+                            });
                             pending.push_back(ModelStreamItem::MessageDelta(MessageDelta::text(
                                 text.clone(),
                             )));
@@ -158,6 +193,10 @@ impl AnthropicStreamAcc {
                     (Some("text_delta"), Some(OpenBlock::Text(text))) => {
                         let fragment = delta["text"].as_str().unwrap_or_default();
                         text.push_str(fragment);
+                        pending.push_back(ModelStreamItem::BlockDelta {
+                            index,
+                            delta: BlockDelta::Text(fragment.to_string()),
+                        });
                         pending.push_back(ModelStreamItem::MessageDelta(MessageDelta::text(
                             fragment.to_string(),
                         )));
@@ -172,16 +211,24 @@ impl AnthropicStreamAcc {
                     ) => {
                         let fragment = delta["partial_json"].as_str().unwrap_or_default();
                         partial_json.push_str(fragment);
+                        pending.push_back(ModelStreamItem::BlockDelta {
+                            index,
+                            delta: BlockDelta::ToolArgs(fragment.to_string()),
+                        });
                         pending.push_back(ModelStreamItem::ToolCallDelta(ToolDelta {
                             call_id: id.clone(),
                             content: fragment.to_string(),
                             tool_name: Some(name.clone()),
-                            ..Default::default()
+                            content_index: Some(index),
                         }));
                     }
                     (Some("thinking_delta"), Some(OpenBlock::Thinking { text, .. })) => {
                         let fragment = delta["thinking"].as_str().unwrap_or_default();
                         text.push_str(fragment);
+                        pending.push_back(ModelStreamItem::BlockDelta {
+                            index,
+                            delta: BlockDelta::Thinking(fragment.to_string()),
+                        });
                         pending.push_back(ModelStreamItem::MessageDelta(MessageDelta {
                             text: String::new(),
                             reasoning: fragment.to_string(),
@@ -197,6 +244,15 @@ impl AnthropicStreamAcc {
                     // this adapter does not model: ignore rather than fail the
                     // turn.
                     _ => {}
+                }
+            }
+            Some("content_block_stop") => {
+                let index = event_index(&event)?;
+                if let Some(block) = self.slot(index).clone() {
+                    pending.push_back(ModelStreamItem::BlockEnd {
+                        index,
+                        block: block.into_content_block(),
+                    });
                 }
             }
             Some("message_delta") => {
