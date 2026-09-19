@@ -1513,8 +1513,8 @@ dependencies = [
 
 [[package]]
 name = "tinytools"
-version = "0.2.0"
-source = "git+https://github.com/tinyhumansai/tinytools?branch=tool-dialect-unify#05dd8482b0fb77524b370fcf10f8f73dd221639d"
+version = "0.3.0"
+source = "git+https://github.com/tinyhumansai/tinytools?rev=a5d04a7f3af0abc1dd748f87f94871b36ae9fe71#a5d04a7f3af0abc1dd748f87f94871b36ae9fe71"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1524,8 +1524,8 @@ dependencies = [
 
 [[package]]
 name = "tinytools-agent"
-version = "0.2.0"
-source = "git+https://github.com/tinyhumansai/tinytools?branch=tool-dialect-unify#05dd8482b0fb77524b370fcf10f8f73dd221639d"
+version = "0.3.0"
+source = "git+https://github.com/tinyhumansai/tinytools?rev=a5d04a7f3af0abc1dd748f87f94871b36ae9fe71#a5d04a7f3af0abc1dd748f87f94871b36ae9fe71"
 dependencies = [
  "regex",
  "serde",
