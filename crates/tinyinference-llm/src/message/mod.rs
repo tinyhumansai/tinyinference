@@ -195,13 +195,11 @@ impl Message {
     /// silently never trigger even as the real context window overflows. See
     /// [`ContentBlock::estimated_char_weight`].
     pub fn estimated_char_weight(&self) -> usize {
-        let content = match self {
-            Message::System(m) => &m.content,
-            Message::User(m) => &m.content,
-            Message::Assistant(m) => &m.content,
-            Message::Tool(m) => &m.content,
-        };
-        let content_weight: usize = content
+        if let Message::Custom(m) = self {
+            return m.display.as_deref().map_or(0, |d| d.chars().count());
+        }
+        let content_weight: usize = self
+            .content_blocks()
             .iter()
             .map(ContentBlock::estimated_char_weight)
             .sum();
