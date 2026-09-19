@@ -1883,6 +1883,60 @@ async fn sse_stream_recovers_tool_args_with_leaked_template_marker() {
     assert_eq!(calls[0].name, "composio_execute");
     assert_eq!(calls[0].arguments, json!({ "q": 1 }));
 }
+#[test]
+fn prompt_guided_streaming_emits_the_scrubbers_flushed_suffix_before_completed() {
+    // Regression for a dropped-stream-output bug: the terminal `Completed`
+    // item used to discard `TextScrubber::flush()`'s return value outright,
+    // so a narrative suffix withheld pending marker disambiguation (here, a
+    // trailing `<tool_` that never resolves into a full `<tool_call>`) never
+    // reached a streaming consumer, even though the terminal response's own
+    // text still carried it.
+    let tools = vec![ToolSchema::new("x", "x", json!({"type": "object"}))];
+    let mut scrubber = crate::prompt_tools::TextScrubber::new(&tools);
+
+    let delta_items = scrub_prompt_guided_item(
+        ModelStreamItem::MessageDelta(crate::message::MessageDelta::text("before <tool_")),
+        &mut scrubber,
+        &tools,
+    );
+    assert_eq!(delta_items.len(), 1);
+    match &delta_items[0] {
+        ModelStreamItem::MessageDelta(delta) => assert_eq!(delta.text, "before "),
+        other => panic!("expected a MessageDelta, got {other:?}"),
+    }
+
+    let response = crate::model::ModelResponse::assistant("before <tool_");
+    let completed_items =
+        scrub_prompt_guided_item(ModelStreamItem::Completed(response), &mut scrubber, &tools);
+    assert_eq!(completed_items.len(), 2);
+    match &completed_items[0] {
+        ModelStreamItem::MessageDelta(delta) => assert_eq!(delta.text, "<tool_"),
+        other => panic!("expected the flushed suffix as a MessageDelta, got {other:?}"),
+    }
+    assert!(matches!(completed_items[1], ModelStreamItem::Completed(_)));
+}
+
+#[test]
+fn prompt_guided_streaming_completed_without_buffered_text_emits_one_item() {
+    // The common case: nothing was withheld, so `Completed` must not gain a
+    // spurious empty `MessageDelta` ahead of it.
+    let tools = vec![ToolSchema::new("x", "x", json!({"type": "object"}))];
+    let mut scrubber = crate::prompt_tools::TextScrubber::new(&tools);
+
+    let delta_items = scrub_prompt_guided_item(
+        ModelStreamItem::MessageDelta(crate::message::MessageDelta::text("plain text")),
+        &mut scrubber,
+        &tools,
+    );
+    assert_eq!(delta_items.len(), 1);
+
+    let response = crate::model::ModelResponse::assistant("plain text");
+    let completed_items =
+        scrub_prompt_guided_item(ModelStreamItem::Completed(response), &mut scrubber, &tools);
+    assert_eq!(completed_items.len(), 1);
+    assert!(matches!(completed_items[0], ModelStreamItem::Completed(_)));
+}
+
 // `ChatModel::profile` is generic over `State`; pin `State = ()` so the concrete
 // `OpenAiModel` handle disambiguates without a turbofish at every call site.
 fn profile_of(model: &OpenAiModel) -> &crate::model::ModelProfile {
