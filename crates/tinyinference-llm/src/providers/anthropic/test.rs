@@ -705,3 +705,62 @@ async fn oversized_sse_content_block_index_is_rejected() {
         Some(ModelStreamItem::ProviderFailed(error)) if error.message.contains("exceeds limit")
     ));
 }
+
+#[test]
+fn origin_for_records_provider_api_and_effective_model() {
+    let model = AnthropicModel::new("key").with_model("claude-opus-4-6");
+    let request = ModelRequest::default();
+    let origin = model.origin_for(&request);
+    assert_eq!(origin.provider, "anthropic");
+    assert_eq!(origin.api, "messages");
+    assert_eq!(origin.model, "claude-opus-4-6");
+}
+
+#[test]
+fn origin_for_prefers_a_per_request_model_override() {
+    let model = AnthropicModel::new("key").with_model("claude-opus-4-6");
+    let mut request = ModelRequest::default();
+    request.model = Some("claude-sonnet-4-6".to_string());
+    let origin = model.origin_for(&request);
+    assert_eq!(origin.model, "claude-sonnet-4-6");
+}
+
+#[test]
+fn default_profile_advertises_the_tool_call_id_shape() {
+    let model = AnthropicModel::new("key");
+    let profile = model.profile().expect("anthropic always has a profile");
+    assert_eq!(
+        profile.tool_call_id_pattern.as_deref(),
+        Some("^[a-zA-Z0-9_-]{1,64}$")
+    );
+    assert_eq!(profile.max_tool_call_id_len, Some(64));
+}
+
+#[tokio::test]
+async fn streamed_terminal_response_carries_origin() {
+    let events = [
+        json!({"type":"message_start","message":{"id":"msg_o","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}),
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}),
+        json!({"type":"content_block_stop","index":0}),
+        json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}),
+        json!({"type":"message_stop"}),
+    ];
+    let items: Vec<ModelStreamItem> = stream::stream_from_bytes(vec![sse(&events)], "claude-opus-4-6")
+        .collect()
+        .await;
+    let completed = items
+        .into_iter()
+        .find_map(|item| match item {
+            ModelStreamItem::Completed(response) => Some(response),
+            _ => None,
+        })
+        .expect("a terminal Completed item");
+    let origin = completed
+        .message
+        .origin
+        .expect("origin stamped on stream terminal");
+    assert_eq!(origin.provider, "anthropic");
+    assert_eq!(origin.api, "messages");
+    assert_eq!(origin.model, "claude-opus-4-6");
+}
