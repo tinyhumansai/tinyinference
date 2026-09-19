@@ -1381,7 +1381,9 @@ impl OpenAiModel {
                 )
             })?,
         };
-        Ok(responses::parse_responses_response(value))
+        let mut response = responses::parse_responses_response(value);
+        self.stamp_origin(&mut response, RESPONSES_API);
+        Ok(response)
     }
 
     /// Shared `POST {responses_url}` with auth, query params, and timeout, mapped
