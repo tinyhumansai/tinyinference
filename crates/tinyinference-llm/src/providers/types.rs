@@ -3,12 +3,71 @@
 //! All public and internal types for the `providers` module live here.
 //! Implementations and trait-impls are in `mod.rs`.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::model::ModelResponse;
+
+// ---------------------------------------------------------------------------
+// Provider request options
+// ---------------------------------------------------------------------------
+
+/// Host-supplied hooks and transport override applied around a single
+/// provider adapter's HTTP call.
+///
+/// Set on an adapter at construction time (for example
+/// `OpenAiModel::with_request_options`) rather than per [`crate::model::ModelRequest`]:
+/// [`ModelRequest`](crate::model::ModelRequest) is a serializable, provider-neutral value and
+/// cannot carry closures. `on_payload` runs immediately before the adapter
+/// serializes and sends the wire request body, so a host can inject
+/// provider-specific fields (for example a beta header's JSON companion, or
+/// an organization id) without the harness knowing about them. `on_response`
+/// runs after a successful response is parsed into JSON, before the adapter
+/// normalizes it, so a host can log or inspect the raw payload. `http`
+/// overrides the adapter's own [`reqwest::Client`] (for a custom proxy,
+/// timeout, or TLS configuration) when set.
+///
+/// Neither hook may fail: they observe or mutate in place. A hook that needs
+/// to reject a request should be implemented as request validation before the
+/// call is made instead.
+#[derive(Clone, Default)]
+pub struct ProviderRequestOptions {
+    /// Invoked with the mutable wire payload immediately before it is sent.
+    pub on_payload: Option<Arc<dyn Fn(&mut Value) + Send + Sync>>,
+    /// Invoked with the raw response payload after a successful call.
+    pub on_response: Option<Arc<dyn Fn(&Value) + Send + Sync>>,
+    /// HTTP client to use in place of the adapter's own, when set.
+    pub http: Option<reqwest::Client>,
+}
+
+impl ProviderRequestOptions {
+    /// Runs [`Self::on_payload`], when set.
+    pub fn apply_payload(&self, payload: &mut Value) {
+        if let Some(hook) = &self.on_payload {
+            hook(payload);
+        }
+    }
+
+    /// Runs [`Self::on_response`], when set.
+    pub fn observe_response(&self, response: &Value) {
+        if let Some(hook) = &self.on_response {
+            hook(response);
+        }
+    }
+}
+
+impl std::fmt::Debug for ProviderRequestOptions {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProviderRequestOptions")
+            .field("on_payload", &self.on_payload.as_ref().map(|_| "<fn>"))
+            .field("on_response", &self.on_response.as_ref().map(|_| "<fn>"))
+            .field("http", &self.http.as_ref().map(|_| "<reqwest::Client>"))
+            .finish()
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Provider selection types
