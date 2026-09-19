@@ -257,6 +257,7 @@ fn translates_structured_system_content_and_rejects_images() {
             url: "https://example.test/image.png".into(),
             mime_type: None,
         })],
+        ..Default::default()
     })]);
     assert!(model().translate_request(&invalid).is_err());
 }
