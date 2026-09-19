@@ -12,6 +12,7 @@ pub mod error;
 pub mod failure;
 pub mod message;
 pub mod model;
+mod network_guard;
 pub mod providers;
 pub mod sentiment;
 pub mod tool;
@@ -23,6 +24,7 @@ pub use failure::{
     provider_error_is_retryable, structured_http_status,
 };
 pub use message::{AssistantMessage, ContentBlock, Message, MessageDelta};
+pub use network_guard::{allow_network_models, deny_network_models, network_models_denied};
 pub use model::{
     ChatModel, ModelRequest, ModelResponse, ModelStream, ModelStreamItem,
     context_window_for_model_id, model_id_supports_vision,
