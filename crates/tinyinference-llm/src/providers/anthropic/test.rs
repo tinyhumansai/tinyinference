@@ -210,6 +210,24 @@ fn tool_results_use_anthropic_tool_result_blocks() {
     );
 }
 
+#[test]
+fn custom_messages_are_never_sent_to_the_provider() {
+    let request = ModelRequest::new(vec![
+        Message::user("hi"),
+        Message::Custom(crate::message::CustomMessage {
+            kind: "compaction".into(),
+            payload: serde_json::json!({"summary": "..."}),
+            display: Some("Compacted".into()),
+        }),
+        Message::assistant("hello"),
+    ]);
+    let body = request_body(&request, "test-model");
+    let messages = body["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0]["role"], "user");
+    assert_eq!(messages[1]["role"], "assistant");
+}
+
 /// Parallel tool calls answer as consecutive tool messages; the Messages API
 /// requires them merged into one user turn.
 #[test]
