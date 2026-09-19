@@ -595,21 +595,22 @@ impl SseState {
         if payload == "[DONE]" {
             self.completion_seen = true;
             self.finished = true;
+            // Defensive: normally already closed when the finish-reason chunk
+            // was ingested; a no-op if so.
+            let mut pending = std::mem::take(&mut self.pending);
+            self.acc.close_current_block(&mut pending);
+            self.pending = pending;
             return;
         }
         let Ok(value) = serde_json::from_str::<Value>(payload) else {
             if payload.starts_with('{') || payload.starts_with('[') {
-                self.pending
-                    .push_back(ModelStreamItem::ProviderFailed(ProviderError {
-                        provider: self.provider.clone(),
-                        model: Some(self.model.clone()),
-                        message: "provider returned malformed SSE JSON".into(),
-                        retryable: false,
-                        raw: Some(Value::String(payload.into())),
-                        ..ProviderError::default()
-                    }));
-                self.finished = true;
-                self.terminal_emitted = true;
+                let item = self.provider_failure(ProviderError {
+                    message: "provider returned malformed SSE JSON".into(),
+                    retryable: false,
+                    raw: Some(Value::String(payload.into())),
+                    ..ProviderError::default()
+                });
+                self.pending.push_back(item);
             }
             return;
         };
@@ -618,10 +619,9 @@ impl SseState {
         // `ChatCompletionChunk`, so it must be detected first and surfaced as a
         // terminal failure rather than folded in as an empty chunk and swallowed.
         if let Some(error) = value.get("error") {
-            self.pending
-                .push_back(ModelStreamItem::ProviderFailed(self.stream_error(error)));
-            self.finished = true;
-            self.terminal_emitted = true;
+            let error = self.stream_error(error);
+            let item = self.provider_failure(error);
+            self.pending.push_back(item);
             return;
         }
         if let Ok(chunk) = serde_json::from_value::<ChatCompletionChunk>(value) {
