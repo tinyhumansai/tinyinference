@@ -100,6 +100,7 @@ impl std::fmt::Debug for AnthropicModel {
             .field("temperature_override", &self.temperature_override)
             .field("temperature_unsupported", &self.temperature_unsupported)
             .field("allow_insecure_http", &self.allow_insecure_http)
+            .field("request_options", &self.request_options)
             .finish()
     }
 }
