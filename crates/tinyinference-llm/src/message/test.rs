@@ -6,7 +6,7 @@
 //! messages preserve their call id, and the [`MessageDelta`] default.
 
 use super::*;
-use crate::tool::ToolCall;
+use crate::tool::{ToolCall, ToolSchema};
 use crate::usage::Usage;
 use serde_json::json;
 
