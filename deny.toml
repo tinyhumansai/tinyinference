@@ -49,3 +49,6 @@ deny = []
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# TinyTools is a sibling TinyHumans repository; `tinytools-agent` is not on
+# crates.io.
+allow-git = ["https://github.com/tinyhumansai/tinytools"]
