@@ -2548,8 +2548,10 @@ fn stamp_origin_records_provider_api_and_effective_model() {
 #[test]
 fn stamp_origin_prefers_a_per_request_model_override() {
     let model = OpenAiModel::new("key").with_model("gpt-4.1");
-    let mut request = ModelRequest::default();
-    request.model = Some("gpt-4.1-mini".to_string());
+    let request = ModelRequest {
+        model: Some("gpt-4.1-mini".to_string()),
+        ..Default::default()
+    };
     let mut response = ModelResponse {
         message: crate::message::AssistantMessage {
             id: None,
