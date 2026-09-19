@@ -123,6 +123,7 @@ impl AnthropicStreamAcc {
                             call_id: id.clone(),
                             content: String::new(),
                             tool_name: Some(name.clone()),
+                            ..Default::default()
                         }));
                         OpenBlock::ToolUse {
                             id,
@@ -175,6 +176,7 @@ impl AnthropicStreamAcc {
                             call_id: id.clone(),
                             content: fragment.to_string(),
                             tool_name: Some(name.clone()),
+                            ..Default::default()
                         }));
                     }
                     (Some("thinking_delta"), Some(OpenBlock::Thinking { text, .. })) => {

@@ -457,11 +457,13 @@ fn finish_names_reconstructed_tool_call_from_the_call_opening_delta_name() {
         call_id: "call-1".into(),
         content: String::new(),
         tool_name: Some("search".into()),
+        ..Default::default()
     }));
     acc.push(&ModelStreamItem::ToolCallDelta(ToolDelta {
         call_id: "call-1".into(),
         content: r#"{"q":"rust"}"#.into(),
         tool_name: None,
+        ..Default::default()
     }));
 
     let finished = acc.finish().unwrap();
@@ -479,6 +481,7 @@ fn finish_marks_malformed_reconstructed_tool_arguments_invalid() {
         call_id: "call-1".into(),
         content: "{broken".into(),
         tool_name: Some("search".into()),
+        ..Default::default()
     }));
     let response = accumulator.finish().unwrap();
     let call = &response.message.tool_calls[0];
@@ -506,6 +509,7 @@ fn model_stream_item_roundtrips_every_variant() {
         call_id: "call-1".into(),
         content: "{\"q\":1}".into(),
         tool_name: None,
+        ..Default::default()
     }));
     roundtrip_stream_item(ModelStreamItem::UsageDelta(Usage::new(3, 5)));
     roundtrip_stream_item(ModelStreamItem::Completed(ModelResponse::assistant("done")));
