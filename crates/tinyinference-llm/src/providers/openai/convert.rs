@@ -99,25 +99,32 @@ fn translate_text_content(blocks: &[ContentBlock]) -> Result<String> {
 /// representation, so it fails closed with a validation error rather than being
 /// silently dropped.
 pub(super) fn translate_user_content(blocks: &[ContentBlock]) -> Result<MessageContentWire> {
-    let has_image = blocks
+    let has_media = blocks
         .iter()
-        .any(|block| matches!(block, ContentBlock::Image(_)));
+        .any(|block| matches!(block, ContentBlock::Image(_) | ContentBlock::Audio(_)));
 
-    if !has_image {
-        // No image: render as a single string, but still fail closed on blocks
-        // that cannot be represented.
+    if !has_media {
+        // No image/audio: render as a single string, but still fail closed on
+        // blocks that cannot be represented.
         let mut text = String::new();
         for block in blocks {
             match block {
                 ContentBlock::Text(t) => text.push_str(t),
                 ContentBlock::Json(value) => text.push_str(&value.to_string()),
-                ContentBlock::Image(_) => unreachable!("guarded by has_image"),
+                ContentBlock::Image(_) | ContentBlock::Audio(_) => {
+                    unreachable!("guarded by has_media")
+                }
                 // OpenAI-compatible requests have no representation for
                 // reasoning blocks; they are dropped rather than failing the
                 // request (matching the assistant path, which serializes via
                 // `Message::text` and drops them naturally).
                 ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => {}
-                ContentBlock::ProviderExtension(_) => {
+                // Chat Completions has no video or document input; fail
+                // closed rather than silently drop an attachment the caller
+                // expected to be sent.
+                ContentBlock::ProviderExtension(_)
+                | ContentBlock::Video(_)
+                | ContentBlock::Document(_) => {
                     return Err(unrepresentable_block_error());
                 }
             }
@@ -141,10 +148,13 @@ pub(super) fn translate_user_content(blocks: &[ContentBlock]) -> Result<MessageC
                     url: image.url.clone(),
                 },
             }),
+            ContentBlock::Audio(media) => parts.push(input_audio_part(media)?),
             // See the string-rendering arm above: reasoning blocks have no
             // OpenAI representation and are dropped, not failed.
             ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => {}
-            ContentBlock::ProviderExtension(_) => {
+            ContentBlock::ProviderExtension(_)
+            | ContentBlock::Video(_)
+            | ContentBlock::Document(_) => {
                 return Err(unrepresentable_block_error());
             }
         }
