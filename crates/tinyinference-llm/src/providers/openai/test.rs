@@ -671,6 +671,8 @@ fn provider_failed_stream_item_finishes_as_provider_error() {
         retryable: true,
         retry_after_ms: None,
         raw: None,
+        partial_message: None,
+        stop_reason: None,
     }));
 
     match accumulator.finish().unwrap_err() {
