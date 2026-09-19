@@ -78,7 +78,11 @@ fn translate_text_content(blocks: &[ContentBlock]) -> Result<String> {
             ContentBlock::Text(value) => text.push_str(value),
             ContentBlock::Json(value) => text.push_str(&value.to_string()),
             ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => {}
-            ContentBlock::Image(_) | ContentBlock::ProviderExtension(_) => {
+            ContentBlock::Image(_)
+            | ContentBlock::ProviderExtension(_)
+            | ContentBlock::Audio(_)
+            | ContentBlock::Video(_)
+            | ContentBlock::Document(_) => {
                 return Err(unrepresentable_block_error());
             }
         }
