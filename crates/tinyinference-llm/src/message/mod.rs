@@ -86,6 +86,13 @@ impl ContentBlock {
             ContentBlock::Thinking { text, .. } => text.chars().count(),
             ContentBlock::RedactedThinking { data } => data.chars().count(),
             ContentBlock::ProviderExtension(value) => value.to_string().chars().count(),
+            // Non-text media has no character-based weight of its own;
+            // charge the same flat weight as an image so budgeting/compaction
+            // does not under-count a transcript dominated by audio, video, or
+            // document attachments.
+            ContentBlock::Audio(_) | ContentBlock::Video(_) | ContentBlock::Document(_) => {
+                IMAGE_CHAR_WEIGHT
+            }
         }
     }
 }
