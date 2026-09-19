@@ -452,6 +452,8 @@ pub(super) fn convert_responses_usage(wire: &ResponsesUsage) -> Usage {
             .as_ref()
             .and_then(|d| d.reasoning_tokens)
             .unwrap_or(0),
+        charged_amount: None,
+        context_window_tokens: None,
     }
 }
 
@@ -566,6 +568,8 @@ pub(super) fn parse_responses_response(value: Value) -> ModelResponse {
         resolved_model: None,
         continue_turn: None,
         served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
     }
 }
 

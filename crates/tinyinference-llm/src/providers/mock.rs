@@ -248,6 +248,8 @@ impl<State: Send + Sync> ChatModel<State> for MockModel {
                     resolved_model: None,
                     continue_turn: None,
                     served_from_cache: false,
+                    correlation: None,
+                    resolved_route: None,
                 }
             }
 
@@ -268,7 +270,7 @@ impl<State: Send + Sync> ChatModel<State> for MockModel {
             response.message.id = Some(msg_id);
         }
 
-        Ok(response)
+        Ok(response.inherit_correlation(request.correlation))
     }
 
     /// Streams the model response as a real [`ModelStream`].
@@ -282,6 +284,7 @@ impl<State: Send + Sync> ChatModel<State> for MockModel {
     /// infrastructure. Tool-call (or otherwise text-less) responses emit a
     /// single empty text delta before completing.
     async fn stream(&self, state: &State, request: ModelRequest) -> Result<ModelStream> {
+        let correlation = request.correlation.clone();
         // Scripted streams are emitted verbatim so tests see the exact,
         // fine-grained item sequence rather than the invoke-and-replay split.
         if let MockBehavior::StreamScript(items) = &self.behavior {
@@ -292,7 +295,11 @@ impl<State: Send + Sync> ChatModel<State> for MockModel {
                     .map_err(|e| Error::Model(format!("MockModel lock poisoned: {e}")))?;
                 inner.call_count += 1;
             }
-            return Ok(Box::pin(futures::stream::iter(items.clone())));
+            let stream = ModelStream::new(Box::pin(futures::stream::iter(items.clone())));
+            return Ok(match correlation {
+                Some(correlation) => stream.with_correlation(correlation),
+                None => stream,
+            });
         }
 
         let response = self.invoke(state, request).await?;
@@ -322,7 +329,11 @@ impl<State: Send + Sync> ChatModel<State> for MockModel {
         }
 
         items.push(ModelStreamItem::Completed(response));
-        Ok(Box::pin(futures::stream::iter(items)))
+        let stream = ModelStream::new(Box::pin(futures::stream::iter(items)));
+        Ok(match correlation {
+            Some(correlation) => stream.with_correlation(correlation),
+            None => stream,
+        })
     }
 }
 
@@ -350,6 +361,8 @@ impl MockModel {
             resolved_model: None,
             continue_turn: None,
             served_from_cache: false,
+            correlation: None,
+            resolved_route: None,
         }
     }
 }

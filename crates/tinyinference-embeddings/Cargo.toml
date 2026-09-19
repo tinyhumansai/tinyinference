@@ -19,7 +19,7 @@ reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tinyinference-core = { version = "0.2.1", path = "../tinyinference-core" }
+tinyinference-core = { version = "0.3.0", path = "../tinyinference-core" }
 tokio = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }

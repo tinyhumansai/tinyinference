@@ -61,6 +61,13 @@ impl AddAssign for Usage {
         self.cache_read_tokens += rhs.cache_read_tokens;
         self.cache_creation_tokens += rhs.cache_creation_tokens;
         self.reasoning_tokens += rhs.reasoning_tokens;
+        self.context_window_tokens = rhs.context_window_tokens.or(self.context_window_tokens);
+        self.charged_amount = match (self.charged_amount.take(), rhs.charged_amount) {
+            (None, amount) | (amount, None) => amount,
+            (Some(left), Some(right)) => {
+                Some(ChargedAmount::new(left.micros.saturating_add(right.micros)))
+            }
+        };
     }
 }
 

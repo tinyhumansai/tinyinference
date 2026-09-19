@@ -6,7 +6,7 @@ use futures::StreamExt;
 use serde_json::json;
 
 use crate::message::{Message, MessageDelta};
-use crate::model::{ChatModel, ModelRequest, ModelStreamItem};
+use crate::model::{ChatModel, ModelCallCorrelation, ModelRequest, ModelResponse, ModelStreamItem};
 use crate::providers::{MockModel, ProviderKind, ProviderSpec};
 
 // ---------------------------------------------------------------------------
@@ -300,6 +300,43 @@ async fn streaming_script_appends_terminal_completion() {
         items.last(),
         Some(ModelStreamItem::Completed(response)) if response.text() == "partial"
     ));
+}
+
+#[tokio::test]
+async fn scripted_stream_preserves_request_and_provider_correlations() {
+    let provider_correlation = ModelCallCorrelation::new("provider-run", "provider-call");
+    let request_correlation = ModelCallCorrelation::new("request-run", "request-call");
+    let model = MockModel::streaming_script(vec![ModelStreamItem::Completed(
+        ModelResponse::assistant("done").with_correlation(provider_correlation.clone()),
+    )]);
+
+    let stream = model
+        .stream(
+            &NoState,
+            ModelRequest::default().with_correlation(request_correlation.clone()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        stream.metadata().correlation.as_ref(),
+        Some(&request_correlation)
+    );
+    let items = stream.collect::<Vec<_>>().await;
+    let Some(ModelStreamItem::Completed(response)) = items.last() else {
+        panic!("scripted stream must complete");
+    };
+    assert_eq!(response.correlation.as_ref(), Some(&provider_correlation));
+
+    let stream = model
+        .stream(&NoState, ModelRequest::default())
+        .await
+        .unwrap();
+    assert_eq!(stream.metadata().correlation, None);
+    let items = stream.collect::<Vec<_>>().await;
+    let Some(ModelStreamItem::Completed(response)) = items.last() else {
+        panic!("scripted stream must complete");
+    };
+    assert_eq!(response.correlation.as_ref(), Some(&provider_correlation));
 }
 
 // ---------------------------------------------------------------------------

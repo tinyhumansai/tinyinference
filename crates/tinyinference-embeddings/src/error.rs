@@ -17,4 +17,7 @@ pub enum Error {
     /// Embedding generation or vector-store behavior failed.
     #[error("embedding error: {0}")]
     Embedding(String),
+    /// The caller cancelled an embedding request.
+    #[error("embedding request cancelled")]
+    Cancelled,
 }

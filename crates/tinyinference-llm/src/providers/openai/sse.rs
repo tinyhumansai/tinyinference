@@ -279,6 +279,8 @@ impl OpenAiStreamAcc {
             resolved_model: None,
             continue_turn: None,
             served_from_cache: false,
+            correlation: None,
+            resolved_route: None,
         }
     }
 }

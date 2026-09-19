@@ -361,12 +361,16 @@ impl<State: Send + Sync> ChatModel<State> for AnthropicModel {
             .json()
             .await
             .map_err(|error| Error::Model(format!("anthropic response was not JSON: {error}")))?;
-        parse_response(body)
+        parse_response(body).map(|response| response.inherit_correlation(request.correlation))
     }
 
     async fn stream(&self, _state: &State, request: ModelRequest) -> Result<ModelStream> {
         let response = self.post(&request, true).await?;
         let model = self.request_model(&request).to_string();
-        Ok(stream::into_model_stream(response, model))
+        let stream = stream::into_model_stream(response, model);
+        Ok(match request.correlation {
+            Some(correlation) => stream.with_correlation(correlation),
+            None => stream,
+        })
     }
 }

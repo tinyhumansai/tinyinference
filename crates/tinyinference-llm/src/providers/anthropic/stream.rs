@@ -84,6 +84,10 @@ impl AnthropicStreamAcc {
                     .max(incoming.cache_creation_tokens),
                 reasoning_tokens: existing.reasoning_tokens.max(incoming.reasoning_tokens),
                 total_tokens: 0,
+                charged_amount: incoming.charged_amount.or(existing.charged_amount),
+                context_window_tokens: incoming
+                    .context_window_tokens
+                    .or(existing.context_window_tokens),
             },
             None => incoming,
         };
@@ -292,6 +296,8 @@ impl AnthropicStreamAcc {
             resolved_model: None,
             continue_turn: None,
             served_from_cache: false,
+            correlation: None,
+            resolved_route: None,
         }
     }
 }
@@ -459,7 +465,7 @@ pub(super) fn into_model_stream(response: reqwest::Response, model: String) -> M
         completion_seen: false,
         terminal_emitted: false,
     };
-    Box::pin(futures::stream::unfold(state, sse_next))
+    ModelStream::new(Box::pin(futures::stream::unfold(state, sse_next)))
 }
 
 /// Test seam: feeds raw SSE bytes through the same state machine the network
@@ -482,5 +488,5 @@ pub(super) fn stream_from_bytes(chunks: Vec<Vec<u8>>, model: &str) -> ModelStrea
         completion_seen: false,
         terminal_emitted: false,
     };
-    Box::pin(futures::stream::unfold(state, sse_next))
+    ModelStream::new(Box::pin(futures::stream::unfold(state, sse_next)))
 }

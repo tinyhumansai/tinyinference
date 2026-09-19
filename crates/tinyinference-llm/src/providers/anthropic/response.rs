@@ -90,6 +90,8 @@ pub(crate) fn parse_response(body: Value) -> Result<ModelResponse> {
         resolved_model: None,
         continue_turn: None,
         served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
     })
 }
 

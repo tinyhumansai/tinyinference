@@ -1711,7 +1711,10 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
     /// [`Error::Serialization`] when the response cannot be decoded.
     async fn invoke(&self, _state: &State, request: ModelRequest) -> Result<ModelResponse> {
         if self.responses_api_primary {
-            return self.invoke_responses(&request).await;
+            return self
+                .invoke_responses(&request)
+                .await
+                .map(|response| response.inherit_correlation(request.correlation));
         }
         let response = self
             .post_chat_with_degrade(&request, false, "request")
@@ -1730,9 +1733,11 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
             && !request.tools.is_empty()
             && request.tool_choice != ToolChoice::None
         {
-            return Ok(prompt_tools::apply_to_response(response));
+            return Ok(
+                prompt_tools::apply_to_response(response).inherit_correlation(request.correlation)
+            );
         }
-        Ok(response)
+        Ok(response.inherit_correlation(request.correlation))
     }
 
     /// Streams the OpenAI Chat Completions response as a real [`ModelStream`].
@@ -1755,6 +1760,7 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
     /// surfaced as [`ModelStreamItem::ProviderFailed`] inside the stream
     /// instead).
     async fn stream(&self, _state: &State, request: ModelRequest) -> Result<ModelStream> {
+        let correlation = request.correlation.clone();
         // The Responses path is text-in/text-out in this port: do the unary call
         // and surface it as a single terminal `Completed` (a leading `Started` +
         // one `MessageDelta` carrying the text so a UI still renders it). True
@@ -1771,7 +1777,11 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
                 ModelStreamItem::MessageDelta(delta),
                 ModelStreamItem::Completed(response),
             ];
-            return Ok(Box::pin(futures::stream::iter(items)));
+            let stream = ModelStream::new(Box::pin(futures::stream::iter(items)));
+            return Ok(match correlation {
+                Some(correlation) => stream.with_correlation(correlation),
+                None => stream,
+            });
         }
         let response = self
             .post_chat_with_degrade(&request, true, "stream request")
@@ -1811,7 +1821,11 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
                 ModelStreamItem::MessageDelta(delta),
                 ModelStreamItem::Completed(parsed),
             ];
-            return Ok(Box::pin(futures::stream::iter(items)));
+            let stream = ModelStream::new(Box::pin(futures::stream::iter(items)));
+            return Ok(match correlation {
+                Some(correlation) => stream.with_correlation(correlation),
+                None => stream,
+            });
         }
 
         // Forward each raw chunk as the `bytes::Bytes` buffer reqwest already
@@ -1843,14 +1857,22 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
             && !request.tools.is_empty()
             && request.tool_choice != ToolChoice::None
         {
-            return Ok(Box::pin(stream.map(|item| match item {
+            let stream = ModelStream::new(Box::pin(stream.map(|item| match item {
                 ModelStreamItem::Completed(response) => {
                     ModelStreamItem::Completed(prompt_tools::apply_to_response(response))
                 }
                 other => other,
             })));
+            return Ok(match correlation {
+                Some(correlation) => stream.with_correlation(correlation),
+                None => stream,
+            });
         }
-        Ok(Box::pin(stream))
+        let stream = ModelStream::new(Box::pin(stream));
+        Ok(match correlation {
+            Some(correlation) => stream.with_correlation(correlation),
+            None => stream,
+        })
     }
 }
 

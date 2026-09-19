@@ -14,7 +14,7 @@
 use std::pin::Pin;
 
 use async_trait::async_trait;
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -369,6 +369,59 @@ pub struct ResolvedModel {
     pub source: ModelResolutionSource,
 }
 
+/// Stable identifiers correlating one model call with its owning run.
+///
+/// Hosts allocate these identifiers before dispatch. Providers and generic
+/// decorators only preserve them; neither generates product run identifiers.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelCallCorrelation {
+    /// Stable identifier for the containing run.
+    pub run_id: String,
+    /// Stable identifier for this model call within the run.
+    pub call_id: String,
+}
+
+impl ModelCallCorrelation {
+    /// Creates a run/model-call correlation pair.
+    #[must_use]
+    pub fn new(run_id: impl Into<String>, call_id: impl Into<String>) -> Self {
+        Self {
+            run_id: run_id.into(),
+            call_id: call_id.into(),
+        }
+    }
+}
+
+/// The concrete provider, provider model, and host route that handled a call.
+///
+/// A route is an opaque host-selected label. TinyInference records it for
+/// observability but does not perform route or fallback policy.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedModelRoute {
+    /// Concrete provider family, for example `openai`.
+    pub provider: String,
+    /// Concrete provider model identifier.
+    pub model: String,
+    /// Host route or registry key that selected this provider/model pair.
+    pub route: String,
+}
+
+impl ResolvedModelRoute {
+    /// Creates a resolved model-route identity.
+    #[must_use]
+    pub fn new(
+        provider: impl Into<String>,
+        model: impl Into<String>,
+        route: impl Into<String>,
+    ) -> Self {
+        Self {
+            provider: provider.into(),
+            model: model.into(),
+            route: route.into(),
+        }
+    }
+}
+
 /// A provider-neutral chat model request.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ModelRequest {
@@ -386,6 +439,13 @@ pub struct ModelRequest {
     /// Model id or registry alias override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Host route requested for this call, distinct from a provider model id.
+    ///
+    /// This is observability metadata used to identify an actual fallback. It
+    /// must not be inferred from [`Self::model`], because provider model ids
+    /// and host route names occupy different namespaces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_route: Option<String>,
     /// Ordered runtime model-selection hints carried without interpretation.
     #[serde(default)]
     pub model_hints: Vec<ModelHint>,
@@ -440,6 +500,9 @@ pub struct ModelRequest {
     /// Provider-neutral reasoning configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<ReasoningConfig>,
+    /// Optional stable run/model-call correlation supplied by the host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correlation: Option<ModelCallCorrelation>,
 }
 
 /// A provider-neutral chat model response.
@@ -465,6 +528,28 @@ pub struct ModelResponse {
     /// Whether a consuming runtime served this response from local cache.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub served_from_cache: bool,
+    /// Stable run/model-call correlation carried from the request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correlation: Option<ModelCallCorrelation>,
+    /// Concrete provider/model/route identity for this completed call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_route: Option<ResolvedModelRoute>,
+}
+
+/// Metadata shared by every item in one model stream.
+///
+/// Streaming transports generally emit deltas before a provider can produce a
+/// terminal response. Keeping immutable call metadata on the stream makes the
+/// correlation and resolved route available from the first delta through the
+/// terminal item without repeating it in every chunk.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelStreamMetadata {
+    /// Stable run/model-call correlation for every stream item.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correlation: Option<ModelCallCorrelation>,
+    /// Concrete provider/model/route identity for every stream item.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_route: Option<ResolvedModelRoute>,
 }
 
 /// An incremental streamed chunk of a model response.
@@ -540,6 +625,10 @@ pub struct ProviderError {
 /// `{}`), so adjacent tagging is required for every variant to round-trip.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type", content = "content")]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the serialized stream contract keeps Completed inline; boxing it would be a needless allocation on every terminal response"
+)]
 pub enum ModelStreamItem {
     /// The stream has opened; no content has arrived yet.
     Started,
@@ -558,12 +647,169 @@ pub enum ModelStreamItem {
     ProviderFailed(ProviderError),
 }
 
-/// A pinned, boxed, `Send` stream of [`ModelStreamItem`]s.
+/// A cancellation guard owned by a model stream.
 ///
-/// This is the return type of [`ChatModel::stream`]. It is runtime-agnostic: the
-/// caller's executor drives it, and dropping it cancels consumption without any
-/// dependency on a specific async runtime.
-pub type ModelStream = Pin<Box<dyn Stream<Item = ModelStreamItem> + Send>>;
+/// Detached producer tasks should hand their [`tokio::task::AbortHandle`] to
+/// the consumer stream. Dropping an unfinished stream then aborts the producer
+/// instead of allowing a billed provider request to outlive its caller.
+#[derive(Debug)]
+pub struct AbortOnDrop {
+    abort_handle: tokio::task::AbortHandle,
+    armed: bool,
+}
+
+impl AbortOnDrop {
+    /// Creates a guard for a producer's abort handle.
+    #[must_use]
+    pub fn new(abort_handle: tokio::task::AbortHandle) -> Self {
+        Self {
+            abort_handle,
+            armed: true,
+        }
+    }
+
+    /// Creates a guard from a spawned producer task.
+    #[must_use]
+    pub fn from_join_handle<T>(handle: &tokio::task::JoinHandle<T>) -> Self {
+        Self::new(handle.abort_handle())
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        if self.armed {
+            self.abort_handle.abort();
+        }
+    }
+}
+
+/// A pinned, boxed, `Send` stream of [`ModelStreamItem`]s plus call metadata.
+///
+/// This is the return type of [`ChatModel::stream`]. It is runtime-agnostic:
+/// the caller's executor drives it. Producers may opt into
+/// [`ModelStream::abort_on_drop`] when they run in a detached Tokio task.
+pub struct ModelStream {
+    inner: Pin<Box<dyn Stream<Item = ModelStreamItem> + Send>>,
+    metadata: ModelStreamMetadata,
+    abort_on_drop: Option<AbortOnDrop>,
+}
+
+impl std::fmt::Debug for ModelStream {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ModelStream")
+            .field("metadata", &self.metadata)
+            .field("abort_on_drop", &self.abort_on_drop.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl ModelStream {
+    /// Wraps a stream with empty call metadata.
+    #[must_use]
+    pub fn new(inner: Pin<Box<dyn Stream<Item = ModelStreamItem> + Send>>) -> Self {
+        Self {
+            inner,
+            metadata: ModelStreamMetadata::default(),
+            abort_on_drop: None,
+        }
+    }
+
+    /// Returns immutable metadata shared by all emitted stream items.
+    #[must_use]
+    pub fn metadata(&self) -> &ModelStreamMetadata {
+        &self.metadata
+    }
+
+    /// Replaces metadata shared by all emitted stream items.
+    ///
+    /// A terminal [`ModelStreamItem::Completed`] inherits any absent
+    /// correlation or resolved route from this metadata when it is polled.
+    #[must_use]
+    pub fn with_metadata(mut self, metadata: ModelStreamMetadata) -> Self {
+        self.metadata = metadata;
+        self
+    }
+
+    /// Sets the stable run/model-call correlation for this stream.
+    ///
+    /// Repeated calls replace the previous value. A terminal
+    /// [`ModelStreamItem::Completed`] inherits the current value only when its
+    /// provider response did not set one.
+    #[must_use]
+    pub fn with_correlation(mut self, correlation: ModelCallCorrelation) -> Self {
+        self.metadata.correlation = Some(correlation);
+        self
+    }
+
+    /// Sets the concrete provider/model/route identity for this stream.
+    ///
+    /// Repeated calls replace the previous value. A terminal
+    /// [`ModelStreamItem::Completed`] inherits the current value only when its
+    /// provider response did not set one.
+    #[must_use]
+    pub fn with_resolved_route(mut self, route: ResolvedModelRoute) -> Self {
+        self.metadata.resolved_route = Some(route);
+        self
+    }
+
+    /// Aborts a detached producer if this stream is dropped before completion.
+    #[must_use]
+    pub fn abort_on_drop(mut self, guard: AbortOnDrop) -> Self {
+        self.abort_on_drop = Some(guard);
+        self
+    }
+
+    /// Maps emitted items while retaining stream metadata and cancellation.
+    #[must_use]
+    pub fn map_items(
+        self,
+        mapper: impl FnMut(ModelStreamItem) -> ModelStreamItem + Send + 'static,
+    ) -> Self {
+        Self {
+            inner: Box::pin(self.inner.map(mapper)),
+            metadata: self.metadata,
+            abort_on_drop: self.abort_on_drop,
+        }
+    }
+}
+
+impl Stream for ModelStream {
+    type Item = ModelStreamItem;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let mut item = self.inner.as_mut().poll_next(context);
+        if let std::task::Poll::Ready(Some(ModelStreamItem::Completed(response))) = &mut item {
+            if response.correlation.is_none() {
+                response.correlation.clone_from(&self.metadata.correlation);
+            }
+            if response.resolved_route.is_none() {
+                response
+                    .resolved_route
+                    .clone_from(&self.metadata.resolved_route);
+            }
+        }
+        if matches!(
+            &item,
+            std::task::Poll::Ready(Some(
+                ModelStreamItem::Completed(_)
+                    | ModelStreamItem::Failed(_)
+                    | ModelStreamItem::ProviderFailed(_)
+            ))
+        ) && let Some(guard) = self.abort_on_drop.as_mut()
+        {
+            guard.disarm();
+        }
+        item
+    }
+}
 
 /// A provider-neutral chat model.
 ///
@@ -600,6 +846,7 @@ pub trait ChatModel<State: Send + Sync>: Send + Sync {
     /// to a streaming endpoint (for example the OpenAI adapter) override this to
     /// emit incremental deltas as bytes arrive.
     async fn stream(&self, state: &State, request: ModelRequest) -> Result<ModelStream> {
+        let correlation = request.correlation.clone();
         let response = self.invoke(state, request).await?;
         let delta = MessageDelta {
             text: response.text(),
@@ -611,6 +858,10 @@ pub trait ChatModel<State: Send + Sync>: Send + Sync {
             ModelStreamItem::MessageDelta(delta),
             ModelStreamItem::Completed(response),
         ];
-        Ok(Box::pin(futures::stream::iter(items)))
+        let stream = ModelStream::new(Box::pin(futures::stream::iter(items)));
+        Ok(match correlation {
+            Some(correlation) => stream.with_correlation(correlation),
+            None => stream,
+        })
     }
 }

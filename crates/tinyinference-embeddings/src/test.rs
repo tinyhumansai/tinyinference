@@ -1,13 +1,16 @@
 //! Unit tests for the embeddings + retrieval module.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use serde_json::json;
 
 use super::*;
 
 struct ShortEmbeddingModel;
+
+struct WrongDimensionsEmbeddingModel;
 
 struct DiscoveringEmbeddingModel {
     dimensions: AtomicUsize,
@@ -50,6 +53,204 @@ impl EmbeddingModel for ShortEmbeddingModel {
     fn dimensions(&self) -> usize {
         2
     }
+}
+
+#[async_trait::async_trait]
+impl EmbeddingModel for WrongDimensionsEmbeddingModel {
+    fn name(&self) -> &str {
+        "wrong-dimensions"
+    }
+
+    fn model_id(&self) -> &str {
+        "wrong-dimensions"
+    }
+
+    async fn embed(&self, texts: &[String]) -> crate::Result<Vec<Vec<f32>>> {
+        Ok(vec![vec![1.0; 3]; texts.len()])
+    }
+
+    fn dimensions(&self) -> usize {
+        2
+    }
+}
+
+struct UsageEmbeddingModel;
+
+struct FailingCancelledEmbeddingModel {
+    cancellation: EmbeddingCancellation,
+}
+
+struct SlowEmbeddingModel {
+    started: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    dropped: Arc<AtomicBool>,
+}
+
+struct InFlightEmbedding(Arc<AtomicBool>);
+
+impl Drop for InFlightEmbedding {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
+}
+
+#[async_trait::async_trait]
+impl EmbeddingModel for SlowEmbeddingModel {
+    fn name(&self) -> &str {
+        "slow"
+    }
+
+    fn model_id(&self) -> &str {
+        "slow"
+    }
+
+    async fn embed(&self, _texts: &[String]) -> crate::Result<Vec<Vec<f32>>> {
+        let _in_flight = InFlightEmbedding(self.dropped.clone());
+        self.started
+            .lock()
+            .unwrap()
+            .take()
+            .expect("one slow embedding invocation")
+            .send(())
+            .expect("test waits for the invocation to start");
+        std::future::pending::<crate::Result<Vec<Vec<f32>>>>().await
+    }
+
+    fn dimensions(&self) -> usize {
+        2
+    }
+}
+
+#[async_trait::async_trait]
+impl EmbeddingModel for UsageEmbeddingModel {
+    fn name(&self) -> &str {
+        "usage"
+    }
+
+    fn model_id(&self) -> &str {
+        "usage"
+    }
+
+    async fn embed(&self, texts: &[String]) -> crate::Result<Vec<Vec<f32>>> {
+        Ok(vec![vec![1.0, 0.0]; texts.len()])
+    }
+
+    async fn embed_with_usage(
+        &self,
+        texts: &[String],
+    ) -> crate::Result<(Vec<Vec<f32>>, Option<EmbeddingUsage>)> {
+        Ok((
+            vec![vec![1.0, 0.0]; texts.len()],
+            Some(EmbeddingUsage::new(17)),
+        ))
+    }
+
+    fn dimensions(&self) -> usize {
+        2
+    }
+}
+
+#[async_trait::async_trait]
+impl EmbeddingModel for FailingCancelledEmbeddingModel {
+    fn name(&self) -> &str {
+        "failing-cancelled"
+    }
+
+    fn model_id(&self) -> &str {
+        "failing-cancelled"
+    }
+
+    async fn embed(&self, _texts: &[String]) -> crate::Result<Vec<Vec<f32>>> {
+        self.cancellation.cancel();
+        Err(crate::Error::Embedding(
+            "provider failed after cancellation".to_string(),
+        ))
+    }
+
+    fn dimensions(&self) -> usize {
+        2
+    }
+}
+
+#[tokio::test]
+async fn embedding_request_validates_order_dimensions_usage_and_cancellation() {
+    let model = UsageEmbeddingModel;
+    let response = model
+        .embed_request(EmbeddingRequest::new(vec![
+            "first".to_string(),
+            "second".to_string(),
+        ]))
+        .await
+        .unwrap();
+    assert_eq!(response.vectors, vec![vec![1.0, 0.0], vec![1.0, 0.0]]);
+    assert_eq!(response.dimensions, 2);
+    assert_eq!(response.usage, Some(EmbeddingUsage::new(17)));
+
+    let cancellation = EmbeddingCancellation::new();
+    cancellation.cancel();
+    let error = model
+        .embed_request(
+            EmbeddingRequest::new(vec!["never dispatched".to_string()])
+                .with_cancellation(cancellation),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, crate::Error::Cancelled));
+}
+
+#[tokio::test]
+async fn embedding_request_rejects_wrong_batch_count_and_dimensions() {
+    let inputs = vec!["a".to_string(), "b".to_string()];
+    let count_error = ShortEmbeddingModel
+        .embed_request(EmbeddingRequest::new(inputs.clone()))
+        .await
+        .unwrap_err();
+    assert!(matches!(count_error, crate::Error::Validation(_)));
+
+    let dimension_error = WrongDimensionsEmbeddingModel
+        .embed_request(EmbeddingRequest::new(inputs))
+        .await
+        .unwrap_err();
+    assert!(matches!(dimension_error, crate::Error::Validation(_)));
+}
+
+#[tokio::test]
+async fn embedding_request_cancellation_drops_an_in_flight_provider_operation() {
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let dropped = Arc::new(AtomicBool::new(false));
+    let model = Arc::new(SlowEmbeddingModel {
+        started: Mutex::new(Some(started_tx)),
+        dropped: dropped.clone(),
+    });
+    let cancellation = EmbeddingCancellation::new();
+    let request =
+        EmbeddingRequest::new(vec!["slow".to_string()]).with_cancellation(cancellation.clone());
+    let task = tokio::spawn({
+        let model = model.clone();
+        async move { model.embed_request(request).await }
+    });
+
+    started_rx.await.expect("provider operation starts");
+    cancellation.cancel();
+    let error = task.await.unwrap().unwrap_err();
+    assert!(matches!(error, crate::Error::Cancelled));
+    assert!(dropped.load(Ordering::Acquire));
+}
+
+#[tokio::test]
+async fn embedding_request_prefers_cancellation_when_provider_fails_after_cancelling() {
+    let cancellation = EmbeddingCancellation::new();
+    let model = FailingCancelledEmbeddingModel {
+        cancellation: cancellation.clone(),
+    };
+
+    let error = model
+        .embed_request(
+            EmbeddingRequest::new(vec!["input".to_string()]).with_cancellation(cancellation),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, crate::Error::Cancelled));
 }
 
 #[test]
@@ -505,6 +706,17 @@ fn openai_dimension_discovery_updates_the_trait_contract() {
 }
 
 // ── EmbeddingUsage ────────────────────────────────────────────────────────────
+
+#[test]
+fn embedding_usage_serializes_as_stable_token_metadata() {
+    let usage = EmbeddingUsage::new(128);
+    let encoded = serde_json::to_value(usage).expect("embedding usage serializes");
+    assert_eq!(encoded, json!({ "input_tokens": 128 }));
+    assert_eq!(
+        serde_json::from_value::<EmbeddingUsage>(encoded).unwrap(),
+        usage
+    );
+}
 
 #[test]
 fn openai_usage_reads_prompt_tokens() {

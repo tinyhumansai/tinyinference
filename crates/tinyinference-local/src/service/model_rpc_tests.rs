@@ -48,6 +48,8 @@ fn model_outcome_enforces_empty_and_normalizes_usage() {
         resolved_model: None,
         continue_turn: None,
         served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
     };
 
     assert!(model_outcome(response(" ", Usage::default()), false).is_err());
@@ -87,6 +89,8 @@ fn model_outcome_enforces_empty_and_normalizes_usage() {
         resolved_model: None,
         continue_turn: None,
         served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
     };
     assert_eq!(
         model_outcome(reasoning_only, false).unwrap().reply,

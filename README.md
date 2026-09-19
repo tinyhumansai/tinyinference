@@ -96,6 +96,16 @@ Tests are deterministic and offline. Provider integration tests operate on
 wire payloads and synthetic byte streams; constructing a hosted provider does
 not make a network call.
 
+## 0.3 migration
+
+Version 0.3 intentionally makes the model-boundary contract explicit.
+`ModelStream` is now a struct, so construct custom streams with
+`ModelStream::new(Box::pin(stream))` rather than returning a boxed stream
+directly. Set a host route through `ModelRequest::with_requested_route`; do not
+put it in `model`, which identifies a provider model or alias. Consult
+[`docs/migrations/0.3.md`](docs/migrations/0.3.md) for the complete migration
+map.
+
 ## License
 
 GPL-3.0-only. See [LICENSE](LICENSE).

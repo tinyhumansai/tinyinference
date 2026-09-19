@@ -367,6 +367,8 @@ pub(super) fn parse_chat_response(
         resolved_model: None,
         continue_turn: None,
         served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
     })
 }
 
@@ -561,6 +563,8 @@ pub(super) fn convert_usage(wire: UsageWire) -> Usage {
             .completion_tokens_details
             .map(|d| d.reasoning_tokens)
             .unwrap_or(0),
+        charged_amount: None,
+        context_window_tokens: None,
     }
 }
 

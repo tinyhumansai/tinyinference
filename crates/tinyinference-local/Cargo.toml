@@ -28,9 +28,9 @@ sha2 = { workspace = true }
 sysinfo = { workspace = true }
 tar = { workspace = true }
 thiserror = { workspace = true }
-tinyinference-core = { version = "0.2.1", path = "../tinyinference-core" }
-tinyinference-llm = { version = "0.2.1", path = "../tinyinference-llm" }
-tinyinference-embeddings = { version = "0.2.1", path = "../tinyinference-embeddings" }
+tinyinference-core = { version = "0.3.0", path = "../tinyinference-core" }
+tinyinference-llm = { version = "0.3.0", path = "../tinyinference-llm" }
+tinyinference-embeddings = { version = "0.3.0", path = "../tinyinference-embeddings" }
 tokio = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }

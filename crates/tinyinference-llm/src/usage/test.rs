@@ -22,12 +22,88 @@ fn add_accumulates_all_fields() {
         cache_read_tokens: 4,
         cache_creation_tokens: 5,
         reasoning_tokens: 6,
+        charged_amount: Some(ChargedAmount::usd_micros(42)),
+        context_window_tokens: Some(8_192),
     };
     let b = a;
     let sum = a + b;
     assert_eq!(sum.input_tokens, 2);
     assert_eq!(sum.cache_read_tokens, 8);
     assert_eq!(sum.reasoning_tokens, 12);
+    assert_eq!(sum.charged_amount, Some(ChargedAmount::usd_micros(84)));
+    assert_eq!(sum.context_window_tokens, Some(8_192));
+}
+
+#[test]
+fn usage_accumulation_preserves_optional_amounts_and_latest_context_window() {
+    let with_amount = Usage {
+        charged_amount: Some(ChargedAmount::usd_micros(17)),
+        context_window_tokens: Some(4_096),
+        ..Usage::default()
+    };
+    let without_amount = Usage {
+        context_window_tokens: Some(8_192),
+        ..Usage::default()
+    };
+
+    let sum = with_amount + without_amount;
+    assert_eq!(sum.charged_amount, Some(ChargedAmount::usd_micros(17)));
+    assert_eq!(sum.context_window_tokens, Some(8_192));
+
+    let reverse = without_amount + with_amount;
+    assert_eq!(reverse.charged_amount, Some(ChargedAmount::usd_micros(17)));
+    assert_eq!(reverse.context_window_tokens, Some(4_096));
+}
+
+#[test]
+fn usage_amount_accumulation_saturates_and_add_assign_preserves_context_window() {
+    let mut usage = Usage {
+        charged_amount: Some(ChargedAmount::usd_micros(i64::MAX - 1)),
+        context_window_tokens: Some(2_048),
+        ..Usage::default()
+    };
+    usage += Usage {
+        charged_amount: Some(ChargedAmount::usd_micros(2)),
+        context_window_tokens: None,
+        ..Usage::default()
+    };
+
+    assert_eq!(
+        usage.charged_amount,
+        Some(ChargedAmount::usd_micros(i64::MAX))
+    );
+    assert_eq!(usage.context_window_tokens, Some(2_048));
+}
+
+#[test]
+fn usage_serialization_preserves_optional_metadata_and_accepts_legacy_payloads() {
+    let usage = Usage {
+        input_tokens: 11,
+        output_tokens: 13,
+        charged_amount: Some(ChargedAmount::usd_micros(42)),
+        context_window_tokens: Some(128_000),
+        ..Usage::default()
+    };
+    let encoded = serde_json::to_value(usage).expect("usage serializes");
+    assert_eq!(
+        encoded["charged_amount"],
+        serde_json::json!({ "micros": 42 })
+    );
+    assert_eq!(encoded["context_window_tokens"], serde_json::json!(128_000));
+    assert_eq!(serde_json::from_value::<Usage>(encoded).unwrap(), usage);
+
+    let absent = serde_json::to_value(Usage::default()).expect("default usage serializes");
+    assert!(absent.get("charged_amount").is_none());
+    assert!(absent.get("context_window_tokens").is_none());
+
+    let legacy: Usage = serde_json::from_value(serde_json::json!({
+        "input_tokens": 3,
+        "output_tokens": 5,
+        "total_tokens": 8
+    }))
+    .expect("legacy usage without new metadata deserializes");
+    assert_eq!(legacy.charged_amount, None);
+    assert_eq!(legacy.context_window_tokens, None);
 }
 
 #[test]

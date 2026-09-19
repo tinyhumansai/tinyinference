@@ -1390,7 +1390,7 @@ dependencies = [
 
 [[package]]
 name = "tinyinference-core"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "httpdate",
@@ -1399,7 +1399,7 @@ dependencies = [
 
 [[package]]
 name = "tinyinference-embeddings"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "once_cell",
@@ -1416,7 +1416,7 @@ dependencies = [
 
 [[package]]
 name = "tinyinference-llm"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1435,7 +1435,7 @@ dependencies = [
 
 [[package]]
 name = "tinyinference-local"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "axum",
  "base64",
@@ -1467,7 +1467,7 @@ dependencies = [
 
 [[package]]
 name = "tinyinference-providers"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "base64",
@@ -1487,7 +1487,7 @@ dependencies = [
 
 [[package]]
 name = "tinyinference-voice"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "base64",
  "log",
