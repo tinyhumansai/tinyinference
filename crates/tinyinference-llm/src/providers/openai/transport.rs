@@ -1906,7 +1906,7 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
 pub(super) fn scrub_prompt_guided_item(
     item: ModelStreamItem,
     scrubber: &mut crate::prompt_tools::TextScrubber,
-    tools: &[ToolSchema],
+    tools: &[crate::tool::ToolSchema],
 ) -> Vec<ModelStreamItem> {
     match item {
         ModelStreamItem::MessageDelta(mut delta) if !delta.text.is_empty() => {
