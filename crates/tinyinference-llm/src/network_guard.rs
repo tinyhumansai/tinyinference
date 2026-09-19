@@ -41,7 +41,7 @@ pub fn network_models_denied() -> bool {
 /// Returns [`crate::Error::Validation`] when network models are denied,
 /// otherwise `Ok(())`. Network-backed provider adapters call this at the top
 /// of every request-issuing path.
-pub fn ensure_network_models_allowed() -> crate::Result<()> {
+pub(crate) fn ensure_network_models_allowed() -> crate::Result<()> {
     if network_models_denied() {
         return Err(crate::Error::Validation(
             "network-backed model calls are denied for this process; call \
