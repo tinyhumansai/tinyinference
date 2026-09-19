@@ -1402,7 +1402,7 @@ impl OpenAiModel {
             })?,
         };
         let mut response = responses::parse_responses_response(value);
-        self.stamp_origin(&mut response, RESPONSES_API);
+        self.stamp_origin(&mut response, request, RESPONSES_API);
         Ok(response)
     }
 
@@ -1786,7 +1786,7 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
 
         let value: Value = serde_json::from_str(&text)?;
         let mut response = parse_chat_response(value, self.effective_reasoning_tags())?;
-        self.stamp_origin(&mut response, CHAT_COMPLETIONS_API);
+        self.stamp_origin(&mut response, &request, CHAT_COMPLETIONS_API);
         // Prompt-guided tools: recover the model's `<tool_call>` blocks into
         // `message.tool_calls` when native tool calling was suppressed.
         if !self.profile.tool_calling
@@ -1865,7 +1865,7 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
             })?;
             let value: Value = serde_json::from_str(&text)?;
             let mut parsed = parse_chat_response(value, self.effective_reasoning_tags())?;
-            self.stamp_origin(&mut parsed, CHAT_COMPLETIONS_API);
+            self.stamp_origin(&mut parsed, &request, CHAT_COMPLETIONS_API);
             if !self.profile.tool_calling
                 && !request.tools.is_empty()
                 && request.tool_choice != ToolChoice::None
