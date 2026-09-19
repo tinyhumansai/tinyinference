@@ -719,8 +719,10 @@ fn origin_for_records_provider_api_and_effective_model() {
 #[test]
 fn origin_for_prefers_a_per_request_model_override() {
     let model = AnthropicModel::new("key").with_model("claude-opus-4-6");
-    let mut request = ModelRequest::default();
-    request.model = Some("claude-sonnet-4-6".to_string());
+    let request = ModelRequest {
+        model: Some("claude-sonnet-4-6".to_string()),
+        ..Default::default()
+    };
     let origin = model.origin_for(&request);
     assert_eq!(origin.model, "claude-sonnet-4-6");
 }
