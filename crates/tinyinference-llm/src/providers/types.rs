@@ -42,6 +42,12 @@ pub struct ProviderRequestOptions {
     pub http: Option<reqwest::Client>,
 }
 
+/// A payload-mutation hook: see [`ProviderRequestOptions::on_payload`].
+pub type PayloadHook = Arc<dyn Fn(&mut Value) + Send + Sync>;
+
+/// A response-observation hook: see [`ProviderRequestOptions::on_response`].
+pub type ResponseHook = Arc<dyn Fn(&Value) + Send + Sync>;
+
 impl ProviderRequestOptions {
     /// Runs [`Self::on_payload`], when set.
     pub fn apply_payload(&self, payload: &mut Value) {
