@@ -223,7 +223,10 @@ fn legacy_system_message_without_new_fields_deserializes_as_a_no_op_patch() {
     // must still deserialize: the new fields are all `#[serde(default)]`.
     let legacy = json!({ "content": [{ "text": "you are a helpful assistant" }] });
     let msg: SystemMessage = serde_json::from_value(legacy).unwrap();
-    assert_eq!(msg.content, vec![ContentBlock::Text("you are a helpful assistant".into())]);
+    assert_eq!(
+        msg.content,
+        vec![ContentBlock::Text("you are a helpful assistant".into())]
+    );
     assert!(msg.sections.is_empty());
     assert!(msg.tools_added.is_empty());
     assert!(msg.tools_removed.is_empty());
@@ -252,9 +255,10 @@ fn replay_system_state_folds_sections_and_tool_deltas_in_order() {
     let mut patch = SystemMessage::default();
     patch.tools_added = vec![tool("browse")];
     patch.tools_removed = vec!["read_file".to_string()];
-    patch
-        .sections
-        .insert("tool_changes".to_string(), Some("browse is now available.".to_string()));
+    patch.sections.insert(
+        "tool_changes".to_string(),
+        Some("browse is now available.".to_string()),
+    );
     let mut messages = turn1;
     messages.push(Message::assistant("ok"));
     messages.push(Message::System(patch));
@@ -272,7 +276,8 @@ fn replay_system_state_folds_sections_and_tool_deltas_in_order() {
 #[test]
 fn replay_system_state_section_removal_drops_it_from_the_effective_prompt() {
     let mut add = SystemMessage::default();
-    add.sections.insert("scratch".to_string(), Some("temporary note".to_string()));
+    add.sections
+        .insert("scratch".to_string(), Some("temporary note".to_string()));
     let mut remove = SystemMessage::default();
     remove.sections.insert("scratch".to_string(), None);
 
