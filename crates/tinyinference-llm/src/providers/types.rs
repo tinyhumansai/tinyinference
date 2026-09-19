@@ -32,12 +32,6 @@ use crate::model::ModelResponse;
 /// Neither hook may fail: they observe or mutate in place. A hook that needs
 /// to reject a request should be implemented as request validation before the
 /// call is made instead.
-/// A payload-mutation hook: see [`ProviderRequestOptions::on_payload`].
-pub type PayloadHook = Arc<dyn Fn(&mut Value) + Send + Sync>;
-
-/// A response-observation hook: see [`ProviderRequestOptions::on_response`].
-pub type ResponseHook = Arc<dyn Fn(&Value) + Send + Sync>;
-
 #[derive(Clone, Default)]
 pub struct ProviderRequestOptions {
     /// Invoked with the mutable wire payload immediately before it is sent.
