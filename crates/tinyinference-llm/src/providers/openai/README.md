@@ -166,7 +166,9 @@ custom deserializers), so hosted OpenAI is unaffected:
   JSON object instead of the OpenAI-standard stringified JSON; it is normalized
   to the parsed arguments either way.
 - **Malformed `arguments` JSON** — when arguments cannot be parsed even after the
-  conservative chat-template-marker repair (`recover_tool_arguments`), the call
+  shared repair ladder (`tinytools_agent::repair::json::recover_object`: leaked
+  chat-template markers, Kimi quote sentinels, fences, control characters,
+  trailing commas, bracket balance, bare keys), the call
   does **not** fail the model call. It is surfaced as a `ToolCall` with
   `invalid: Some(reason)` and the raw string preserved in `arguments`. The agent
   loop feeds `reason` back to the model as an error tool result (an
@@ -176,6 +178,36 @@ custom deserializers), so hosted OpenAI is unaffected:
   become a never-resolving tool call that stalls the loop. This leniency is
   unconditional: unlike `InvalidArgsPolicy` (which governs *schema* validation of
   well-formed arguments), an unparseable payload is a transport-level defect.
+
+## Prompt-guided tools
+
+A model whose profile reports `tool_calling = false`, or an endpoint that
+answered a native `tools` request with a "tools unsupported" 400 (the adapter
+latches native tools off the wire for the rest of the instance's life), is
+still handed tools — through the text protocol owned by `tinytools-agent`
+and bridged in `tinyinference_llm::prompt_tools`:
+
+1. **Request.** Structured assistant `tool_calls` are rewritten into
+   `<tool_call>{json}</tool_call>` text and consecutive `tool` results are
+   folded into one `[Tool results]` user turn under the `<tool_result>`
+   envelope (`coalesce_tool_results`); a transcript with no resolvable user
+   query gets a content-free continuation turn so Qwen-family templates do not
+   400 (`ensure_resolvable_user_turn`); the protocol block plus catalogue is
+   appended to the system prompt (`with_tool_instructions`). No `tools` go on
+   the wire.
+2. **Response.** The text is read through every grammar in
+   `tinytools_agent::parse` — `<tool_call>` in all its spellings, Claude /
+   DeepSeek DSML `<invoke>`, DeepSeek-R1 and Kimi sentinel tokens, gpt-oss
+   Harmony, Mistral `[TOOL_CALLS]`, GLM lines, bare JSON — with the offered
+   tool names enabling name repair. Recovered calls get process-unique
+   `text-{seq}-{slot}` ids; the narrative replaces the visible text and
+   reasoning blocks are kept (`recover_tool_calls`).
+3. **Streaming.** Text deltas pass through `TextScrubber`, so markup never
+   reaches a live consumer; calls are dispatched once, from the terminal
+   `Completed` response.
+
+Nothing in this adapter matches a model-specific marker. A new template
+format is one grammar file in `tinytools-agent`.
 
 ## Error handling
 

@@ -1014,6 +1014,15 @@ impl OpenAiModel {
         &self.base_url
     }
 
+    /// Whether `request` is served through the prompt-guided tool protocol:
+    /// the model has no native tool channel — by profile, or because a 400
+    /// latched native tools off the wire — yet was handed tools.
+    pub(super) fn prompt_guided_for(&self, request: &ModelRequest) -> bool {
+        (!self.profile.tool_calling || !self.native_tools_on_wire.load(Ordering::Relaxed))
+            && !request.tools.is_empty()
+            && request.tool_choice != ToolChoice::None
+    }
+
     /// The baseline request-shape degradations to apply for this instance,
     /// derived from its capability knobs. A `true` field means "degrade this
     /// shape on the wire".
@@ -1066,8 +1075,14 @@ impl OpenAiModel {
         };
         let instructed_messages;
         let base_messages: &[Message] = if prompt_guided_tools {
-            instructed_messages = prompt_tools::with_tool_instructions(
-                &request.messages,
+            // A prompt-guided model cannot read structured `tool_calls` or
+            // the `tool` role, and its own chat template may refuse a
+            // transcript with no user query — so the history is rewritten
+            // into the text protocol before the protocol block is added.
+            let coalesced = crate::prompt_tools::coalesce_tool_results(&request.messages);
+            let resolvable = crate::prompt_tools::ensure_resolvable_user_turn(&coalesced);
+            instructed_messages = crate::prompt_tools::with_tool_instructions(
+                &resolvable,
                 &prompt_tool_schemas,
                 &request.tool_choice,
             );
@@ -1761,14 +1776,12 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
 
         let value: Value = serde_json::from_str(&text)?;
         let response = parse_chat_response(value, self.effective_reasoning_tags())?;
-        // Prompt-guided tools: recover the model's `<tool_call>` blocks into
+        // Prompt-guided tools: recover text-mode tool calls into
         // `message.tool_calls` when native tool calling was suppressed.
-        if !self.profile.tool_calling
-            && !request.tools.is_empty()
-            && request.tool_choice != ToolChoice::None
-        {
+        if self.prompt_guided_for(&request) {
             return Ok(
-                prompt_tools::apply_to_response(response).inherit_correlation(request.correlation)
+                crate::prompt_tools::recover_tool_calls(response, &request.tools)
+                    .inherit_correlation(request.correlation),
             );
         }
         Ok(response.inherit_correlation(request.correlation))
@@ -1839,11 +1852,8 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
             })?;
             let value: Value = serde_json::from_str(&text)?;
             let mut parsed = parse_chat_response(value, self.effective_reasoning_tags())?;
-            if !self.profile.tool_calling
-                && !request.tools.is_empty()
-                && request.tool_choice != ToolChoice::None
-            {
-                parsed = prompt_tools::apply_to_response(parsed);
+            if self.prompt_guided_for(&request) {
+                parsed = crate::prompt_tools::recover_tool_calls(parsed, &request.tools);
             }
             let delta = crate::message::MessageDelta {
                 text: parsed.text(),
@@ -1884,18 +1894,38 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
         };
 
         let stream = futures::stream::unfold(state, sse_next);
-        // Prompt-guided tools: recover `<tool_call>` blocks from the terminal
-        // `Completed` response into `message.tool_calls` (the streamed text deltas
-        // still carry the raw markup — cleaning them mid-stream is a follow-up).
-        if !self.profile.tool_calling
-            && !request.tools.is_empty()
-            && request.tool_choice != ToolChoice::None
-        {
-            let stream = ModelStream::new(Box::pin(stream.map(|item| match item {
-                ModelStreamItem::Completed(response) => {
-                    ModelStreamItem::Completed(prompt_tools::apply_to_response(response))
-                }
-                other => other,
+        // Prompt-guided tools: scrub tool-call markup from the streamed text
+        // deltas as they arrive, and recover the calls from the terminal
+        // `Completed` response into `message.tool_calls`. Calls are dispatched
+        // from the terminal response only, so a consumer sees each exactly
+        // once; the scrubber's own releases are dropped.
+        if self.prompt_guided_for(&request) {
+            let tools = request.tools.clone();
+            let mut scrubber = crate::prompt_tools::TextScrubber::new(&tools);
+            let stream = ModelStream::new(Box::pin(stream.filter_map(move |item| {
+                let mapped = match item {
+                    ModelStreamItem::MessageDelta(mut delta) if !delta.text.is_empty() => {
+                        let (text, _released) = scrubber.feed(&delta.text);
+                        delta.text = text;
+                        // A delta the scrubber emptied carries nothing worth
+                        // waking a consumer for.
+                        if delta.text.is_empty()
+                            && delta.reasoning.is_empty()
+                            && delta.tool_call.is_none()
+                        {
+                            return futures::future::ready(None);
+                        }
+                        ModelStreamItem::MessageDelta(delta)
+                    }
+                    ModelStreamItem::Completed(response) => {
+                        let _ = scrubber.flush();
+                        ModelStreamItem::Completed(crate::prompt_tools::recover_tool_calls(
+                            response, &tools,
+                        ))
+                    }
+                    other => other,
+                };
+                futures::future::ready(Some(mapped))
             })));
             return Ok(match correlation {
                 Some(correlation) => stream.with_correlation(correlation),

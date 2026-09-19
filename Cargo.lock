@@ -1366,6 +1366,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tinyinference-core",
+ "tinytools-agent",
  "tokio",
  "tracing",
 ]
@@ -1439,6 +1440,28 @@ checksum = "b1e27c91459209c2986af3dcf603a5a74a4368754ce37414f59acc971167f643"
 dependencies = [
  "displaydoc",
  "zerovec",
+]
+
+[[package]]
+name = "tinytools"
+version = "0.3.0"
+source = "git+https://github.com/tinyhumansai/tinytools?rev=a5d04a7f3af0abc1dd748f87f94871b36ae9fe71#a5d04a7f3af0abc1dd748f87f94871b36ae9fe71"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "tinytools-agent"
+version = "0.3.0"
+source = "git+https://github.com/tinyhumansai/tinytools?rev=a5d04a7f3af0abc1dd748f87f94871b36ae9fe71#a5d04a7f3af0abc1dd748f87f94871b36ae9fe71"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "tinytools",
 ]
 
 [[package]]
