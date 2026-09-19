@@ -28,7 +28,7 @@ pub(super) fn parse_usage(usage: &Value) -> Usage {
     }
 }
 
-pub(crate) fn parse_response(body: Value) -> Result<ModelResponse> {
+pub(crate) fn parse_response(body: Value, provider: &str, model: &str) -> Result<ModelResponse> {
     let object = body
         .as_object()
         .ok_or_else(|| malformed("response must be an object"))?;
