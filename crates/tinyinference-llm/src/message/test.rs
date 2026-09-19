@@ -208,3 +208,110 @@ fn legacy_content_without_thinking_still_parses() {
     assert_eq!(blocks[0].as_text(), Some("hello"));
     assert!(!blocks[1].is_reasoning());
 }
+
+// ---------------------------------------------------------------------------
+// SystemMessage sections/tool deltas, replay_system_state (B6)
+// ---------------------------------------------------------------------------
+
+fn tool(name: &str) -> ToolSchema {
+    ToolSchema::new(name, format!("{name} tool"), json!({"type": "object"}))
+}
+
+#[test]
+fn legacy_system_message_without_new_fields_deserializes_as_a_no_op_patch() {
+    // A transcript persisted before SystemMessage gained sections/tool deltas
+    // must still deserialize: the new fields are all `#[serde(default)]`.
+    let legacy = json!({ "content": [{ "text": "you are a helpful assistant" }] });
+    let msg: SystemMessage = serde_json::from_value(legacy).unwrap();
+    assert_eq!(msg.content, vec![ContentBlock::Text("you are a helpful assistant".into())]);
+    assert!(msg.sections.is_empty());
+    assert!(msg.tools_added.is_empty());
+    assert!(msg.tools_removed.is_empty());
+}
+
+#[test]
+fn system_message_text_constructor_is_a_no_op_patch() {
+    let msg = SystemMessage::text("hello");
+    assert!(!msg.is_empty_patch());
+    assert!(msg.sections.is_empty());
+    assert!(msg.tools_added.is_empty());
+    assert!(msg.tools_removed.is_empty());
+
+    assert!(SystemMessage::default().is_empty_patch());
+}
+
+#[test]
+fn replay_system_state_folds_sections_and_tool_deltas_in_order() {
+    // Turn 1: baseline persona plus two tools.
+    let mut base = SystemMessage::text("You are Aria.");
+    base.tools_added = vec![tool("search"), tool("read_file")];
+    let turn1 = vec![Message::System(base), Message::user("hi")];
+
+    // Turn 2: a patch adds a "browse" tool, drops "read_file", and adds a
+    // named instructions section.
+    let mut patch = SystemMessage::default();
+    patch.tools_added = vec![tool("browse")];
+    patch.tools_removed = vec!["read_file".to_string()];
+    patch
+        .sections
+        .insert("tool_changes".to_string(), Some("browse is now available.".to_string()));
+    let mut messages = turn1;
+    messages.push(Message::assistant("ok"));
+    messages.push(Message::System(patch));
+    messages.push(Message::user("go"));
+
+    let (prompt, tools) = replay_system_state(&messages);
+
+    let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, vec!["search", "browse"]);
+    assert!(prompt.contains("You are Aria."));
+    assert!(prompt.contains("tool_changes"));
+    assert!(prompt.contains("browse is now available."));
+}
+
+#[test]
+fn replay_system_state_section_removal_drops_it_from_the_effective_prompt() {
+    let mut add = SystemMessage::default();
+    add.sections.insert("scratch".to_string(), Some("temporary note".to_string()));
+    let mut remove = SystemMessage::default();
+    remove.sections.insert("scratch".to_string(), None);
+
+    let messages = vec![Message::System(add), Message::System(remove)];
+    let (prompt, tools) = replay_system_state(&messages);
+    assert!(!prompt.contains("temporary note"));
+    assert!(tools.is_empty());
+}
+
+#[test]
+fn replay_system_state_later_tool_schema_for_same_name_wins() {
+    let mut first = SystemMessage::default();
+    first.tools_added = vec![ToolSchema::new("search", "v1", json!({"type": "object"}))];
+    let mut second = SystemMessage::default();
+    second.tools_added = vec![ToolSchema::new("search", "v2", json!({"type": "object"}))];
+
+    let messages = vec![Message::System(first), Message::System(second)];
+    let (_, tools) = replay_system_state(&messages);
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].description, "v2");
+}
+
+#[test]
+fn replay_system_state_ignores_non_system_messages() {
+    let messages = vec![
+        Message::user("hello"),
+        Message::assistant("hi"),
+        Message::tool("c-1", "result"),
+    ];
+    let (prompt, tools) = replay_system_state(&messages);
+    assert!(prompt.is_empty());
+    assert!(tools.is_empty());
+}
+
+#[test]
+fn model_profile_default_disallows_mid_conversation_system_messages() {
+    // Conservative default: a caller must opt in per-provider (see
+    // `providers::openai::transport::derive_profile`), because folding into
+    // the leading system message is always correct while inserting one where
+    // the provider does not actually honor it silently loses content.
+    assert!(!crate::model::ModelProfile::default().mid_conversation_system_messages);
+}
