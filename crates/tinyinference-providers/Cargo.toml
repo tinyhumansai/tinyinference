@@ -12,7 +12,7 @@ keywords = ["llm", "inference", "oauth", "providers"]
 categories = ["api-bindings", "authentication"]
 
 [dependencies]
-base64 = "0.22"
+base64 = "0.23"
 rand = "0.9"
 reqwest = { workspace = true }
 serde = { workspace = true }
