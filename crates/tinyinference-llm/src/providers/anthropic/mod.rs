@@ -72,6 +72,9 @@ const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 30;
 /// prose — the previous 1,024 truncated real tool calls mid-argument.
 const DEFAULT_MAX_TOKENS: u32 = 4096;
 const PROVIDER: &str = "anthropic";
+/// [`crate::message::MessageOrigin::api`] value stamped on every response
+/// this adapter builds (unary and streamed terminal).
+pub(super) const MESSAGES_API: &str = "messages";
 
 /// A chat model backed by Anthropic's native Messages API.
 pub struct AnthropicModel {
