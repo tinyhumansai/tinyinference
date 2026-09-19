@@ -20,7 +20,7 @@
 //! build offline and deterministic. The [`openai`] module is always compiled
 //! too (it pulls no extra dependencies) and additionally serves every
 //! OpenAI-compatible endpoint (Ollama, DeepSeek, Groq, xAI, OpenRouter,
-//! Together, and Mistral) through the same
+//! Fireworks, TinyHumans, Together, and Mistral) through the same
 //! Chat Completions wire format. The default build stays offline anyway: the
 //! adapter only touches the network when invoked, and the live tests
 //! early-return without `OPENAI_API_KEY`.

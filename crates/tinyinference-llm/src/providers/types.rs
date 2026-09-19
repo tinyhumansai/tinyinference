@@ -42,6 +42,10 @@ pub enum ProviderKind {
     Xai,
     /// OpenRouter OpenAI-compatible endpoint.
     OpenRouter,
+    /// Fireworks AI OpenAI-compatible endpoint.
+    Fireworks,
+    /// TinyHumans OpenAI-compatible gateway.
+    TinyHumans,
     /// Together AI OpenAI-compatible endpoint.
     Together,
     /// Mistral OpenAI-compatible endpoint.
@@ -64,6 +68,8 @@ impl ProviderKind {
             ProviderKind::Groq => "groq",
             ProviderKind::Xai => "xai",
             ProviderKind::OpenRouter => "openrouter",
+            ProviderKind::Fireworks => "fireworks",
+            ProviderKind::TinyHumans => "tinyhumans",
             ProviderKind::Together => "together",
             ProviderKind::Mistral => "mistral",
             ProviderKind::Compatible => "compatible",
@@ -91,6 +97,8 @@ impl ProviderKind {
                 "groq" => Some(ProviderKind::Groq),
                 "xai" => Some(ProviderKind::Xai),
                 "openrouter" => Some(ProviderKind::OpenRouter),
+                "fireworks" => Some(ProviderKind::Fireworks),
+                "tinyhumans" | "tiny_humans" | "tiny-humans" => Some(ProviderKind::TinyHumans),
                 "together" => Some(ProviderKind::Together),
                 "mistral" | "mistralai" => Some(ProviderKind::Mistral),
                 _ => None,
@@ -185,6 +193,24 @@ impl ProviderSpec {
                 "openai/gpt-4o-mini",
                 "https://openrouter.ai/api/v1",
                 Some("OPENROUTER_API_KEY"),
+                true,
+            ),
+            ProviderKind::Fireworks => Self::new(
+                kind,
+                "accounts/fireworks/models/llama-v3p1-8b-instruct",
+                "https://api.fireworks.ai/inference/v1",
+                Some("FIREWORKS_API_KEY"),
+                true,
+            ),
+            // The gateway supports many upstream models, so callers must pick
+            // one explicitly rather than silently routing to an arbitrary
+            // default. Its prompt-cache key is still lowered by the shared
+            // OpenAI-compatible adapter.
+            ProviderKind::TinyHumans => Self::new(
+                kind,
+                "",
+                "https://api.tinyhumans.ai/openai/v1",
+                Some("TINYHUMANS_AUTH_TOKEN"),
                 true,
             ),
             ProviderKind::Together => Self::new(

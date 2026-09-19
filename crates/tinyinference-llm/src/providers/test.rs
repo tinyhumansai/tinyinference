@@ -418,6 +418,14 @@ fn provider_kind_infers_langchain_style_model_names() {
         Some(ProviderKind::Ollama)
     );
     assert_eq!(
+        ProviderKind::infer("fireworks:accounts/fireworks/models/llama-v3p1-8b-instruct"),
+        Some(ProviderKind::Fireworks)
+    );
+    assert_eq!(
+        ProviderKind::infer("tinyhumans:openai/gpt-4.1-mini"),
+        Some(ProviderKind::TinyHumans)
+    );
+    assert_eq!(
         ProviderKind::infer("gpt-4.1-mini"),
         Some(ProviderKind::OpenAi)
     );
@@ -448,4 +456,16 @@ fn provider_spec_defaults_and_overrides_are_normalized() {
     let openai = ProviderSpec::for_kind(ProviderKind::OpenAi);
     assert_eq!(openai.api_key_env.as_deref(), Some("OPENAI_API_KEY"));
     assert!(openai.requires_api_key);
+
+    let fireworks = ProviderSpec::for_kind(ProviderKind::Fireworks);
+    assert_eq!(fireworks.api_key_env.as_deref(), Some("FIREWORKS_API_KEY"));
+    assert_eq!(fireworks.base_url, "https://api.fireworks.ai/inference/v1");
+
+    let tinyhumans = ProviderSpec::for_kind(ProviderKind::TinyHumans);
+    assert_eq!(
+        tinyhumans.api_key_env.as_deref(),
+        Some("TINYHUMANS_AUTH_TOKEN")
+    );
+    assert_eq!(tinyhumans.base_url, "https://api.tinyhumans.ai/openai/v1");
+    assert!(tinyhumans.model.is_empty());
 }
