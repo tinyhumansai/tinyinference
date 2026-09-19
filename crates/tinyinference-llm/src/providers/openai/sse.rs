@@ -149,7 +149,7 @@ impl OpenAiStreamAcc {
                             // the call-opening fragment) so consumers can label the
                             // call as it streams; the accumulator keeps the first.
                             tool_name: Some(slot.name.clone()).filter(|n| !n.is_empty()),
-                            ..Default::default()
+                            content_index: Some(idx),
                         }));
                     }
                 }
