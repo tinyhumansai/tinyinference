@@ -1422,6 +1422,7 @@ dependencies = [
 name = "tinyinference-voice"
 version = "0.3.0"
 dependencies = [
+ "axum",
  "base64 0.23.1",
  "reqwest",
  "serde",

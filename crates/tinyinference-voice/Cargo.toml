@@ -21,5 +21,8 @@ tinyinference-local = { version = "0.3.0", path = "../tinyinference-local" }
 tokio = { workspace = true, features = ["fs", "io-util"] }
 uuid = { workspace = true }
 
+[dev-dependencies]
+axum = { workspace = true }
+
 [lints]
 workspace = true
