@@ -275,10 +275,15 @@ fn assistant_blocks(content: &[ContentBlock]) -> Vec<Value> {
 /// replay newer block types without waiting for a TinyInference release.
 fn provider_extension_block(value: &Value) -> Option<Value> {
     let object = value.as_object()?;
-    object
-        .get("type")
-        .and_then(Value::as_str)
-        .map(|_| value.clone())
+    let block_type = object.get("type").and_then(Value::as_str)?;
+    // Provider extensions are for block types this adapter does not model.
+    // Rejecting native types prevents callers from bypassing their normalized
+    // representations with incomplete provider-shaped JSON.
+    (!matches!(
+        block_type,
+        "text" | "image" | "document" | "tool_use" | "thinking" | "redacted_thinking"
+    ))
+    .then(|| value.clone())
 }
 
 /// Renders an image reference: a `data:` URI becomes an inline base64 source,

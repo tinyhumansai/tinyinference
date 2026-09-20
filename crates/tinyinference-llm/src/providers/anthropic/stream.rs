@@ -92,18 +92,20 @@ impl OpenBlock {
                 }))
             }
             OpenBlock::ProviderExtension {
-                mut value,
+                value,
                 partial_json,
-            } => {
-                if !partial_json.trim().is_empty()
-                    && let Ok(input) = serde_json::from_str::<Value>(&partial_json)
-                {
-                    value["input"] = input;
-                }
-                ContentBlock::ProviderExtension(value)
-            }
+            } => ContentBlock::ProviderExtension(provider_extension_value(value, partial_json)),
         }
     }
+}
+
+fn provider_extension_value(mut value: Value, partial_json: String) -> Value {
+    if !partial_json.trim().is_empty()
+        && let Ok(input) = serde_json::from_str::<Value>(&partial_json)
+    {
+        value["input"] = input;
+    }
+    value
 }
 
 /// Provider-side accumulator rebuilding the terminal [`ModelResponse`].
@@ -373,8 +375,14 @@ impl AnthropicStreamAcc {
                     content.push(ContentBlock::Thinking { text, signature });
                 }
                 OpenBlock::Redacted(data) => content.push(ContentBlock::RedactedThinking { data }),
-                OpenBlock::ProviderExtension { value, .. } => {
-                    content.push(ContentBlock::ProviderExtension(value));
+                OpenBlock::ProviderExtension {
+                    value,
+                    partial_json,
+                } => {
+                    content.push(ContentBlock::ProviderExtension(provider_extension_value(
+                        value,
+                        partial_json,
+                    )));
                 }
                 OpenBlock::ToolUse {
                     id,

@@ -480,6 +480,16 @@ fn malformed_provider_extension_blocks_are_not_sent() {
             .unwrap()
             .is_empty()
     );
+
+    let native_block = ModelRequest::new(vec![Message::User(crate::message::UserMessage {
+        content: vec![ContentBlock::ProviderExtension(json!({"type": "text"}))],
+    })]);
+    assert!(
+        request_body(&native_block, "m")["messages"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -800,6 +810,17 @@ async fn streaming_reconstructs_extension_input_fragments_and_boundaries() {
             block: ContentBlock::ProviderExtension(value)
         } if value["input"] == json!({"query": "rust"})
     )));
+    assert!(matches!(
+        items.last(),
+        Some(ModelStreamItem::Completed(response))
+            if response.message.content
+                == vec![ContentBlock::ProviderExtension(json!({
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_1",
+                    "name": "web_search",
+                    "input": {"query": "rust"}
+                }))]
+    ));
     assert!(matches!(items.last(), Some(ModelStreamItem::Completed(_))));
 }
 
