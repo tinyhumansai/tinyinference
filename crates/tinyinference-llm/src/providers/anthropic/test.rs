@@ -3,7 +3,7 @@ use serde_json::json;
 
 use super::*;
 use crate::cache::CachePolicy;
-use crate::message::{ContentBlock, ImageRef, Message, ToolMessage};
+use crate::message::{AssistantMessage, ContentBlock, ImageRef, Message, ToolMessage};
 use crate::model::{
     BlockDelta, BlockKind, ModelStreamItem, PromptSegment, ReasoningConfig, ReasoningEffort,
     SegmentRole, ToolChoice,
