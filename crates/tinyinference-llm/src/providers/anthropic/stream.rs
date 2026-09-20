@@ -55,7 +55,10 @@ enum OpenBlock {
         signature: Option<String>,
     },
     Redacted(String),
-    ProviderExtension(Value),
+    ProviderExtension {
+        value: Value,
+        partial_json: String,
+    },
 }
 
 impl OpenBlock {
@@ -88,7 +91,17 @@ impl OpenBlock {
                     "arguments": arguments,
                 }))
             }
-            OpenBlock::ProviderExtension(value) => ContentBlock::ProviderExtension(value),
+            OpenBlock::ProviderExtension {
+                mut value,
+                partial_json,
+            } => {
+                if !partial_json.trim().is_empty()
+                    && let Ok(input) = serde_json::from_str::<Value>(&partial_json)
+                {
+                    value["input"] = input;
+                }
+                ContentBlock::ProviderExtension(value)
+            }
         }
     }
 }
@@ -220,7 +233,18 @@ impl AnthropicStreamAcc {
                         }
                         OpenBlock::Text(text)
                     }
-                    _ => OpenBlock::ProviderExtension(block.clone()),
+                    _ => {
+                        pending.push_back(ModelStreamItem::BlockStart {
+                            index,
+                            kind: BlockKind::ProviderExtension {
+                                block_type: block["type"].as_str().unwrap_or_default().to_string(),
+                            },
+                        });
+                        OpenBlock::ProviderExtension {
+                            value: block.clone(),
+                            partial_json: String::new(),
+                        }
+                    }
                 };
                 *self.slot(index) = Some(open);
             }
@@ -261,21 +285,12 @@ impl AnthropicStreamAcc {
                             content_index: Some(index),
                         }));
                     }
-                    (Some("input_json_delta"), Some(OpenBlock::ProviderExtension(value))) => {
+                    (
+                        Some("input_json_delta"),
+                        Some(OpenBlock::ProviderExtension { partial_json, .. }),
+                    ) => {
                         let fragment = delta["partial_json"].as_str().unwrap_or_default();
-                        if let Ok(parsed) = serde_json::from_str::<Value>(fragment) {
-                            if let Some(object) = parsed.as_object() {
-                                if let Some(input_object) = value["input"].as_object_mut() {
-                                    for (key, item) in object {
-                                        input_object.insert(key.clone(), item.clone());
-                                    }
-                                } else {
-                                    value["input"] = parsed;
-                                }
-                            } else {
-                                value["input"] = parsed;
-                            }
-                        }
+                        partial_json.push_str(fragment);
                     }
                     (Some("thinking_delta"), Some(OpenBlock::Thinking { text, .. })) => {
                         let fragment = delta["thinking"].as_str().unwrap_or_default();
@@ -358,7 +373,7 @@ impl AnthropicStreamAcc {
                     content.push(ContentBlock::Thinking { text, signature });
                 }
                 OpenBlock::Redacted(data) => content.push(ContentBlock::RedactedThinking { data }),
-                OpenBlock::ProviderExtension(value) => {
+                OpenBlock::ProviderExtension { value, .. } => {
                     content.push(ContentBlock::ProviderExtension(value));
                 }
                 OpenBlock::ToolUse {

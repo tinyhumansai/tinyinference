@@ -921,6 +921,11 @@ pub enum BlockKind {
         /// Tool name.
         name: String,
     },
+    /// An opaque provider-defined content block.
+    ProviderExtension {
+        /// Provider wire type for the extension block.
+        block_type: String,
+    },
 }
 
 /// An incremental fragment belonging to the open block named in the

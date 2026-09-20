@@ -275,24 +275,10 @@ fn assistant_blocks(content: &[ContentBlock]) -> Vec<Value> {
 /// replay newer block types without waiting for a TinyInference release.
 fn provider_extension_block(value: &Value) -> Option<Value> {
     let object = value.as_object()?;
-    let kind = object.get("type")?.as_str()?;
-    let valid = match kind {
-        "text" => object.get("text").is_some_and(Value::is_string),
-        "server_tool_use" => {
-            object.get("id").is_some_and(Value::is_string)
-                && object.get("name").is_some_and(Value::is_string)
-                && object.get("input").is_some_and(Value::is_object)
-        }
-        "tool_use" => {
-            object.get("id").is_some_and(Value::is_string)
-                && object.get("name").is_some_and(Value::is_string)
-                && object.get("input").is_some_and(Value::is_object)
-        }
-        "tool_result" => object.get("tool_use_id").is_some_and(Value::is_string),
-        "image" | "document" | "redacted_thinking" | "thinking" => true,
-        _ => false,
-    };
-    valid.then(|| value.clone())
+    object
+        .get("type")
+        .and_then(Value::as_str)
+        .map(|_| value.clone())
 }
 
 /// Renders an image reference: a `data:` URI becomes an inline base64 source,
