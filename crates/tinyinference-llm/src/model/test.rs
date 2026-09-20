@@ -457,11 +457,13 @@ fn finish_names_reconstructed_tool_call_from_the_call_opening_delta_name() {
         call_id: "call-1".into(),
         content: String::new(),
         tool_name: Some("search".into()),
+        ..Default::default()
     }));
     acc.push(&ModelStreamItem::ToolCallDelta(ToolDelta {
         call_id: "call-1".into(),
         content: r#"{"q":"rust"}"#.into(),
         tool_name: None,
+        ..Default::default()
     }));
 
     let finished = acc.finish().unwrap();
@@ -479,6 +481,7 @@ fn finish_marks_malformed_reconstructed_tool_arguments_invalid() {
         call_id: "call-1".into(),
         content: "{broken".into(),
         tool_name: Some("search".into()),
+        ..Default::default()
     }));
     let response = accumulator.finish().unwrap();
     let call = &response.message.tool_calls[0];
@@ -506,8 +509,28 @@ fn model_stream_item_roundtrips_every_variant() {
         call_id: "call-1".into(),
         content: "{\"q\":1}".into(),
         tool_name: None,
+        ..Default::default()
     }));
     roundtrip_stream_item(ModelStreamItem::UsageDelta(Usage::new(3, 5)));
+    roundtrip_stream_item(ModelStreamItem::BlockStart {
+        index: 0,
+        kind: crate::model::BlockKind::Text,
+    });
+    roundtrip_stream_item(ModelStreamItem::BlockStart {
+        index: 1,
+        kind: crate::model::BlockKind::ToolCall {
+            id: "call-1".into(),
+            name: "search".into(),
+        },
+    });
+    roundtrip_stream_item(ModelStreamItem::BlockDelta {
+        index: 0,
+        delta: crate::model::BlockDelta::ToolArgs("{}".into()),
+    });
+    roundtrip_stream_item(ModelStreamItem::BlockEnd {
+        index: 0,
+        block: crate::message::ContentBlock::Text("done".into()),
+    });
     roundtrip_stream_item(ModelStreamItem::Completed(ModelResponse::assistant("done")));
     // The scalar-carrying variant an internally tagged enum could not encode.
     roundtrip_stream_item(ModelStreamItem::Failed("boom".to_string()));
@@ -516,6 +539,40 @@ fn model_stream_item_roundtrips_every_variant() {
         message: "nope".into(),
         ..ProviderError::default()
     }));
+    roundtrip_stream_item(ModelStreamItem::ProviderFailed(ProviderError {
+        provider: "anthropic".into(),
+        message: "overloaded".into(),
+        stop_reason: Some("pause_turn".into()),
+        partial_message: Some(crate::message::AssistantMessage {
+            id: Some("msg_1".into()),
+            content: vec![crate::message::ContentBlock::Text("partial".into())],
+            tool_calls: Vec::new(),
+            usage: None,
+            origin: None,
+        }),
+        ..ProviderError::default()
+    }));
+}
+
+#[test]
+fn block_delta_to_message_delta_maps_each_channel() {
+    use crate::model::{BlockDelta, block_delta_to_message_delta};
+
+    let text = block_delta_to_message_delta(&BlockDelta::Text("hi".into()), "", None);
+    assert_eq!(text.text, "hi");
+    assert!(text.reasoning.is_empty());
+    assert!(text.tool_call.is_none());
+
+    let thinking = block_delta_to_message_delta(&BlockDelta::Thinking("plan".into()), "", None);
+    assert_eq!(thinking.reasoning, "plan");
+    assert!(thinking.text.is_empty());
+
+    let args =
+        block_delta_to_message_delta(&BlockDelta::ToolArgs("{}".into()), "call-1", Some("s"));
+    let tool_call = args.tool_call.expect("tool_call fragment");
+    assert_eq!(tool_call.call_id, "call-1");
+    assert_eq!(tool_call.content, "{}");
+    assert_eq!(tool_call.tool_name.as_deref(), Some("s"));
 }
 
 #[test]
@@ -568,4 +625,148 @@ fn stream_accumulator_reconstruct_without_reasoning_has_no_thinking_block() {
         response.message.content,
         vec![ContentBlock::Text("hi".into())]
     );
+}
+
+#[test]
+fn model_profile_new_fields_default_to_none_or_false() {
+    let profile = ModelProfile::default();
+    assert!(profile.schema_transform.is_none());
+    assert!(profile.default_structured_mode.is_none());
+    assert!(profile.prompted_output_template.is_none());
+    assert!(profile.thinking_tags.is_none());
+    assert!(!profile.ignore_streamed_leading_whitespace);
+    assert!(profile.thinking_level_map.is_empty());
+    assert_eq!(profile.compat, ProviderCompat::default());
+}
+
+#[test]
+fn model_profile_round_trips_new_fields_through_json() {
+    let mut profile = ModelProfile {
+        schema_transform: Some(SchemaTransform::Chain(vec![
+            SchemaTransform::InlineRefs,
+            SchemaTransform::NoAdditionalProperties,
+        ])),
+        default_structured_mode: Some(StructuredMode::Prompted),
+        prompted_output_template: Some("Respond as JSON matching: {schema}".into()),
+        thinking_tags: Some(("<think>".into(), "</think>".into())),
+        ignore_streamed_leading_whitespace: true,
+        ..ModelProfile::default()
+    };
+    profile
+        .thinking_level_map
+        .insert("low".into(), ReasoningConfig::effort(ReasoningEffort::Low));
+    profile.compat = ProviderCompat {
+        mid_conversation_system_messages: true,
+        strict_tools: true,
+        cache_retention: false,
+        session_affinity: true,
+        max_tool_name_length: Some(64),
+        tool_id_pattern: Some("^[a-z0-9_]+$".into()),
+    };
+
+    let json = serde_json::to_string(&profile).unwrap();
+    let round_tripped: ModelProfile = serde_json::from_str(&json).unwrap();
+    assert_eq!(round_tripped, profile);
+}
+
+#[test]
+fn schema_transform_strip_defs_removes_top_level_defs() {
+    let schema = json!({
+        "type": "object",
+        "$defs": {"Foo": {"type": "string"}},
+        "properties": {"a": {"$ref": "#/$defs/Foo"}}
+    });
+    let out = SchemaTransform::StripDefs.apply(&schema);
+    assert!(out.get("$defs").is_none());
+    // Ref itself is left untouched by StripDefs (that's InlineRefs' job).
+    assert_eq!(out["properties"]["a"]["$ref"], "#/$defs/Foo");
+}
+
+#[test]
+fn schema_transform_inline_refs_resolves_and_drops_defs() {
+    let schema = json!({
+        "type": "object",
+        "$defs": {"Foo": {"type": "string", "minLength": 1}},
+        "properties": {"a": {"$ref": "#/$defs/Foo"}}
+    });
+    let out = SchemaTransform::InlineRefs.apply(&schema);
+    assert!(out.get("$defs").is_none());
+    assert_eq!(out["properties"]["a"]["type"], "string");
+    assert_eq!(out["properties"]["a"]["minLength"], 1);
+}
+
+#[test]
+fn schema_transform_no_additional_properties_sets_false_recursively() {
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "nested": {"type": "object", "properties": {"x": {"type": "string"}}}
+        }
+    });
+    let out = SchemaTransform::NoAdditionalProperties.apply(&schema);
+    assert_eq!(out["additionalProperties"], false);
+    assert_eq!(out["properties"]["nested"]["additionalProperties"], false);
+}
+
+#[test]
+fn schema_transform_no_additional_properties_respects_existing_value() {
+    let schema = json!({"type": "object", "additionalProperties": true});
+    let out = SchemaTransform::NoAdditionalProperties.apply(&schema);
+    assert_eq!(out["additionalProperties"], true);
+}
+
+#[test]
+fn schema_transform_gemini_compat_strips_unsupported_keywords() {
+    let schema = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "default": {},
+        "properties": {"a": {"type": "string", "examples": ["x"]}}
+    });
+    let out = SchemaTransform::GeminiCompat.apply(&schema);
+    assert!(out.get("additionalProperties").is_none());
+    assert!(out.get("$schema").is_none());
+    assert!(out.get("default").is_none());
+    assert!(out["properties"]["a"].get("examples").is_none());
+}
+
+#[test]
+fn schema_transform_openai_strict_inlines_forbids_extra_and_requires_all() {
+    let schema = json!({
+        "type": "object",
+        "$defs": {"Foo": {"type": "string"}},
+        "properties": {
+            "a": {"$ref": "#/$defs/Foo"},
+            "b": {"type": "number"}
+        }
+    });
+    let out = SchemaTransform::OpenAiStrict.apply(&schema);
+    assert!(out.get("$defs").is_none());
+    assert_eq!(out["additionalProperties"], false);
+    assert_eq!(out["properties"]["a"]["type"], "string");
+    let required: Vec<String> = out["required"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(required, vec!["a".to_string(), "b".to_string()]);
+}
+
+#[test]
+fn schema_transform_chain_applies_steps_in_order() {
+    let schema = json!({
+        "type": "object",
+        "$defs": {"Foo": {"type": "string"}},
+        "properties": {"a": {"$ref": "#/$defs/Foo"}}
+    });
+    let chained = SchemaTransform::Chain(vec![
+        SchemaTransform::InlineRefs,
+        SchemaTransform::NoAdditionalProperties,
+    ])
+    .apply(&schema);
+    assert!(chained.get("$defs").is_none());
+    assert_eq!(chained["properties"]["a"]["type"], "string");
+    assert_eq!(chained["additionalProperties"], false);
 }

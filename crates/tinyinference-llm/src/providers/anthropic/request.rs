@@ -71,6 +71,8 @@ pub(crate) fn request_body(request: &ModelRequest, default_model: &str) -> Value
                     })],
                 );
             }
+            // Host-side out-of-band record; never sent to the provider.
+            Message::Custom(_) => {}
         }
     }
 
@@ -208,13 +210,19 @@ fn text_only_blocks(content: &[ContentBlock]) -> Vec<Value> {
             ContentBlock::Thinking { .. }
             | ContentBlock::RedactedThinking { .. }
             | ContentBlock::Image(_)
-            | ContentBlock::ProviderExtension(_) => None,
+            | ContentBlock::ProviderExtension(_)
+            | ContentBlock::Audio(_)
+            | ContentBlock::Video(_)
+            | ContentBlock::Document(_) => None,
         })
         .collect()
 }
 
-/// User-side content: text, images, and opaque native blocks. Thinking blocks
-/// never appear in user content.
+/// User-side content: text, images, and documents (Anthropic's native
+/// `document` block). Audio and video have no Messages API representation
+/// and are rendered as placeholder text rather than silently dropped.
+/// Thinking blocks never appear in user content; provider extensions have no
+/// faithful representation and are dropped.
 fn content_blocks(content: &[ContentBlock]) -> Vec<Value> {
     content
         .iter()
@@ -223,6 +231,9 @@ fn content_blocks(content: &[ContentBlock]) -> Vec<Value> {
             ContentBlock::Json(value) => text_block(&value.to_string()),
             ContentBlock::Image(image) => Some(image_block(image)),
             ContentBlock::ProviderExtension(value) => provider_extension_block(value),
+            ContentBlock::Document(media) => Some(document_block(media)),
+            ContentBlock::Audio(media) => Some(unsupported_media_placeholder("audio", media)),
+            ContentBlock::Video(media) => Some(unsupported_media_placeholder("video", media)),
             ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => None,
         })
         .collect()
@@ -254,6 +265,7 @@ fn assistant_blocks(content: &[ContentBlock]) -> Vec<Value> {
                 signature: None, ..
             }
             | ContentBlock::Image(_) => None,
+            ContentBlock::Audio(_) | ContentBlock::Video(_) | ContentBlock::Document(_) => None,
         })
         .collect()
 }
@@ -262,10 +274,25 @@ fn assistant_blocks(content: &[ContentBlock]) -> Vec<Value> {
 /// Messages API requires. Keeping the full object intact lets hosts persist and
 /// replay newer block types without waiting for a TinyInference release.
 fn provider_extension_block(value: &Value) -> Option<Value> {
-    value
-        .as_object()
-        .filter(|object| object.get("type").is_some_and(Value::is_string))
-        .map(|_| value.clone())
+    let object = value.as_object()?;
+    let kind = object.get("type")?.as_str()?;
+    let valid = match kind {
+        "text" => object.get("text").is_some_and(Value::is_string),
+        "server_tool_use" => {
+            object.get("id").is_some_and(Value::is_string)
+                && object.get("name").is_some_and(Value::is_string)
+                && object.get("input").is_some_and(Value::is_object)
+        }
+        "tool_use" => {
+            object.get("id").is_some_and(Value::is_string)
+                && object.get("name").is_some_and(Value::is_string)
+                && object.get("input").is_some_and(Value::is_object)
+        }
+        "tool_result" => object.get("tool_use_id").is_some_and(Value::is_string),
+        "image" | "document" | "redacted_thinking" | "thinking" => true,
+        _ => false,
+    };
+    valid.then(|| value.clone())
 }
 
 /// Renders an image reference: a `data:` URI becomes an inline base64 source,
@@ -289,5 +316,43 @@ fn image_block(image: &ImageRef) -> Value {
     json!({
         "type": "image",
         "source": { "type": "url", "url": image.url },
+    })
+}
+
+/// Renders a document reference as Anthropic's `document` content block.
+/// `MediaRef::Path` has no wire representation (the harness never reads
+/// local files) and falls back to a placeholder text block instead of being
+/// silently dropped.
+fn document_block(media: &crate::message::MediaRef) -> Value {
+    use crate::message::MediaRef;
+    match media {
+        MediaRef::Base64 { data, media_type } => json!({
+            "type": "document",
+            "source": { "type": "base64", "media_type": media_type, "data": data },
+        }),
+        MediaRef::Url { url, .. } => json!({
+            "type": "document",
+            "source": { "type": "url", "url": url },
+        }),
+        MediaRef::Path { path, .. } => json!({
+            "type": "text",
+            "text": format!("[document attachment omitted: local path {path} was not resolved]"),
+        }),
+    }
+}
+
+/// Renders an audio or video reference as a placeholder text block: neither
+/// has a wire representation in Anthropic's Messages API.
+fn unsupported_media_placeholder(kind: &str, media: &crate::message::MediaRef) -> Value {
+    let descriptor = match media {
+        crate::message::MediaRef::Url { url, .. } => url.clone(),
+        crate::message::MediaRef::Base64 { media_type, .. } => {
+            format!("inline {media_type} data")
+        }
+        crate::message::MediaRef::Path { path, .. } => path.clone(),
+    };
+    json!({
+        "type": "text",
+        "text": format!("[{kind} attachment omitted: {descriptor}]"),
     })
 }

@@ -84,6 +84,37 @@ fn matches_context_pattern(lower: &str, pattern: &str, mode: ContextPatternMatch
     }
 }
 
+/// Derives the compatibility [`crate::message::MessageDelta`] for a block-aware
+/// [`ModelStreamItem::BlockDelta`] fragment.
+///
+/// Block-aware adapters (Anthropic and, incrementally, the OpenAI adapters)
+/// emit both channels for the same fragment: the block-indexed item for
+/// consumers that track block boundaries, and the flat delta this helper
+/// builds for consumers (including [`StreamAccumulator`]) that only
+/// understand the pre-existing shape. `call_id` and `tool_name` are only
+/// meaningful for [`BlockDelta::ToolArgs`] and are ignored otherwise.
+#[must_use]
+pub fn block_delta_to_message_delta(
+    delta: &BlockDelta,
+    call_id: &str,
+    tool_name: Option<&str>,
+) -> crate::message::MessageDelta {
+    match delta {
+        BlockDelta::Text(text) => crate::message::MessageDelta::text(text.clone()),
+        BlockDelta::Thinking(text) => crate::message::MessageDelta::reasoning(text.clone()),
+        BlockDelta::ToolArgs(content) => crate::message::MessageDelta {
+            text: String::new(),
+            reasoning: String::new(),
+            tool_call: Some(crate::tool::ToolDelta {
+                call_id: call_id.to_string(),
+                content: content.clone(),
+                tool_name: tool_name.map(str::to_string),
+                content_index: None,
+            }),
+        },
+    }
+}
+
 /// Returns a generic context-window hint for a raw provider model id.
 ///
 /// Returns `None` for unknown ids rather than guessing. Hosts with product tier
@@ -339,6 +370,9 @@ impl ModelProfile {
                 image_out: true,
                 audio_in: true,
                 audio_out: true,
+                video_in: true,
+                video_out: true,
+                document_in: true,
             },
             tool_calling: true,
             parallel_tool_calls: true,
@@ -550,6 +584,7 @@ impl ModelResponse {
                 content: vec![ContentBlock::Text(content.into())],
                 tool_calls: Vec::new(),
                 usage: None,
+                origin: None,
             },
             usage: None,
             finish_reason: None,
@@ -661,6 +696,8 @@ pub struct StreamAccumulator {
     /// [`crate::Error::Provider`] and preserve the
     /// status/code/`retryable` classification the retry layer needs.
     failed_provider: Option<ProviderError>,
+    /// Terminal deferral, when a [`ModelStreamItem::Deferred`] item was seen.
+    deferred: Option<DeferredHandle>,
 }
 
 impl StreamAccumulator {
@@ -690,6 +727,13 @@ impl StreamAccumulator {
             ModelStreamItem::UsageDelta(usage) => {
                 self.usage = Some(*usage);
             }
+            // Block-boundary items carry no information the accumulator needs:
+            // every fragment a block-aware adapter emits as `BlockDelta` is
+            // also folded into the compatibility `MessageDelta`/`ToolCallDelta`
+            // channel handled above, so reconstruction here is unaffected.
+            ModelStreamItem::BlockStart { .. }
+            | ModelStreamItem::BlockDelta { .. }
+            | ModelStreamItem::BlockEnd { .. } => {}
             ModelStreamItem::Completed(response) => {
                 self.completed = Some(response.clone());
             }
@@ -703,7 +747,17 @@ impl StreamAccumulator {
                 // `insufficient_quota` / 400 must not be retried as transient).
                 self.failed_provider = Some(error.clone());
             }
+            ModelStreamItem::Deferred(handle) => {
+                self.deferred = Some(handle.clone());
+            }
         }
+    }
+
+    /// Returns the [`DeferredHandle`] folded in by a
+    /// [`ModelStreamItem::Deferred`] item, when one was seen.
+    #[must_use]
+    pub fn deferred(&self) -> Option<&DeferredHandle> {
+        self.deferred.as_ref()
     }
 
     /// Appends a tool-call argument fragment for `call_id`, preserving
@@ -757,6 +811,13 @@ impl StreamAccumulator {
             return Err(crate::Error::Model(message));
         }
 
+        if let Some(handle) = self.deferred {
+            return Err(crate::Error::Unsupported(format!(
+                "stream deferred call {handle:?}; call `deferred()` before `finish()` and \
+                 resolve it via `ChatModel::fetch_deferred`"
+            )));
+        }
+
         if let Some(mut response) = self.completed {
             // Reconcile the response and message usage with any streamed
             // `UsageDelta`, preferring an already-present value and never
@@ -801,6 +862,7 @@ impl StreamAccumulator {
             content,
             tool_calls,
             usage: self.usage,
+            origin: None,
         };
         Ok(ModelResponse {
             message,

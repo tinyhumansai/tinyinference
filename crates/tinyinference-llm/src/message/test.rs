@@ -6,7 +6,7 @@
 //! messages preserve their call id, and the [`MessageDelta`] default.
 
 use super::*;
-use crate::tool::ToolCall;
+use crate::tool::{ToolCall, ToolSchema};
 use crate::usage::Usage;
 use serde_json::json;
 
@@ -96,6 +96,7 @@ fn assistant_holds_tool_calls_and_usage() {
         content: vec![ContentBlock::Text("calling".into())],
         tool_calls: vec![ToolCall::new("c-1", "lookup", json!({}))],
         usage: Some(Usage::new(5, 5)),
+        origin: None,
     });
     if let Message::Assistant(a) = &msg {
         assert_eq!(a.tool_calls.len(), 1);
@@ -137,6 +138,7 @@ fn text_ignores_thinking_blocks() {
         ],
         tool_calls: Vec::new(),
         usage: None,
+        origin: None,
     });
     // Reasoning blocks must never leak into visible text.
     assert_eq!(msg.text(), "the answer is 42");
@@ -196,6 +198,80 @@ fn thinking_block_serde_round_trips() {
 }
 
 #[test]
+fn media_ref_constructors_and_media_type_accessor() {
+    let url = MediaRef::url("https://example.com/a.wav");
+    assert_eq!(url.media_type(), None);
+
+    let base64 = MediaRef::base64("AAAA", "audio/wav");
+    assert_eq!(base64.media_type(), Some("audio/wav"));
+
+    let path = MediaRef::path("/tmp/a.pdf");
+    assert_eq!(path.media_type(), None);
+}
+
+#[test]
+fn audio_video_document_blocks_round_trip_through_json() {
+    let blocks = vec![
+        ContentBlock::Audio(MediaRef::base64("AAAA", "audio/wav")),
+        ContentBlock::Video(MediaRef::url("https://example.com/v.mp4")),
+        ContentBlock::Document(MediaRef::path("/tmp/doc.pdf")),
+    ];
+    for block in blocks {
+        let wire = serde_json::to_value(&block).unwrap();
+        let back: ContentBlock = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, block);
+    }
+}
+
+#[test]
+fn non_text_media_blocks_are_not_reasoning_and_carry_no_visible_text() {
+    let block = ContentBlock::Audio(MediaRef::url("https://example.com/a.wav"));
+    assert!(!block.is_reasoning());
+    assert_eq!(block.as_text(), None);
+}
+
+#[test]
+fn custom_message_text_uses_display_and_carries_no_content_blocks() {
+    let custom = Message::Custom(CustomMessage {
+        kind: "compaction".into(),
+        payload: json!({"summary": "..."}),
+        display: Some("Compacted 40 turns".into()),
+    });
+    assert_eq!(custom.text(), "Compacted 40 turns");
+    assert_eq!(custom.char_len(), "Compacted 40 turns".chars().count());
+    assert_eq!(
+        custom.estimated_char_weight(),
+        "Compacted 40 turns".chars().count()
+    );
+    assert!(custom.artifact().is_none());
+
+    let no_display = Message::Custom(CustomMessage {
+        kind: "label".into(),
+        payload: json!({"name": "checkpoint"}),
+        display: None,
+    });
+    assert_eq!(no_display.text(), "");
+    assert_eq!(no_display.char_len(), 0);
+    assert_eq!(no_display.estimated_char_weight(), 0);
+}
+
+#[test]
+fn custom_message_round_trips_through_serde() {
+    let custom = Message::Custom(CustomMessage {
+        kind: "audit".into(),
+        payload: json!({"note": "reviewed"}),
+        display: None,
+    });
+    let wire = serde_json::to_value(&custom).unwrap();
+    assert_eq!(
+        wire,
+        json!({ "custom": { "kind": "audit", "payload": { "note": "reviewed" } } })
+    );
+    let back: Message = serde_json::from_value(wire).unwrap();
+    assert_eq!(back, custom);
+}
+
+#[test]
 fn legacy_content_without_thinking_still_parses() {
     // Additive tagging: transcripts serialized before thinking blocks existed
     // (only text/json/image/provider_extension) must deserialize unchanged.
@@ -207,4 +283,188 @@ fn legacy_content_without_thinking_still_parses() {
     assert_eq!(blocks.len(), 2);
     assert_eq!(blocks[0].as_text(), Some("hello"));
     assert!(!blocks[1].is_reasoning());
+}
+
+// ---------------------------------------------------------------------------
+// SystemMessage sections/tool deltas, replay_system_state (B6)
+// ---------------------------------------------------------------------------
+
+fn tool(name: &str) -> ToolSchema {
+    ToolSchema::new(name, format!("{name} tool"), json!({"type": "object"}))
+}
+
+#[test]
+fn legacy_system_message_without_new_fields_deserializes_as_a_no_op_patch() {
+    // A transcript persisted before SystemMessage gained sections/tool deltas
+    // must still deserialize: the new fields are all `#[serde(default)]`.
+    let legacy = json!({ "content": [{ "text": "you are a helpful assistant" }] });
+    let msg: SystemMessage = serde_json::from_value(legacy).unwrap();
+    assert_eq!(
+        msg.content,
+        vec![ContentBlock::Text("you are a helpful assistant".into())]
+    );
+    assert!(msg.sections.is_empty());
+    assert!(msg.tools_added.is_empty());
+    assert!(msg.tools_removed.is_empty());
+}
+
+#[test]
+fn system_message_text_constructor_is_a_no_op_patch() {
+    let msg = SystemMessage::text("hello");
+    assert!(!msg.is_empty_patch());
+    assert!(msg.sections.is_empty());
+    assert!(msg.tools_added.is_empty());
+    assert!(msg.tools_removed.is_empty());
+
+    assert!(SystemMessage::default().is_empty_patch());
+}
+
+#[test]
+fn replay_system_state_folds_sections_and_tool_deltas_in_order() {
+    // Turn 1: baseline persona plus two tools.
+    let base = SystemMessage {
+        tools_added: vec![tool("search"), tool("read_file")],
+        ..SystemMessage::text("You are Aria.")
+    };
+    let turn1 = vec![Message::System(base), Message::user("hi")];
+
+    // Turn 2: a patch adds a "browse" tool, drops "read_file", and adds a
+    // named instructions section.
+    let mut sections = std::collections::BTreeMap::new();
+    sections.insert(
+        "tool_changes".to_string(),
+        Some("browse is now available.".to_string()),
+    );
+    let patch = SystemMessage {
+        tools_added: vec![tool("browse")],
+        tools_removed: vec!["read_file".to_string()],
+        sections,
+        ..SystemMessage::default()
+    };
+    let mut messages = turn1;
+    messages.push(Message::assistant("ok"));
+    messages.push(Message::System(patch));
+    messages.push(Message::user("go"));
+
+    let (prompt, tools) = replay_system_state(&messages);
+
+    let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, vec!["search", "browse"]);
+    assert!(prompt.contains("You are Aria."));
+    assert!(prompt.contains("tool_changes"));
+    assert!(prompt.contains("browse is now available."));
+}
+
+#[test]
+fn replay_system_state_section_removal_drops_it_from_the_effective_prompt() {
+    let mut add_sections = std::collections::BTreeMap::new();
+    add_sections.insert("scratch".to_string(), Some("temporary note".to_string()));
+    let add = SystemMessage {
+        sections: add_sections,
+        ..SystemMessage::default()
+    };
+    let mut remove_sections = std::collections::BTreeMap::new();
+    remove_sections.insert("scratch".to_string(), None);
+    let remove = SystemMessage {
+        sections: remove_sections,
+        ..SystemMessage::default()
+    };
+
+    let messages = vec![Message::System(add), Message::System(remove)];
+    let (prompt, tools) = replay_system_state(&messages);
+    assert!(!prompt.contains("temporary note"));
+    assert!(tools.is_empty());
+}
+
+#[test]
+fn replay_system_state_later_tool_schema_for_same_name_wins() {
+    let first = SystemMessage {
+        tools_added: vec![ToolSchema::new("search", "v1", json!({"type": "object"}))],
+        ..SystemMessage::default()
+    };
+    let second = SystemMessage {
+        tools_added: vec![ToolSchema::new("search", "v2", json!({"type": "object"}))],
+        ..SystemMessage::default()
+    };
+
+    let messages = vec![Message::System(first), Message::System(second)];
+    let (_, tools) = replay_system_state(&messages);
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].description, "v2");
+}
+
+#[test]
+fn replay_system_state_ignores_non_system_messages() {
+    let messages = vec![
+        Message::user("hello"),
+        Message::assistant("hi"),
+        Message::tool("c-1", "result"),
+    ];
+    let (prompt, tools) = replay_system_state(&messages);
+    assert!(prompt.is_empty());
+    assert!(tools.is_empty());
+}
+
+#[test]
+fn model_profile_default_disallows_mid_conversation_system_messages() {
+    // Conservative default: a caller must opt in per-provider (see
+    // `providers::openai::transport::derive_profile`), because folding into
+    // the leading system message is always correct while inserting one where
+    // the provider does not actually honor it silently loses content.
+    assert!(!crate::model::ModelProfile::default().mid_conversation_system_messages);
+}
+
+// ---------------------------------------------------------------------------
+// AssistantMessage origin metadata
+// ---------------------------------------------------------------------------
+
+#[test]
+fn message_origin_round_trips_through_serde() {
+    let assistant = AssistantMessage {
+        id: Some("msg_1".into()),
+        content: vec![ContentBlock::Text("hi".into())],
+        tool_calls: Vec::new(),
+        usage: None,
+        origin: Some(MessageOrigin {
+            provider: "anthropic".into(),
+            api: "messages".into(),
+            model: "claude-sonnet-4-6".into(),
+        }),
+    };
+    let wire = serde_json::to_value(&assistant).unwrap();
+    assert_eq!(
+        wire["origin"],
+        json!({ "provider": "anthropic", "api": "messages", "model": "claude-sonnet-4-6" })
+    );
+    let back: AssistantMessage = serde_json::from_value(wire).unwrap();
+    assert_eq!(back, assistant);
+}
+
+#[test]
+fn message_origin_is_none_by_default_and_omitted_from_wire() {
+    let assistant = AssistantMessage {
+        id: None,
+        content: vec![ContentBlock::Text("hi".into())],
+        tool_calls: Vec::new(),
+        usage: None,
+        origin: None,
+    };
+    let wire = serde_json::to_value(&assistant).unwrap();
+    assert!(
+        wire.get("origin").is_none(),
+        "a None origin must not appear on the wire"
+    );
+}
+
+#[test]
+fn legacy_assistant_message_without_origin_field_deserializes_with_none() {
+    // Additive tagging: a journal serialized before `origin` existed must
+    // still deserialize, with the field defaulting to `None`.
+    let legacy = json!({
+        "id": "msg_1",
+        "content": [{ "text": "hi" }],
+        "tool_calls": [],
+    });
+    let assistant: AssistantMessage = serde_json::from_value(legacy).unwrap();
+    assert_eq!(assistant.origin, None);
 }

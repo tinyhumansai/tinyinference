@@ -8,10 +8,10 @@
 use serde_json::json;
 
 use super::*;
-use crate::message::Message;
+use crate::message::{ContentBlock, Message};
 use crate::model::{
-    ChatModel, ModelRequest, ModelStreamItem, ProviderError, ReasoningEffort, ResponseFormat,
-    StreamAccumulator, ToolChoice,
+    BlockDelta, BlockKind, ChatModel, ModelRequest, ModelStreamItem, ProviderError,
+    ReasoningEffort, ResponseFormat, StreamAccumulator, ToolChoice,
 };
 use crate::providers::{ProviderKind, ProviderSpec};
 use crate::tool::ToolSchema;
@@ -120,6 +120,25 @@ fn translates_maximum_reasoning_effort() {
 }
 
 #[test]
+fn custom_messages_are_never_sent_to_the_provider() {
+    let request = ModelRequest::new(vec![
+        Message::system("sys"),
+        Message::Custom(crate::message::CustomMessage {
+            kind: "compaction".into(),
+            payload: json!({"summary": "..."}),
+            display: Some("Compacted 12 turns".into()),
+        }),
+        Message::user("hi"),
+    ]);
+    let body = model().translate_request(&request).unwrap();
+    let value = serde_json::to_value(&body).unwrap();
+    let messages = value["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0]["role"], json!("system"));
+    assert_eq!(messages[1]["role"], json!("user"));
+}
+
+#[test]
 fn translates_provider_options_for_local_openai_compatible_models() {
     let request = ModelRequest::new(vec![Message::user("hi")])
         .with_temperature(0.1)
@@ -206,6 +225,7 @@ fn translates_assistant_tool_calls_to_stringified_arguments() {
                 invalid: None,
             }],
             usage: None,
+            origin: None,
         }),
         Message::tool("call-1", "sunny, 21C"),
     ]);
@@ -254,6 +274,7 @@ fn translates_structured_tool_result_content() {
 fn translates_structured_system_content_and_rejects_images() {
     let request = ModelRequest::new(vec![Message::System(crate::message::SystemMessage {
         content: vec![ContentBlock::Json(json!({"policy": "strict"}))],
+        ..Default::default()
     })]);
     let value = serde_json::to_value(model().translate_request(&request).unwrap()).unwrap();
     assert_eq!(
@@ -266,6 +287,7 @@ fn translates_structured_system_content_and_rejects_images() {
             url: "https://example.test/image.png".into(),
             mime_type: None,
         })],
+        ..Default::default()
     })]);
     assert!(model().translate_request(&invalid).is_err());
 }
@@ -681,6 +703,8 @@ fn provider_failed_stream_item_finishes_as_provider_error() {
         retryable: true,
         retry_after_ms: None,
         raw: None,
+        partial_message: None,
+        stop_reason: None,
     }));
 
     match accumulator.finish().unwrap_err() {
@@ -1469,6 +1493,54 @@ fn user_image_blocks_render_as_content_parts() {
         content[1]["image_url"]["url"],
         json!("https://example.test/cat.png")
     );
+}
+
+#[test]
+fn user_audio_blocks_render_as_input_audio_parts() {
+    use crate::message::{ContentBlock, MediaRef, UserMessage};
+
+    let request = ModelRequest::new(vec![Message::User(UserMessage {
+        content: vec![
+            ContentBlock::Text("transcribe this".to_string()),
+            ContentBlock::Audio(MediaRef::base64("AAAA", "audio/wav")),
+        ],
+    })]);
+
+    let value = serde_json::to_value(model().translate_request(&request).unwrap()).unwrap();
+    let content = &value["messages"][0]["content"];
+    assert!(content.is_array(), "expected content parts, got {content}");
+    assert_eq!(content[1]["type"], json!("input_audio"));
+    assert_eq!(content[1]["input_audio"]["data"], json!("AAAA"));
+    assert_eq!(content[1]["input_audio"]["format"], json!("wav"));
+}
+
+#[test]
+fn user_audio_block_by_url_fails_closed() {
+    use crate::message::{ContentBlock, MediaRef, UserMessage};
+
+    let request = ModelRequest::new(vec![Message::User(UserMessage {
+        content: vec![ContentBlock::Audio(MediaRef::url(
+            "https://example.test/a.wav",
+        ))],
+    })]);
+
+    let error = model().translate_request(&request).unwrap_err();
+    assert!(matches!(error, Error::Validation(_)));
+}
+
+#[test]
+fn user_document_block_fails_closed() {
+    use crate::message::{ContentBlock, MediaRef, UserMessage};
+
+    let request = ModelRequest::new(vec![Message::User(UserMessage {
+        content: vec![ContentBlock::Document(MediaRef::base64(
+            "QQ==",
+            "application/pdf",
+        ))],
+    })]);
+
+    let error = model().translate_request(&request).unwrap_err();
+    assert!(matches!(error, Error::Validation(_)));
 }
 
 #[test]
@@ -2565,4 +2637,375 @@ fn a_null_tool_calls_delta_is_read_as_no_fragments() {
     .expect("a null tool_calls must not fail the chunk");
     assert!(chunk.choices[0].delta.tool_calls.is_empty());
     assert_eq!(chunk.choices[0].delta.content.as_deref(), Some("Hi"));
+}
+
+/// Unwraps a [`ModelStreamItem::BlockStart`], panicking with the actual item
+/// on a mismatch (used by the block-derivation tests below).
+fn expect_block_start(item: &ModelStreamItem) -> (usize, &BlockKind) {
+    match item {
+        ModelStreamItem::BlockStart { index, kind } => (*index, kind),
+        other => panic!("expected BlockStart, got {other:?}"),
+    }
+}
+
+/// Unwraps a [`ModelStreamItem::BlockDelta`], panicking with the actual item
+/// on a mismatch.
+fn expect_block_delta(item: &ModelStreamItem) -> (usize, &BlockDelta) {
+    match item {
+        ModelStreamItem::BlockDelta { index, delta } => (*index, delta),
+        other => panic!("expected BlockDelta, got {other:?}"),
+    }
+}
+
+/// Unwraps a [`ModelStreamItem::BlockEnd`], panicking with the actual item on
+/// a mismatch.
+fn expect_block_end(item: &ModelStreamItem) -> (usize, &ContentBlock) {
+    match item {
+        ModelStreamItem::BlockEnd { index, block } => (*index, block),
+        other => panic!("expected BlockEnd, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn sse_stream_derives_block_boundaries_for_reasoning_text_and_tool_calls() {
+    // Interleaved reasoning → text → two tool calls (the second split so a
+    // block continues across chunks, matching how OpenAI streams parallel
+    // calls), then `finish_reason`. Exercises the OpenAI chat-completions
+    // block derivation: `BlockStart`/`BlockDelta`/`BlockEnd` should appear in
+    // first-open order, sharing one dense index space across text, reasoning,
+    // and every tool call — mirroring the Anthropic adapter's
+    // `content_block_start`/`_delta`/`_stop` triplets.
+    let raw: Vec<Vec<u8>> = vec![
+        format!(
+            "data: {}\n\n",
+            json!({ "choices": [{ "delta": { "reasoning_content": "Let me think. " } }] })
+        )
+        .into_bytes(),
+        format!(
+            "data: {}\n\n",
+            json!({ "choices": [{ "delta": { "content": "The answer is 42." } }] })
+        )
+        .into_bytes(),
+        format!(
+            "data: {}\n\n",
+            json!({
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "id": "call-1",
+                            "function": { "name": "get_weather", "arguments": "{\"city\":" }
+                        }]
+                    }
+                }]
+            })
+        )
+        .into_bytes(),
+        format!(
+            "data: {}\n\n",
+            json!({
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "function": { "arguments": "\"NYC\"}" }
+                        }]
+                    }
+                }]
+            })
+        )
+        .into_bytes(),
+        format!(
+            "data: {}\n\n",
+            json!({
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 1,
+                            "id": "call-2",
+                            "function": { "name": "get_time", "arguments": "{\"tz\":\"UTC\"}" }
+                        }]
+                    },
+                    "finish_reason": "tool_calls"
+                }]
+            })
+        )
+        .into_bytes(),
+        b"data: [DONE]\n\n".to_vec(),
+    ];
+
+    let items = collect_sse(raw).await;
+
+    let blocks: Vec<&ModelStreamItem> = items
+        .iter()
+        .filter(|item| {
+            matches!(
+                item,
+                ModelStreamItem::BlockStart { .. }
+                    | ModelStreamItem::BlockDelta { .. }
+                    | ModelStreamItem::BlockEnd { .. }
+            )
+        })
+        .collect();
+    assert_eq!(blocks.len(), 13, "unexpected block sequence: {blocks:#?}");
+
+    // Reasoning block (index 0): opens first, one delta, closes when the text
+    // block takes over.
+    let (index, kind) = expect_block_start(blocks[0]);
+    assert_eq!(index, 0);
+    assert_eq!(*kind, BlockKind::Thinking);
+    let (index, delta) = expect_block_delta(blocks[1]);
+    assert_eq!(index, 0);
+    assert_eq!(*delta, BlockDelta::Thinking("Let me think. ".to_string()));
+    let (index, block) = expect_block_end(blocks[2]);
+    assert_eq!(index, 0);
+    assert_eq!(
+        *block,
+        ContentBlock::Thinking {
+            text: "Let me think. ".to_string(),
+            signature: None,
+        }
+    );
+
+    // Text block (index 1): opens, one delta, closes when the first tool
+    // call's id/name arrives.
+    let (index, kind) = expect_block_start(blocks[3]);
+    assert_eq!(index, 1);
+    assert_eq!(*kind, BlockKind::Text);
+    let (index, delta) = expect_block_delta(blocks[4]);
+    assert_eq!(index, 1);
+    assert_eq!(*delta, BlockDelta::Text("The answer is 42.".to_string()));
+    let (index, block) = expect_block_end(blocks[5]);
+    assert_eq!(index, 1);
+    assert_eq!(*block, ContentBlock::Text("The answer is 42.".to_string()));
+
+    // First tool call (index 2): opens on the fragment carrying its id/name,
+    // gets two argument deltas split across chunks, closes when the second
+    // tool call's id/name arrives.
+    let (index, kind) = expect_block_start(blocks[6]);
+    assert_eq!(index, 2);
+    assert_eq!(
+        *kind,
+        BlockKind::ToolCall {
+            id: "call-1".to_string(),
+            name: "get_weather".to_string(),
+        }
+    );
+    let (index, delta) = expect_block_delta(blocks[7]);
+    assert_eq!(index, 2);
+    assert_eq!(*delta, BlockDelta::ToolArgs("{\"city\":".to_string()));
+    let (index, delta) = expect_block_delta(blocks[8]);
+    assert_eq!(index, 2);
+    assert_eq!(*delta, BlockDelta::ToolArgs("\"NYC\"}".to_string()));
+    let (index, block) = expect_block_end(blocks[9]);
+    assert_eq!(index, 2);
+    assert_eq!(
+        *block,
+        ContentBlock::Json(json!({
+            "id": "call-1",
+            "name": "get_weather",
+            "arguments": { "city": "NYC" },
+        }))
+    );
+
+    // Second tool call (index 3): opens, one argument delta, closes on
+    // `finish_reason`.
+    let (index, kind) = expect_block_start(blocks[10]);
+    assert_eq!(index, 3);
+    assert_eq!(
+        *kind,
+        BlockKind::ToolCall {
+            id: "call-2".to_string(),
+            name: "get_time".to_string(),
+        }
+    );
+    let (index, delta) = expect_block_delta(blocks[11]);
+    assert_eq!(index, 3);
+    assert_eq!(*delta, BlockDelta::ToolArgs("{\"tz\":\"UTC\"}".to_string()));
+    let (index, block) = expect_block_end(blocks[12]);
+    assert_eq!(index, 3);
+    assert_eq!(
+        *block,
+        ContentBlock::Json(json!({
+            "id": "call-2",
+            "name": "get_time",
+            "arguments": { "tz": "UTC" },
+        }))
+    );
+
+    // Reducing just the block items — the `BlockEnd` payloads, in index
+    // order — reproduces the terminal `AssistantMessage`: the content blocks
+    // in order, and the tool calls with their reassembled arguments.
+    let mut reduced_content = Vec::new();
+    let mut reduced_calls: Vec<(String, String, Value)> = Vec::new();
+    for item in &blocks {
+        if let ModelStreamItem::BlockEnd { block, .. } = item {
+            match block {
+                ContentBlock::Json(value) => {
+                    reduced_calls.push((
+                        value["id"].as_str().unwrap().to_string(),
+                        value["name"].as_str().unwrap().to_string(),
+                        value["arguments"].clone(),
+                    ));
+                }
+                other => reduced_content.push(other.clone()),
+            }
+        }
+    }
+
+    let response = items
+        .iter()
+        .find_map(|item| match item {
+            ModelStreamItem::Completed(response) => Some(response.clone()),
+            _ => None,
+        })
+        .expect("stream must complete");
+
+    assert_eq!(response.message.content, reduced_content);
+    assert_eq!(response.message.tool_calls.len(), reduced_calls.len());
+    for (call, (id, name, arguments)) in response.message.tool_calls.iter().zip(&reduced_calls) {
+        assert_eq!(&call.id, id);
+        assert_eq!(&call.name, name);
+        assert_eq!(&call.arguments, arguments);
+    }
+}
+
+#[tokio::test]
+async fn sse_stream_mid_stream_error_preserves_partial_message() {
+    // Text and a tool call arrive, then the provider streams a mid-stream
+    // `{"error": ...}` payload instead of a completion.
+    // `ProviderError::partial_message` must carry whatever had already
+    // accumulated (mirrors the Anthropic adapter's contract) instead of
+    // discarding it.
+    let raw: Vec<Vec<u8>> = vec![
+        b"data: {\"choices\":[{\"delta\":{\"content\":\"partial answer\"}}]}\n\n".to_vec(),
+        format!(
+            "data: {}\n\n",
+            json!({
+                "choices": [{
+                    "delta": {
+                        "tool_calls": [{
+                            "index": 0,
+                            "id": "call-1",
+                            "function": { "name": "lookup", "arguments": "{\"q\":1}" }
+                        }]
+                    }
+                }]
+            })
+        )
+        .into_bytes(),
+        b"data: {\"error\":{\"message\":\"upstream exploded\"}}\n\n".to_vec(),
+        b"data: [DONE]\n\n".to_vec(),
+    ];
+
+    let items = collect_sse(raw).await;
+    let failed = items
+        .iter()
+        .find_map(|item| match item {
+            ModelStreamItem::ProviderFailed(error) => Some(error),
+            _ => None,
+        })
+        .expect("mid-stream error should emit ProviderFailed");
+    assert!(failed.message.contains("upstream exploded"));
+
+    let partial = failed
+        .partial_message
+        .as_ref()
+        .expect("partial content accumulated before the failure must not be discarded");
+    assert_eq!(
+        partial.content,
+        vec![ContentBlock::Text("partial answer".to_string())]
+    );
+    assert_eq!(partial.tool_calls.len(), 1);
+    assert_eq!(partial.tool_calls[0].id, "call-1");
+    assert_eq!(partial.tool_calls[0].name, "lookup");
+    assert_eq!(partial.tool_calls[0].arguments, json!({ "q": 1 }));
+
+    // No terminal Completed follows the failure.
+    assert!(matches!(
+        items.last(),
+        Some(ModelStreamItem::ProviderFailed(_))
+    ));
+}
+
+#[test]
+fn stamp_origin_records_provider_api_and_effective_model() {
+    let model = OpenAiModel::new("key").with_model("gpt-4.1");
+    let request = ModelRequest::default();
+    let mut response = ModelResponse {
+        message: crate::message::AssistantMessage {
+            id: None,
+            content: Vec::new(),
+            tool_calls: Vec::new(),
+            usage: None,
+            origin: None,
+        },
+        usage: None,
+        finish_reason: None,
+        raw: None,
+        resolved_model: None,
+        continue_turn: None,
+        served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
+    };
+    model.stamp_origin(&mut response, &request, CHAT_COMPLETIONS_API);
+    let origin = response.message.origin.expect("origin stamped");
+    assert_eq!(origin.provider, "openai");
+    assert_eq!(origin.api, "chat_completions");
+    assert_eq!(origin.model, "gpt-4.1");
+}
+
+#[test]
+fn stamp_origin_prefers_a_per_request_model_override() {
+    let model = OpenAiModel::new("key").with_model("gpt-4.1");
+    let request = ModelRequest {
+        model: Some("gpt-4.1-mini".to_string()),
+        ..Default::default()
+    };
+    let mut response = ModelResponse {
+        message: crate::message::AssistantMessage {
+            id: None,
+            content: Vec::new(),
+            tool_calls: Vec::new(),
+            usage: None,
+            origin: None,
+        },
+        usage: None,
+        finish_reason: None,
+        raw: None,
+        resolved_model: None,
+        continue_turn: None,
+        served_from_cache: false,
+        correlation: None,
+        resolved_route: None,
+    };
+    model.stamp_origin(&mut response, &request, RESPONSES_API);
+    let origin = response.message.origin.expect("origin stamped");
+    assert_eq!(origin.api, "responses");
+    assert_eq!(origin.model, "gpt-4.1-mini");
+}
+
+#[tokio::test]
+async fn streamed_terminal_response_carries_origin() {
+    let raw: Vec<Vec<u8>> = vec![
+        b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\n"
+            .to_vec(),
+        b"data: [DONE]\n\n".to_vec(),
+    ];
+    let items = collect_sse(raw).await;
+    let completed = items
+        .into_iter()
+        .find_map(|item| match item {
+            ModelStreamItem::Completed(response) => Some(response),
+            _ => None,
+        })
+        .expect("a terminal Completed item");
+    let origin = completed
+        .message
+        .origin
+        .expect("origin stamped on stream terminal");
+    assert_eq!(origin.provider, "openai");
+    assert_eq!(origin.api, "chat_completions");
+    assert_eq!(origin.model, "gpt-4.1-mini");
 }

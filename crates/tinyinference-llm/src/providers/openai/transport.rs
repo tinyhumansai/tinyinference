@@ -125,6 +125,10 @@ pub struct OpenAiModel {
     /// default: hosted OpenAI rejects unknown part fields, and its own cache is
     /// automatic. See [`Self::with_explicit_cache_control`].
     pub(super) explicit_cache_control: bool,
+    /// Host-supplied request hooks and HTTP client override. See
+    /// [`crate::providers::ProviderRequestOptions`]. Currently applied to the
+    /// Chat Completions transport path only ([`Self::post_json`]).
+    request_options: crate::providers::ProviderRequestOptions,
 }
 
 impl std::fmt::Debug for OpenAiModel {
@@ -287,6 +291,18 @@ pub(super) fn derive_profile(provider: &str, model: &str) -> ModelProfile {
         reasoning,
         reasoning_effort: reasoning,
         max_input_tokens: crate::model::context_window_for_model_id(model),
+        // The Chat Completions wire format translates every `Message::System`
+        // independently, at its transcript position, into a `role: "system"`
+        // wire message (`convert::translate_message`) — there is no single
+        // "the" system slot the way Anthropic's Messages API has one. A
+        // system message placed mid-transcript is therefore genuinely
+        // effective where it sits, not silently dropped or hoisted, so this
+        // defaults `true` for the OpenAI-compatible chat path. It is turned
+        // back off by `with_merge_system_into_user`, which folds every system
+        // message into the leading user turn and drops the role entirely —
+        // at that point there is no wire position for a mid-transcript patch
+        // to occupy.
+        mid_conversation_system_messages: true,
         ..ModelProfile::default()
     }
 }
@@ -330,7 +346,20 @@ impl OpenAiModel {
             json_schema_strict: AtomicBool::new(true),
             native_tools_on_wire: AtomicBool::new(true),
             responses_requires_stream: AtomicBool::new(false),
+            request_options: crate::providers::ProviderRequestOptions::default(),
         }
+    }
+
+    /// Sets host-supplied request hooks and an optional HTTP client override
+    /// applied around Chat Completions calls this adapter makes. See
+    /// [`crate::providers::ProviderRequestOptions`].
+    #[must_use]
+    pub fn with_request_options(
+        mut self,
+        options: crate::providers::ProviderRequestOptions,
+    ) -> Self {
+        self.request_options = options;
+        self
     }
 
     /// Routes calls to the OpenAI **Responses API** (`/v1/responses`) instead of
@@ -408,6 +437,12 @@ impl OpenAiModel {
     /// role, for OpenAI-compatible endpoints that reject a `system` role.
     pub fn with_merge_system_into_user(mut self) -> Self {
         self.merge_system_into_user = true;
+        // Once every system message is folded into the leading user turn,
+        // the wire request carries no `system`-role message at all, so
+        // there is no transcript position for a mid-conversation system
+        // patch to occupy — a caller must fold such a patch into the
+        // leading system message before this transform runs instead.
+        self.profile.mid_conversation_system_messages = false;
         self
     }
 
@@ -999,6 +1034,31 @@ impl OpenAiModel {
         Ok(())
     }
 
+    /// Stamps [`crate::message::AssistantMessage::origin`] on a freshly built
+    /// response with this instance's configured provider/model and the given
+    /// API surface (see [`CHAT_COMPLETIONS_API`]/[`RESPONSES_API`]).
+    ///
+    /// Every response-building path (unary, the non-streaming SSE fallback,
+    /// and the Responses API) funnels through here (or the analogous
+    /// `sse_next` streamed-terminal site) so a later cross-provider handoff
+    /// transform can detect when a message was produced by a different
+    /// provider/model than the one it is about to be replayed against. Local
+    /// OpenAI-compatible runtimes (Ollama, LM Studio, …) share this transport
+    /// and are stamped with their own `provider` (e.g. `"ollama"`), not
+    /// `"openai"`.
+    pub(super) fn stamp_origin(
+        &self,
+        response: &mut ModelResponse,
+        request: &ModelRequest,
+        api: &str,
+    ) {
+        response.message.origin = Some(crate::message::MessageOrigin {
+            provider: self.provider.clone(),
+            api: api.to_string(),
+            model: request.model.clone().unwrap_or_else(|| self.model.clone()),
+        });
+    }
+
     /// Returns the default model id this instance will request.
     pub fn model(&self) -> &str {
         &self.model
@@ -1102,6 +1162,9 @@ impl OpenAiModel {
         };
         let mut messages = source_messages
             .iter()
+            // `Message::Custom` is a host-side out-of-band record; never sent
+            // to the provider.
+            .filter(|message| !matches!(message, Message::Custom(_)))
             .map(translate_message)
             .collect::<Result<Vec<_>>>()?;
         if self.explicit_cache_control && request.wants_prompt_cache_breakpoints() {
@@ -1393,7 +1456,9 @@ impl OpenAiModel {
                 )
             })?,
         };
-        Ok(responses::parse_responses_response(value))
+        let mut response = responses::parse_responses_response(value);
+        self.stamp_origin(&mut response, request, RESPONSES_API);
+        Ok(response)
     }
 
     /// Shared `POST {responses_url}` with auth, query params, and timeout, mapped
@@ -1454,8 +1519,12 @@ impl OpenAiModel {
         streaming: bool,
         what: &str,
     ) -> Result<reqwest::Response> {
+        crate::network_guard::ensure_network_models_allowed()?;
         let url = format!("{}/chat/completions", self.base_url);
-        let mut builder = self.authorized(self.client.post(&url)).json(body);
+        let mut payload = serde_json::to_value(body)?;
+        self.request_options.apply_payload(&mut payload);
+        let client = self.request_options.http.as_ref().unwrap_or(&self.client);
+        let mut builder = self.authorized(client.post(&url)).json(&payload);
         if let Some(timeout) = request_timeout(timeout_ms, streaming) {
             builder = builder.timeout(timeout);
         }
@@ -1540,6 +1609,8 @@ impl OpenAiModel {
             retryable,
             raw,
             retry_after_ms: None,
+            partial_message: None,
+            stop_reason: None,
         }
     }
 
@@ -1775,7 +1846,9 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
             .map_err(|e| Error::Model(format!("openai response body read failed: {e}")))?;
 
         let value: Value = serde_json::from_str(&text)?;
-        let response = parse_chat_response(value, self.effective_reasoning_tags())?;
+        self.request_options.observe_response(&value);
+        let mut response = parse_chat_response(value, self.effective_reasoning_tags())?;
+        self.stamp_origin(&mut response, &request, CHAT_COMPLETIONS_API);
         // Prompt-guided tools: recover text-mode tool calls into
         // `message.tool_calls` when native tool calling was suppressed.
         if self.prompt_guided_for(&request) {
@@ -1852,6 +1925,7 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
             })?;
             let value: Value = serde_json::from_str(&text)?;
             let mut parsed = parse_chat_response(value, self.effective_reasoning_tags())?;
+            self.stamp_origin(&mut parsed, &request, CHAT_COMPLETIONS_API);
             if self.prompt_guided_for(&request) {
                 parsed = crate::prompt_tools::recover_tool_calls(parsed, &request.tools);
             }

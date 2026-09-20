@@ -5,7 +5,8 @@ use super::*;
 use crate::cache::CachePolicy;
 use crate::message::{ContentBlock, ImageRef, Message, ToolMessage};
 use crate::model::{
-    ModelStreamItem, PromptSegment, ReasoningConfig, ReasoningEffort, SegmentRole, ToolChoice,
+    BlockDelta, BlockKind, ModelStreamItem, PromptSegment, ReasoningConfig, ReasoningEffort,
+    SegmentRole, ToolChoice,
 };
 use crate::tool::{ToolCall, ToolSchema};
 
@@ -210,6 +211,24 @@ fn tool_results_use_anthropic_tool_result_blocks() {
     );
 }
 
+#[test]
+fn custom_messages_are_never_sent_to_the_provider() {
+    let request = ModelRequest::new(vec![
+        Message::user("hi"),
+        Message::Custom(crate::message::CustomMessage {
+            kind: "compaction".into(),
+            payload: serde_json::json!({"summary": "..."}),
+            display: Some("Compacted".into()),
+        }),
+        Message::assistant("hello"),
+    ]);
+    let body = request_body(&request, "test-model");
+    let messages = body["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0]["role"], "user");
+    assert_eq!(messages[1]["role"], "assistant");
+}
+
 /// Parallel tool calls answer as consecutive tool messages; the Messages API
 /// requires them merged into one user turn.
 #[test]
@@ -272,6 +291,7 @@ fn signed_thinking_is_replayed_and_unsigned_thinking_is_dropped() {
         ],
         tool_calls: vec![],
         usage: None,
+        origin: None,
     });
     let body = request_body(&ModelRequest::new(vec![Message::user("q"), assistant]), "m");
     let content = body["messages"][1]["content"].as_array().unwrap();
@@ -313,6 +333,63 @@ fn images_become_base64_or_url_sources() {
         content[2]["source"],
         json!({ "type": "url", "url": "https://example.com/a.png" })
     );
+}
+
+#[test]
+fn document_blocks_render_as_document_source_or_placeholder() {
+    use crate::message::MediaRef;
+
+    let request = ModelRequest::new(vec![Message::User(crate::message::UserMessage {
+        content: vec![
+            ContentBlock::Document(MediaRef::base64("QQ==", "application/pdf")),
+            ContentBlock::Document(MediaRef::url("https://example.com/a.pdf")),
+            ContentBlock::Document(MediaRef::path("/tmp/local.pdf")),
+        ],
+    })]);
+    let body = request_body(&request, "m");
+    let content = body["messages"][0]["content"].as_array().unwrap();
+    assert_eq!(content[0]["type"], "document");
+    assert_eq!(
+        content[0]["source"],
+        json!({ "type": "base64", "media_type": "application/pdf", "data": "QQ==" })
+    );
+    assert_eq!(content[1]["type"], "document");
+    assert_eq!(
+        content[1]["source"],
+        json!({ "type": "url", "url": "https://example.com/a.pdf" })
+    );
+    // A local path has no wire representation; it becomes a placeholder text
+    // block rather than being silently dropped.
+    assert_eq!(content[2]["type"], "text");
+    assert!(
+        content[2]["text"]
+            .as_str()
+            .unwrap()
+            .contains("/tmp/local.pdf")
+    );
+}
+
+#[test]
+fn audio_and_video_blocks_become_placeholder_text() {
+    use crate::message::MediaRef;
+
+    let request = ModelRequest::new(vec![Message::User(crate::message::UserMessage {
+        content: vec![
+            ContentBlock::Audio(MediaRef::url("https://example.com/a.wav")),
+            ContentBlock::Video(MediaRef::base64("AAAA", "video/mp4")),
+        ],
+    })]);
+    let body = request_body(&request, "m");
+    let content = body["messages"][0]["content"].as_array().unwrap();
+    assert_eq!(content[0]["type"], "text");
+    assert!(
+        content[0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("https://example.com/a.wav")
+    );
+    assert_eq!(content[1]["type"], "text");
+    assert!(content[1]["text"].as_str().unwrap().contains("video"));
 }
 
 #[test]
@@ -764,4 +841,231 @@ async fn oversized_sse_content_block_index_is_rejected() {
         items.last(),
         Some(ModelStreamItem::ProviderFailed(error)) if error.message.contains("exceeds limit")
     ));
+}
+
+#[tokio::test]
+async fn streaming_emits_block_boundaries_for_interleaved_thinking_text_and_tool_call() {
+    // A recorded-shape SSE fixture with three content blocks in wire order:
+    // thinking (0), text (1), tool_use (2). Asserts `BlockStart`/`BlockDelta`/
+    // `BlockEnd` map 1:1 onto `content_block_start`/`_delta`/`_stop` and that
+    // `ToolCallDelta` fragments carry the wire `content_index`.
+    let events = [
+        json!({"type":"message_start","message":{"id":"msg_b","usage":{"input_tokens":2,"output_tokens":0}}}),
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}),
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"plan it"}}),
+        json!({"type":"content_block_stop","index":0}),
+        json!({"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}),
+        json!({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Sure, "}}),
+        json!({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"let me check."}}),
+        json!({"type":"content_block_stop","index":1}),
+        json!({"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"toolu_1","name":"lookup","input":{}}}),
+        json!({"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"q\":"}}),
+        json!({"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"1}"}}),
+        json!({"type":"content_block_stop","index":2}),
+        json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":9}}),
+        json!({"type":"message_stop"}),
+    ];
+    let items: Vec<ModelStreamItem> = stream::stream_from_bytes(vec![sse(&events)], "m")
+        .collect()
+        .await;
+
+    let starts: Vec<(usize, &BlockKind)> = items
+        .iter()
+        .filter_map(|item| match item {
+            ModelStreamItem::BlockStart { index, kind } => Some((*index, kind)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(starts.len(), 3);
+    assert_eq!(starts[0], (0, &BlockKind::Thinking));
+    assert_eq!(starts[1], (1, &BlockKind::Text));
+    assert_eq!(
+        starts[2],
+        (
+            2,
+            &BlockKind::ToolCall {
+                id: "toolu_1".to_string(),
+                name: "lookup".to_string(),
+            }
+        )
+    );
+
+    let deltas: Vec<(usize, &BlockDelta)> = items
+        .iter()
+        .filter_map(|item| match item {
+            ModelStreamItem::BlockDelta { index, delta } => Some((*index, delta)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        deltas,
+        vec![
+            (0, &BlockDelta::Thinking("plan it".to_string())),
+            (1, &BlockDelta::Text("Sure, ".to_string())),
+            (1, &BlockDelta::Text("let me check.".to_string())),
+            (2, &BlockDelta::ToolArgs("{\"q\":".to_string())),
+            (2, &BlockDelta::ToolArgs("1}".to_string())),
+        ]
+    );
+
+    let ends: Vec<usize> = items
+        .iter()
+        .filter_map(|item| match item {
+            ModelStreamItem::BlockEnd { index, .. } => Some(*index),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ends, vec![0, 1, 2]);
+    let Some(ModelStreamItem::BlockEnd {
+        block: ContentBlock::Thinking { text, .. },
+        ..
+    }) = items
+        .iter()
+        .find(|item| matches!(item, ModelStreamItem::BlockEnd { index: 0, .. }))
+    else {
+        panic!("expected thinking BlockEnd at index 0");
+    };
+    assert_eq!(text, "plan it");
+    let Some(ModelStreamItem::BlockEnd {
+        block: ContentBlock::Text(text),
+        ..
+    }) = items
+        .iter()
+        .find(|item| matches!(item, ModelStreamItem::BlockEnd { index: 1, .. }))
+    else {
+        panic!("expected text BlockEnd at index 1");
+    };
+    assert_eq!(text, "Sure, let me check.");
+    let Some(ModelStreamItem::BlockEnd {
+        block: ContentBlock::Json(value),
+        ..
+    }) = items
+        .iter()
+        .find(|item| matches!(item, ModelStreamItem::BlockEnd { index: 2, .. }))
+    else {
+        panic!("expected tool-call BlockEnd at index 2");
+    };
+    assert_eq!(value["id"], "toolu_1");
+    assert_eq!(value["name"], "lookup");
+    assert_eq!(value["arguments"], json!({"q": 1}));
+
+    // Every ToolCallDelta for the tool-use block carries its wire index.
+    let tool_indices: Vec<Option<usize>> = items
+        .iter()
+        .filter_map(|item| match item {
+            ModelStreamItem::ToolCallDelta(delta) => Some(delta.content_index),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(tool_indices, vec![Some(2), Some(2), Some(2)]);
+
+    // Compatibility: MessageDelta still carries the flat text/reasoning.
+    let text: String = items
+        .iter()
+        .filter_map(|item| match item {
+            ModelStreamItem::MessageDelta(delta) => Some(delta.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(text, "Sure, let me check.");
+    let reasoning: String = items
+        .iter()
+        .filter_map(|item| match item {
+            ModelStreamItem::MessageDelta(delta) => Some(delta.reasoning.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reasoning, "plan it");
+}
+
+#[tokio::test]
+async fn provider_failed_terminal_carries_partial_message_and_stop_reason() {
+    // A mid-stream `error` event after some content has already arrived must
+    // surface the partial assistant message and last-known stop reason, so a
+    // caller can decide whether to keep or discard the partial turn instead
+    // of losing it outright.
+    let events = [
+        json!({"type":"message_start","message":{"id":"msg_e","usage":{"input_tokens":1,"output_tokens":0}}}),
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial answer"}}),
+        json!({"type":"message_delta","delta":{"stop_reason":"pause_turn"},"usage":{"output_tokens":2}}),
+        json!({"type":"error","error":{"type":"overloaded_error","message":"the server is overloaded"}}),
+    ];
+    let items: Vec<ModelStreamItem> = stream::stream_from_bytes(vec![sse(&events)], "m")
+        .collect()
+        .await;
+    let Some(ModelStreamItem::ProviderFailed(error)) = items.last() else {
+        panic!("expected ProviderFailed, got {:?}", items.last());
+    };
+    assert_eq!(error.stop_reason.as_deref(), Some("pause_turn"));
+    let partial = error
+        .partial_message
+        .as_ref()
+        .expect("partial message must be present");
+    assert_eq!(
+        partial.content,
+        vec![ContentBlock::Text("partial answer".to_string())]
+    );
+}
+
+#[test]
+fn origin_for_records_provider_api_and_effective_model() {
+    let model = AnthropicModel::new("key").with_model("claude-opus-4-6");
+    let request = ModelRequest::default();
+    let origin = model.origin_for(&request);
+    assert_eq!(origin.provider, "anthropic");
+    assert_eq!(origin.api, "messages");
+    assert_eq!(origin.model, "claude-opus-4-6");
+}
+
+#[test]
+fn origin_for_prefers_a_per_request_model_override() {
+    let model = AnthropicModel::new("key").with_model("claude-opus-4-6");
+    let request = ModelRequest {
+        model: Some("claude-sonnet-4-6".to_string()),
+        ..Default::default()
+    };
+    let origin = model.origin_for(&request);
+    assert_eq!(origin.model, "claude-sonnet-4-6");
+}
+
+#[test]
+fn default_profile_advertises_the_tool_call_id_shape() {
+    let model = AnthropicModel::new("key");
+    let profile = &model.profile;
+    assert_eq!(
+        profile.tool_call_id_pattern.as_deref(),
+        Some("^[a-zA-Z0-9_-]{1,64}$")
+    );
+    assert_eq!(profile.max_tool_call_id_len, Some(64));
+}
+
+#[tokio::test]
+async fn streamed_terminal_response_carries_origin() {
+    let events = [
+        json!({"type":"message_start","message":{"id":"msg_o","usage":{"input_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}),
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}),
+        json!({"type":"content_block_stop","index":0}),
+        json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}),
+        json!({"type":"message_stop"}),
+    ];
+    let items: Vec<ModelStreamItem> =
+        stream::stream_from_bytes(vec![sse(&events)], "claude-opus-4-6")
+            .collect()
+            .await;
+    let completed = items
+        .into_iter()
+        .find_map(|item| match item {
+            ModelStreamItem::Completed(response) => Some(response),
+            _ => None,
+        })
+        .expect("a terminal Completed item");
+    let origin = completed
+        .message
+        .origin
+        .expect("origin stamped on stream terminal");
+    assert_eq!(origin.provider, "anthropic");
+    assert_eq!(origin.api, "messages");
+    assert_eq!(origin.model, "claude-opus-4-6");
 }

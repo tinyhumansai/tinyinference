@@ -177,7 +177,8 @@ pub fn coalesce_tool_results(messages: &[Message]) -> Vec<Message> {
 /// [`TOOL_RESULTS_PREFIX`], and templates that look for a user query want a
 /// request to answer, not the transcript of a tool the model itself invoked —
 /// Qwen 3's template makes the same distinction. Neither does an empty or
-/// whitespace-only turn. Non-text content (JSON, an image) does count.
+/// whitespace-only turn. Non-text content (JSON, an image, audio, video, or a
+/// document) does count.
 fn is_resolvable_user_query(message: &Message) -> bool {
     let Message::User(user) = message else {
         return false;
@@ -191,7 +192,11 @@ fn is_resolvable_user_query(message: &Message) -> bool {
     }
     user.content.iter().any(|block| match block {
         ContentBlock::Text(text) => !text.trim().is_empty(),
-        ContentBlock::Json(_) | ContentBlock::Image(_) => true,
+        ContentBlock::Json(_)
+        | ContentBlock::Image(_)
+        | ContentBlock::Audio(_)
+        | ContentBlock::Video(_)
+        | ContentBlock::Document(_) => true,
         ContentBlock::Thinking { .. }
         | ContentBlock::RedactedThinking { .. }
         | ContentBlock::ProviderExtension(_) => false,

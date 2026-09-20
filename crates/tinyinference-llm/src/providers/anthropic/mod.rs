@@ -72,6 +72,15 @@ const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 30;
 /// prose — the previous 1,024 truncated real tool calls mid-argument.
 const DEFAULT_MAX_TOKENS: u32 = 4096;
 const PROVIDER: &str = "anthropic";
+/// [`crate::message::MessageOrigin::api`] value stamped on every response
+/// this adapter builds (unary and streamed terminal).
+pub(super) const MESSAGES_API: &str = "messages";
+/// Anthropic's accepted `tool_use.id`/`tool_result.tool_use_id` shape.
+const TOOL_CALL_ID_PATTERN: &str = "^[a-zA-Z0-9_-]{1,64}$";
+/// Anthropic's accepted tool-call id length ceiling (also encoded in
+/// [`TOOL_CALL_ID_PATTERN`], but kept as a plain number for callers that
+/// truncate without parsing the regex).
+const TOOL_CALL_ID_MAX_LEN: usize = 64;
 
 /// A chat model backed by Anthropic's native Messages API.
 pub struct AnthropicModel {
@@ -86,6 +95,7 @@ pub struct AnthropicModel {
     temperature_unsupported: Vec<String>,
     extra_headers: Vec<(String, String)>,
     allow_insecure_http: bool,
+    request_options: crate::providers::ProviderRequestOptions,
 }
 
 impl std::fmt::Debug for AnthropicModel {
@@ -108,6 +118,7 @@ impl std::fmt::Debug for AnthropicModel {
                     .collect::<Vec<_>>(),
             )
             .field("allow_insecure_http", &self.allow_insecure_http)
+            .field("request_options", &self.request_options)
             .finish()
     }
 }
@@ -143,6 +154,10 @@ impl AnthropicModel {
                 streaming: true,
                 streaming_tool_chunks: true,
                 reasoning: true,
+                // Anthropic rejects a `tool_use`/`tool_result` id outside
+                // this shape with a 400.
+                tool_call_id_pattern: Some(TOOL_CALL_ID_PATTERN.to_string()),
+                max_tool_call_id_len: Some(TOOL_CALL_ID_MAX_LEN),
                 ..ModelProfile::default()
             },
             model,
@@ -150,7 +165,20 @@ impl AnthropicModel {
             temperature_unsupported: Vec::new(),
             extra_headers: Vec::new(),
             allow_insecure_http: false,
+            request_options: crate::providers::ProviderRequestOptions::default(),
         }
+    }
+
+    /// Sets host-supplied request hooks and an optional HTTP client override
+    /// applied around every call this adapter makes. See
+    /// [`crate::providers::ProviderRequestOptions`].
+    #[must_use]
+    pub fn with_request_options(
+        mut self,
+        options: crate::providers::ProviderRequestOptions,
+    ) -> Self {
+        self.request_options = options;
+        self
     }
 
     /// Overrides the default model id used when a request does not specify one.
@@ -231,6 +259,18 @@ impl AnthropicModel {
         request.model.as_deref().unwrap_or(&self.model)
     }
 
+    /// Builds the [`crate::message::MessageOrigin`] to stamp on a response to
+    /// this request: this adapter's fixed provider/API plus the model that
+    /// actually served the call (a request-level override, when set, else
+    /// the instance default).
+    pub(super) fn origin_for(&self, request: &ModelRequest) -> crate::message::MessageOrigin {
+        crate::message::MessageOrigin {
+            provider: PROVIDER.to_string(),
+            api: MESSAGES_API.to_string(),
+            model: self.request_model(request).to_string(),
+        }
+    }
+
     fn request_body(&self, request: &ModelRequest) -> Value {
         let mut body = request_body(request, &self.model);
         match effective_temperature(
@@ -252,6 +292,7 @@ impl AnthropicModel {
     }
 
     async fn post(&self, request: &ModelRequest, streaming: bool) -> Result<reqwest::Response> {
+        crate::network_guard::ensure_network_models_allowed()?;
         let endpoint = reqwest::Url::parse(&self.endpoint())
             .map_err(|error| Error::Validation(format!("invalid Anthropic base URL: {error}")))?;
         match endpoint.scheme() {
@@ -273,15 +314,26 @@ impl AnthropicModel {
         if streaming {
             body["stream"] = Value::Bool(true);
         }
-        let mut request_builder = self
-            .client
-            .post(endpoint)
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", ANTHROPIC_VERSION);
+        self.request_options.apply_payload(&mut body);
+        let client = self.request_options.http.as_ref().unwrap_or(&self.client);
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            "x-api-key",
+            reqwest::header::HeaderValue::from_str(&self.api_key)
+                .map_err(|e| Error::Validation(e.to_string()))?,
+        );
+        headers.insert(
+            "anthropic-version",
+            reqwest::header::HeaderValue::from_static(ANTHROPIC_VERSION),
+        );
         for (name, value) in &self.extra_headers {
-            request_builder = request_builder.header(name.as_str(), value.as_str());
+            let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+                .map_err(|e| Error::Validation(e.to_string()))?;
+            let value = reqwest::header::HeaderValue::from_str(value)
+                .map_err(|e| Error::Validation(e.to_string()))?;
+            headers.insert(name, value);
         }
-        let request_builder = request_builder.json(&body);
+        let request_builder = client.post(endpoint).headers(headers).json(&body);
         let request_builder = match (streaming, request.timeout_ms) {
             (false, Some(timeout_ms)) => request_builder.timeout(Duration::from_millis(timeout_ms)),
             _ => request_builder,
@@ -335,6 +387,8 @@ impl AnthropicModel {
             retryable,
             retry_after_ms: tinyinference_core::parse_retry_after_ms(retry_after),
             raw,
+            partial_message: None,
+            stop_reason: None,
         }
     }
 
@@ -384,7 +438,12 @@ impl<State: Send + Sync> ChatModel<State> for AnthropicModel {
             .json()
             .await
             .map_err(|error| Error::Model(format!("anthropic response was not JSON: {error}")))?;
-        parse_response(body).map(|response| response.inherit_correlation(request.correlation))
+        self.request_options.observe_response(&body);
+        let origin = self.origin_for(&request);
+        parse_response(body).map(|mut response| {
+            response.message.origin = Some(origin);
+            response.inherit_correlation(request.correlation)
+        })
     }
 
     async fn stream(&self, _state: &State, request: ModelRequest) -> Result<ModelStream> {

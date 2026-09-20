@@ -79,6 +79,9 @@ pub(crate) fn parse_response(body: Value) -> Result<ModelResponse> {
             content,
             tool_calls,
             usage: Some(usage),
+            // Stamped by the caller (`AnthropicModel::invoke`), which knows
+            // the configured provider/model.
+            origin: None,
         },
         usage: Some(usage),
         finish_reason: Some(stop_reason),

@@ -67,6 +67,14 @@ pub(super) fn translate_message(message: &Message) -> Result<ChatMessageWire> {
             tool_calls: Vec::new(),
             tool_call_id: Some(tool.tool_call_id.clone()),
         },
+        // Callers filter `Message::Custom` out of the messages slice before
+        // calling this function; it is a host-side out-of-band record that is
+        // never sent to a provider.
+        Message::Custom(_) => {
+            return Err(Error::Validation(
+                "Message::Custom must be filtered before wire translation".to_string(),
+            ));
+        }
     };
     Ok(wire)
 }
@@ -78,7 +86,11 @@ fn translate_text_content(blocks: &[ContentBlock]) -> Result<String> {
             ContentBlock::Text(value) => text.push_str(value),
             ContentBlock::Json(value) => text.push_str(&value.to_string()),
             ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => {}
-            ContentBlock::Image(_) | ContentBlock::ProviderExtension(_) => {
+            ContentBlock::Image(_)
+            | ContentBlock::ProviderExtension(_)
+            | ContentBlock::Audio(_)
+            | ContentBlock::Video(_)
+            | ContentBlock::Document(_) => {
                 return Err(unrepresentable_block_error());
             }
         }
@@ -95,25 +107,32 @@ fn translate_text_content(blocks: &[ContentBlock]) -> Result<String> {
 /// representation, so it fails closed with a validation error rather than being
 /// silently dropped.
 pub(super) fn translate_user_content(blocks: &[ContentBlock]) -> Result<MessageContentWire> {
-    let has_image = blocks
+    let has_media = blocks
         .iter()
-        .any(|block| matches!(block, ContentBlock::Image(_)));
+        .any(|block| matches!(block, ContentBlock::Image(_) | ContentBlock::Audio(_)));
 
-    if !has_image {
-        // No image: render as a single string, but still fail closed on blocks
-        // that cannot be represented.
+    if !has_media {
+        // No image/audio: render as a single string, but still fail closed on
+        // blocks that cannot be represented.
         let mut text = String::new();
         for block in blocks {
             match block {
                 ContentBlock::Text(t) => text.push_str(t),
                 ContentBlock::Json(value) => text.push_str(&value.to_string()),
-                ContentBlock::Image(_) => unreachable!("guarded by has_image"),
+                ContentBlock::Image(_) | ContentBlock::Audio(_) => {
+                    unreachable!("guarded by has_media")
+                }
                 // OpenAI-compatible requests have no representation for
                 // reasoning blocks; they are dropped rather than failing the
                 // request (matching the assistant path, which serializes via
                 // `Message::text` and drops them naturally).
                 ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => {}
-                ContentBlock::ProviderExtension(_) => {
+                // Chat Completions has no video or document input; fail
+                // closed rather than silently drop an attachment the caller
+                // expected to be sent.
+                ContentBlock::ProviderExtension(_)
+                | ContentBlock::Video(_)
+                | ContentBlock::Document(_) => {
                     return Err(unrepresentable_block_error());
                 }
             }
@@ -137,10 +156,13 @@ pub(super) fn translate_user_content(blocks: &[ContentBlock]) -> Result<MessageC
                     url: image.url.clone(),
                 },
             }),
+            ContentBlock::Audio(media) => parts.push(input_audio_part(media)?),
             // See the string-rendering arm above: reasoning blocks have no
             // OpenAI representation and are dropped, not failed.
             ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => {}
-            ContentBlock::ProviderExtension(_) => {
+            ContentBlock::ProviderExtension(_)
+            | ContentBlock::Video(_)
+            | ContentBlock::Document(_) => {
                 return Err(unrepresentable_block_error());
             }
         }
@@ -193,6 +215,41 @@ pub(super) fn unrepresentable_block_error() -> Error {
          remove it or target the originating provider"
             .to_string(),
     )
+}
+
+/// Renders an audio [`crate::message::MediaRef`] as an OpenAI Chat
+/// Completions `input_audio` content part.
+///
+/// The wire format requires inline base64 data, so a [`MediaRef::Url`] or
+/// [`MediaRef::Path`] reference — which the harness never fetches or reads
+/// itself — fails closed rather than being silently dropped or sent
+/// malformed.
+fn input_audio_part(media: &crate::message::MediaRef) -> Result<ContentPartWire> {
+    use crate::message::MediaRef;
+    match media {
+        MediaRef::Base64 { data, media_type } => Ok(ContentPartWire::InputAudio {
+            input_audio: InputAudioWire {
+                data: data.clone(),
+                format: audio_format_from_media_type(media_type),
+            },
+        }),
+        MediaRef::Url { .. } | MediaRef::Path { .. } => Err(Error::Validation(
+            "OpenAI input_audio requires inline base64 data; resolve the \
+             audio reference to bytes before sending it"
+                .to_string(),
+        )),
+    }
+}
+
+/// Derives the OpenAI `input_audio.format` token (`"wav"`, `"mp3"`, …) from a
+/// MIME type such as `audio/wav`, defaulting to `"wav"` when unrecognized.
+fn audio_format_from_media_type(media_type: &str) -> String {
+    media_type
+        .rsplit('/')
+        .next()
+        .filter(|format| !format.is_empty())
+        .unwrap_or("wav")
+        .to_string()
 }
 
 /// Translates a [`ToolChoice`] into the OpenAI `tool_choice` JSON value.
@@ -357,6 +414,9 @@ pub(super) fn parse_chat_response(
         content,
         tool_calls,
         usage,
+        // Stamped by the transport call site, which knows the configured
+        // provider/model; this parser is provider-agnostic wire decoding.
+        origin: None,
     };
 
     Ok(ModelResponse {
