@@ -20,7 +20,7 @@ use serde_json::Value;
 
 use crate::Result;
 use crate::cache::CachePolicy;
-use crate::message::{AssistantMessage, Message, MessageDelta};
+use crate::message::{AssistantMessage, ContentBlock, Message, MessageDelta};
 use crate::tool::{ToolDelta, ToolSchema};
 use crate::usage::Usage;
 
@@ -163,6 +163,12 @@ pub struct Modalities {
     pub audio_in: bool,
     /// Produces audio output.
     pub audio_out: bool,
+    /// Accepts video input.
+    pub video_in: bool,
+    /// Produces video output.
+    pub video_out: bool,
+    /// Accepts document input (PDF and similar).
+    pub document_in: bool,
 }
 
 impl Default for Modalities {
@@ -174,6 +180,9 @@ impl Default for Modalities {
             image_out: false,
             audio_in: false,
             audio_out: false,
+            video_in: false,
+            video_out: false,
+            document_in: false,
         }
     }
 }
@@ -240,6 +249,285 @@ pub struct ModelProfile {
     /// Maximum output tokens, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u64>,
+    /// Whether the provider accepts a `system`/developer-role message
+    /// anywhere in the transcript's message list, not only as a single
+    /// leading block.
+    ///
+    /// This is `false` by default and must be opted into explicitly, because
+    /// getting it wrong silently drops content: an OpenAI-style chat API
+    /// (`Message::System` translated 1:1 to a `role: "system"` wire message
+    /// at its transcript position — see `providers::openai::convert::
+    /// translate_message`) genuinely honors a system message wherever it
+    /// appears, so `true` is correct there. Anthropic's Messages API has no
+    /// such slot: every `Message::System` in the transcript, wherever it
+    /// occurs, is collected into one top-level `system` array ahead of the
+    /// `messages` list (see `providers::anthropic::request`), so a "mid-
+    /// conversation" system message is actually hoisted to the front on the
+    /// wire — `false` here is what tells a caller (the transcript-carried
+    /// system-patch mechanism, `docs/runtime-comparison/plan.md`'s B6) to
+    /// fold a patch into the leading system message instead of inserting it
+    /// in place.
+    #[serde(default)]
+    pub mid_conversation_system_messages: bool,
+    /// JSON-schema transform this model's adapter must apply before sending a
+    /// schema to the provider (for example stripping `$defs` a provider
+    /// rejects, or forcing `additionalProperties: false`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema_transform: Option<SchemaTransform>,
+    /// Structured-output strategy the harness should default to for this
+    /// model when the caller does not pin one explicitly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_structured_mode: Option<StructuredMode>,
+    /// Prompt template used when `default_structured_mode` (or an explicit
+    /// override) resolves to [`StructuredMode::Prompted`]. Implementations
+    /// should substitute the target schema into this template.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompted_output_template: Option<String>,
+    /// Open/close tag pair (for example `("<think>", "</think>")`) that this
+    /// model emits around chain-of-thought text. Response normalization
+    /// should extract tagged spans into a thinking content block rather than
+    /// leaving them inline in the visible text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_tags: Option<(String, String)>,
+    /// Whether leading whitespace on the first streamed text delta is an
+    /// artifact of this provider's wire format and should be dropped rather
+    /// than surfaced to the caller.
+    #[serde(default)]
+    pub ignore_streamed_leading_whitespace: bool,
+    /// Maps a named reasoning/thinking level (for example `"low"`,
+    /// `"high"`, or a provider-specific label) to the [`ReasoningConfig`] it
+    /// expands to for this model.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub thinking_level_map: std::collections::BTreeMap<String, ReasoningConfig>,
+    /// Provider-family compatibility quirks that do not fit the capability
+    /// model above.
+    #[serde(default)]
+    pub compat: ProviderCompat,
+    /// Regex a tool-call id must match to be accepted by this provider, when
+    /// the provider constrains the shape (for example Anthropic's
+    /// `^[a-zA-Z0-9_-]{1,64}$`). `None` means the provider imposes no shape
+    /// constraint beyond an opaque string.
+    ///
+    /// Consulted by a cross-provider handoff transform
+    /// (`tinyagents_harness::agent_loop::handoff_transform`) to decide
+    /// whether a tool-call id minted by a different provider needs
+    /// normalizing before replay; not enforced by this crate's own request
+    /// building.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id_pattern: Option<String>,
+    /// Maximum accepted tool-call id length, when the provider constrains it.
+    /// Often redundant with a bound already encoded in
+    /// [`tool_call_id_pattern`](Self::tool_call_id_pattern) (as it is for
+    /// Anthropic's `{1,64}`), but kept separate so a normalizer can truncate
+    /// without needing to parse the regex.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tool_call_id_len: Option<usize>,
+}
+
+/// A named, serializable JSON-schema transform applied before a schema is
+/// sent to a provider.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind", content = "value")]
+pub enum SchemaTransform {
+    /// Removes the top-level `$defs`/`definitions` map from the schema.
+    StripDefs,
+    /// Resolves `$ref` pointers into `$defs`/`definitions` inline, then
+    /// drops the now-unused definitions map.
+    InlineRefs,
+    /// Recursively sets `additionalProperties: false` on every object
+    /// schema that does not already specify it.
+    NoAdditionalProperties,
+    /// Applies the subset of adjustments Gemini's schema dialect requires:
+    /// strips `additionalProperties`, `$schema`, `default`, and `examples`
+    /// keywords it does not accept.
+    GeminiCompat,
+    /// Applies OpenAI "strict" JSON-schema mode: inlines refs, forces
+    /// `additionalProperties: false`, and marks every property required.
+    OpenAiStrict,
+    /// Applies a sequence of transforms in order.
+    Chain(Vec<SchemaTransform>),
+}
+
+impl SchemaTransform {
+    /// Applies this transform to `schema`, returning the transformed value.
+    /// The input is never mutated in place.
+    #[must_use]
+    pub fn apply(&self, schema: &Value) -> Value {
+        let mut out = schema.clone();
+        match self {
+            Self::StripDefs => {
+                strip_defs(&mut out);
+            }
+            Self::InlineRefs => {
+                let defs = collect_defs(&out);
+                inline_refs(&mut out, &defs);
+                strip_defs(&mut out);
+            }
+            Self::NoAdditionalProperties => {
+                set_no_additional_properties(&mut out);
+            }
+            Self::GeminiCompat => {
+                strip_keys(
+                    &mut out,
+                    &["additionalProperties", "$schema", "default", "examples"],
+                );
+            }
+            Self::OpenAiStrict => {
+                let defs = collect_defs(&out);
+                inline_refs(&mut out, &defs);
+                strip_defs(&mut out);
+                set_no_additional_properties(&mut out);
+                require_all_properties(&mut out);
+            }
+            Self::Chain(steps) => {
+                for step in steps {
+                    out = step.apply(&out);
+                }
+            }
+        }
+        out
+    }
+}
+
+fn strip_defs(value: &mut Value) {
+    if let Value::Object(map) = value {
+        map.remove("$defs");
+        map.remove("definitions");
+        for v in map.values_mut() {
+            strip_defs(v);
+        }
+    } else if let Value::Array(items) = value {
+        for v in items {
+            strip_defs(v);
+        }
+    }
+}
+
+fn strip_keys(value: &mut Value, keys: &[&str]) {
+    if let Value::Object(map) = value {
+        for key in keys {
+            map.remove(*key);
+        }
+        for v in map.values_mut() {
+            strip_keys(v, keys);
+        }
+    } else if let Value::Array(items) = value {
+        for v in items {
+            strip_keys(v, keys);
+        }
+    }
+}
+
+fn collect_defs(value: &Value) -> serde_json::Map<String, Value> {
+    let mut defs = serde_json::Map::new();
+    if let Value::Object(map) = value {
+        if let Some(Value::Object(d)) = map.get("$defs") {
+            defs.extend(d.clone());
+        }
+        if let Some(Value::Object(d)) = map.get("definitions") {
+            defs.extend(d.clone());
+        }
+    }
+    defs
+}
+
+fn inline_refs(value: &mut Value, defs: &serde_json::Map<String, Value>) {
+    match value {
+        Value::Object(map) => {
+            if let Some(Value::String(reference)) = map.get("$ref").cloned() {
+                let name = reference.rsplit('/').next().unwrap_or(reference.as_str());
+                if let Some(resolved) = defs.get(name) {
+                    let mut resolved = resolved.clone();
+                    inline_refs(&mut resolved, defs);
+                    *value = resolved;
+                    return;
+                }
+            }
+            for v in map.values_mut() {
+                inline_refs(v, defs);
+            }
+        }
+        Value::Array(items) => {
+            for v in items {
+                inline_refs(v, defs);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn set_no_additional_properties(value: &mut Value) {
+    if let Value::Object(map) = value {
+        let is_object_schema = matches!(map.get("type"), Some(Value::String(t)) if t == "object")
+            || map.contains_key("properties");
+        if is_object_schema && !map.contains_key("additionalProperties") {
+            map.insert("additionalProperties".into(), Value::Bool(false));
+        }
+        for v in map.values_mut() {
+            set_no_additional_properties(v);
+        }
+    } else if let Value::Array(items) = value {
+        for v in items {
+            set_no_additional_properties(v);
+        }
+    }
+}
+
+fn require_all_properties(value: &mut Value) {
+    if let Value::Object(map) = value {
+        if let Some(Value::Object(props)) = map.get("properties").cloned() {
+            let required: Vec<Value> = props.keys().cloned().map(Value::String).collect();
+            map.insert("required".into(), Value::Array(required));
+        }
+        for v in map.values_mut() {
+            require_all_properties(v);
+        }
+    } else if let Value::Array(items) = value {
+        for v in items {
+            require_all_properties(v);
+        }
+    }
+}
+
+/// The structured-output extraction strategy the harness should use for a
+/// model call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StructuredMode {
+    /// Extract structured output via a synthetic tool call.
+    Tool,
+    /// Use the provider's native constrained-JSON output mode.
+    Native,
+    /// Ask for structured output via a prompt template and parse the
+    /// resulting text.
+    Prompted,
+}
+
+/// Provider-family compatibility quirks that affect how the harness builds a
+/// request, independent of the model's advertised capabilities.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderCompat {
+    /// Supports a `system` message appearing anywhere in the conversation,
+    /// not only as the first message.
+    #[serde(default)]
+    pub mid_conversation_system_messages: bool,
+    /// Supports strict tool-schema validation (every property required,
+    /// `additionalProperties: false` enforced by the provider).
+    #[serde(default)]
+    pub strict_tools: bool,
+    /// Supports explicit prompt-cache retention control.
+    #[serde(default)]
+    pub cache_retention: bool,
+    /// Requires calls for one logical session to land on the same backend
+    /// instance (sticky routing) to benefit from caching.
+    #[serde(default)]
+    pub session_affinity: bool,
+    /// Maximum length, in bytes, of a tool name this provider accepts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tool_name_length: Option<usize>,
+    /// Regex pattern tool-call ids from this provider must match.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_id_pattern: Option<String>,
 }
 
 /// A set of required capabilities used to validate a request against a
@@ -598,6 +886,50 @@ pub struct ProviderError {
     /// Raw provider payload, when available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw: Option<Value>,
+    /// The assistant message accumulated from stream items before the
+    /// failure, when any content had arrived. Lets a caller keep (or discard)
+    /// partial work instead of losing every block a mid-stream failure
+    /// interrupted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partial_message: Option<AssistantMessage>,
+    /// The stop/finish reason reported before the failure, when the provider
+    /// sent one (for example Anthropic's `message_delta.stop_reason`) prior
+    /// to the error that ended the stream.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
+}
+
+/// The syntactic category of a streamed content block, established when the
+/// block opens ([`ModelStreamItem::BlockStart`]).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum BlockKind {
+    /// Visible assistant text.
+    Text,
+    /// Model reasoning/thinking content.
+    Thinking,
+    /// A tool call. The id and name are known as soon as the block opens
+    /// (Anthropic's `content_block_start`; OpenAI's first `tool_calls[]`
+    /// fragment for a wire index), before any argument fragments arrive.
+    ToolCall {
+        /// Provider-assigned call identifier.
+        id: String,
+        /// Tool name.
+        name: String,
+    },
+}
+
+/// An incremental fragment belonging to the open block named in the
+/// accompanying [`ModelStreamItem::BlockDelta::index`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "type", content = "content")]
+pub enum BlockDelta {
+    /// Visible text fragment.
+    Text(String),
+    /// Thinking/reasoning fragment.
+    Thinking(String),
+    /// Incremental tool-call argument JSON fragment.
+    ToolArgs(String),
 }
 
 /// A single item produced by a real, asynchronous model stream.
@@ -633,18 +965,105 @@ pub enum ModelStreamItem {
     /// The stream has opened; no content has arrived yet.
     Started,
     /// An incremental message fragment (text and/or a tool-call fragment).
+    ///
+    /// Kept alongside [`ModelStreamItem::BlockDelta`] for backward
+    /// compatibility: every fragment a block-aware adapter emits as a
+    /// `BlockDelta` is also folded into a `MessageDelta` on the same channel
+    /// (see [`crate::model::block_delta_to_message_delta`]), so consumers that
+    /// only understand the flat delta shape keep working unchanged.
     MessageDelta(MessageDelta),
-    /// An incremental tool-call argument fragment correlated by call id.
+    /// An incremental tool-call argument fragment correlated by call id. When
+    /// the provider reports block-indexed content, [`ToolDelta::content_index`]
+    /// names the block this fragment belongs to.
     ToolCallDelta(ToolDelta),
     /// A usage update. Providers may send cumulative usage; the accumulator
     /// keeps the most recent value.
     UsageDelta(Usage),
+    /// A new content block has opened at `index`. Anthropic's
+    /// `content_block_start` maps to this 1:1; the OpenAI adapters derive it
+    /// from a delta's shape changing (text starting, or a new `tool_calls[]`
+    /// wire index appearing).
+    BlockStart {
+        /// Zero-based position of this block within the assistant message,
+        /// stable for the life of the block.
+        index: usize,
+        /// The block's syntactic category.
+        kind: BlockKind,
+    },
+    /// An incremental fragment for the open block at `index`.
+    BlockDelta {
+        /// Position of the block this fragment belongs to.
+        index: usize,
+        /// The fragment payload.
+        delta: BlockDelta,
+    },
+    /// The block at `index` has closed; `block` is its fully assembled
+    /// content, ready to append to an [`AssistantMessage::content`] in order.
+    BlockEnd {
+        /// Position of the closed block.
+        index: usize,
+        /// The finished content block.
+        block: ContentBlock,
+    },
     /// Terminal success: the fully merged response.
     Completed(ModelResponse),
     /// Terminal failure with a human-readable error message.
     Failed(String),
     /// Terminal failure with normalized provider details.
     ProviderFailed(ProviderError),
+    /// Terminal deferral: the provider accepted the request but will finish
+    /// it asynchronously (for example an OpenAI batch or background
+    /// response). The caller polls or otherwise resolves the response later
+    /// via [`ChatModel::fetch_deferred`].
+    Deferred(DeferredHandle),
+}
+
+/// An opaque, provider-issued handle to a model call whose response is not
+/// yet available (for example a queued batch job or a background response).
+///
+/// The handle is deliberately provider-neutral and serializable so a host can
+/// persist it and resume polling after a process restart. `id` is the only
+/// field callers must treat as meaningful to the provider; `kind` and
+/// `metadata` are informational.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeferredHandle {
+    /// Provider family identifier (for example `openai`).
+    pub provider: String,
+    /// Provider-issued identifier for the deferred call (batch id, response
+    /// id, or similar).
+    pub id: String,
+    /// Provider-specific deferral kind (for example `"batch"` or
+    /// `"background"`), when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Additional provider-specific metadata needed to resolve the handle.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub metadata: serde_json::Map<String, Value>,
+}
+
+impl DeferredHandle {
+    /// Creates a handle for `provider`/`id` with no kind or metadata.
+    #[must_use]
+    pub fn new(provider: impl Into<String>, id: impl Into<String>) -> Self {
+        Self {
+            provider: provider.into(),
+            id: id.into(),
+            kind: None,
+            metadata: serde_json::Map::new(),
+        }
+    }
+}
+
+/// The current status of a previously deferred model call.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "status")]
+pub enum DeferredStatus {
+    /// Still queued or in progress; not yet ready.
+    Pending,
+    /// Finished successfully.
+    Completed(Box<ModelResponse>),
+    /// Finished with a failure.
+    Failed(String),
 }
 
 /// A cancellation guard owned by a model stream.
@@ -863,5 +1282,18 @@ pub trait ChatModel<State: Send + Sync>: Send + Sync {
             Some(correlation) => stream.with_correlation(correlation),
             None => stream,
         })
+    }
+
+    /// Resolves a previously issued [`DeferredHandle`] (see
+    /// [`ModelStreamItem::Deferred`]), returning the current
+    /// [`DeferredStatus`].
+    ///
+    /// The default implementation returns [`crate::Error::Unsupported`]; only
+    /// adapters that can actually issue deferred calls (for example an
+    /// OpenAI batch/background adapter) should override this.
+    async fn fetch_deferred(&self, _handle: &DeferredHandle) -> Result<DeferredStatus> {
+        Err(crate::Error::Unsupported(
+            "this model adapter does not support deferred calls".to_string(),
+        ))
     }
 }

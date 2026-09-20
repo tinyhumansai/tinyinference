@@ -334,6 +334,8 @@ pub(super) fn build_responses_input(messages: &[Message]) -> (Option<String>, Ve
                     format!("[tool_result id={} ]\n{body}", m.tool_call_id)
                 }
             }
+            // Host-side out-of-band record; never sent to the provider.
+            Message::Custom(_) => continue,
         };
         if text.trim().is_empty() {
             continue;
@@ -561,6 +563,9 @@ pub(super) fn parse_responses_response(value: Value) -> ModelResponse {
             content,
             tool_calls: Vec::new(),
             usage,
+            // Stamped by the transport call site (`invoke_responses`), which
+            // knows the configured provider/model.
+            origin: None,
         },
         usage,
         finish_reason,
@@ -597,6 +602,23 @@ mod tests {
         // Assistant items must use `output_text`, not `input_text`.
         assert_eq!(input[1].role, "assistant");
         assert_eq!(input[1].content[0].kind, "output_text");
+        assert_eq!(input[1].content[0].text, "hello");
+    }
+
+    #[test]
+    fn build_input_skips_custom_messages() {
+        let messages = vec![
+            Message::user("hi"),
+            Message::Custom(crate::message::CustomMessage {
+                kind: "compaction".into(),
+                payload: json!({"summary": "..."}),
+                display: Some("Compacted".into()),
+            }),
+            Message::assistant("hello"),
+        ];
+        let (_, input) = build_responses_input(&messages);
+        assert_eq!(input.len(), 2);
+        assert_eq!(input[0].content[0].text, "hi");
         assert_eq!(input[1].content[0].text, "hello");
     }
 

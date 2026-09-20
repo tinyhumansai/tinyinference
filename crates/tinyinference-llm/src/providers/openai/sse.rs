@@ -17,6 +17,88 @@ pub(super) struct ToolCallBuild {
     args: String,
 }
 
+/// The block-channel's notion of "which content stream is currently open",
+/// used to detect a switch (and thus a `BlockEnd`/`BlockStart` pair) between
+/// text, reasoning, and each individual tool call.
+///
+/// A tool call is identified by its slot in [`OpenAiStreamAcc::tool_calls`]
+/// (not the block index): two tool calls always occupy distinct slots, so
+/// comparing slots is enough to tell fragments for different calls apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OpenKind {
+    Text,
+    Reasoning,
+    ToolCall(usize),
+}
+
+/// What the caller of [`OpenAiStreamAcc::ensure_block`] wants opened, carrying
+/// whatever data a fresh [`BlockKind`] needs to be constructed. Text and
+/// reasoning blocks need nothing beyond their kind; a tool-call block needs
+/// the id/name known at the moment it first opens.
+enum BlockRequest {
+    Text,
+    Reasoning,
+    ToolCall {
+        slot: usize,
+        id: String,
+        name: String,
+    },
+}
+
+impl BlockRequest {
+    fn kind(&self) -> OpenKind {
+        match self {
+            BlockRequest::Text => OpenKind::Text,
+            BlockRequest::Reasoning => OpenKind::Reasoning,
+            BlockRequest::ToolCall { slot, .. } => OpenKind::ToolCall(*slot),
+        }
+    }
+}
+
+/// The block channel's accumulated content for one opened block, mirrored
+/// independently of [`OpenAiStreamAcc::text`]/`reasoning`/`tool_calls` (which
+/// remain the sole source of truth for [`OpenAiStreamAcc::into_response`]).
+/// This exists only to assemble the [`ModelStreamItem::BlockEnd`] payload.
+#[derive(Clone, Debug)]
+enum BlockBuf {
+    Text(String),
+    Reasoning(String),
+    ToolCall {
+        id: String,
+        name: String,
+        args: String,
+    },
+}
+
+impl BlockBuf {
+    /// Converts a closed block into the [`ContentBlock`] carried on
+    /// [`ModelStreamItem::BlockEnd`]. Mirrors the Anthropic adapter's
+    /// `OpenBlock::into_content_block`: a tool-call block has no dedicated
+    /// [`ContentBlock`] variant, so it is represented as [`ContentBlock::Json`]
+    /// carrying `{id, name, arguments}`.
+    fn into_content_block(self) -> ContentBlock {
+        match self {
+            BlockBuf::Text(text) => ContentBlock::Text(text),
+            BlockBuf::Reasoning(text) => ContentBlock::Thinking {
+                text,
+                signature: None,
+            },
+            BlockBuf::ToolCall { id, name, args } => {
+                let arguments = if args.trim().is_empty() {
+                    Value::Object(Default::default())
+                } else {
+                    serde_json::from_str(&args).unwrap_or(Value::String(args))
+                };
+                ContentBlock::Json(serde_json::json!({
+                    "id": id,
+                    "name": name,
+                    "arguments": arguments,
+                }))
+            }
+        }
+    }
+}
+
 /// Provider-side accumulator that rebuilds the authoritative [`ModelResponse`]
 /// from streamed chunks. Distinct from the generic
 /// [`StreamAccumulator`][crate::model::StreamAccumulator]: it tracks
@@ -50,6 +132,20 @@ pub(super) struct OpenAiStreamAcc {
     /// opened slot, so id-less argument continuations for that index keep
     /// following the call most recently opened there.
     index_slots: std::collections::HashMap<u32, usize>,
+    /// Block-channel content, one entry per opened block (text, reasoning, or
+    /// a tool call), in first-open order. `content_index` on the flat
+    /// [`ToolDelta`]/compatibility channel is this vector's index, so it
+    /// matches [`ModelStreamItem::BlockStart`]/`BlockDelta`/`BlockEnd`.
+    blocks: Vec<BlockBuf>,
+    /// The currently open block (its index into `blocks` and its kind), or
+    /// `None` between blocks and before the first one opens. OpenAI chat
+    /// completions gives no explicit "block closed" signal the way Anthropic's
+    /// `content_block_stop` does, so a block is considered closed exactly when
+    /// a fragment for a *different* block arrives, or when `finish_reason`/the
+    /// stream ends — never reopened once closed (a later fragment for the same
+    /// conceptual channel opens a fresh block instead, matching how densely
+    /// each block gets its own [`ModelStreamItem::BlockStart`]).
+    current_block: Option<(usize, OpenKind)>,
 }
 
 impl OpenAiStreamAcc {
@@ -78,12 +174,14 @@ impl OpenAiStreamAcc {
             pending.push_back(ModelStreamItem::UsageDelta(usage));
         }
         for mut choice in chunk.choices.into_iter().filter(|choice| choice.index == 0) {
+            let finished = choice.finish_reason.is_some();
             if let Some(reason) = choice.finish_reason {
                 self.finish_reason = Some(reason);
             }
             let reasoning = delta_reasoning_text(&mut choice.delta);
             if !reasoning.is_empty() {
                 self.reasoning.push_str(&reasoning);
+                self.push_block_delta(BlockRequest::Reasoning, &reasoning, pending);
                 pending.push_back(ModelStreamItem::MessageDelta(MessageDelta {
                     text: String::new(),
                     reasoning,
@@ -103,6 +201,7 @@ impl OpenAiStreamAcc {
                         let mut reasoning = String::new();
                         extractor.push(&content, &mut visible, &mut reasoning);
                         if !reasoning.is_empty() {
+                            self.push_block_delta(BlockRequest::Reasoning, &reasoning, pending);
                             pending.push_back(ModelStreamItem::MessageDelta(MessageDelta {
                                 text: String::new(),
                                 reasoning,
@@ -110,6 +209,7 @@ impl OpenAiStreamAcc {
                             }));
                         }
                         if !visible.is_empty() {
+                            self.push_block_delta(BlockRequest::Text, &visible, pending);
                             pending.push_back(ModelStreamItem::MessageDelta(MessageDelta {
                                 text: visible,
                                 reasoning: String::new(),
@@ -118,6 +218,7 @@ impl OpenAiStreamAcc {
                         }
                     }
                     None => {
+                        self.push_block_delta(BlockRequest::Text, &content, pending);
                         pending.push_back(ModelStreamItem::MessageDelta(MessageDelta {
                             text: content,
                             reasoning: String::new(),
@@ -128,31 +229,156 @@ impl OpenAiStreamAcc {
             }
             for fragment in choice.delta.tool_calls {
                 let idx = self.resolve_slot(&fragment);
-                let slot = &mut self.tool_calls[idx];
+                let id_present = fragment.id.as_deref().is_some_and(|id| !id.is_empty());
+                let name_present = fragment
+                    .function
+                    .as_ref()
+                    .and_then(|function| function.name.as_deref())
+                    .is_some_and(|name| !name.is_empty());
                 if let Some(id) = fragment.id.filter(|id| !id.is_empty()) {
-                    slot.id = id;
+                    self.tool_calls[idx].id = id;
                 }
                 if let Some(function) = fragment.function {
                     if let Some(name) = function.name.filter(|n| !n.is_empty()) {
-                        slot.name = name;
+                        self.tool_calls[idx].name = name;
+                    }
+                    // Open the tool-call's block as soon as either its id or
+                    // its name is known, even if no argument fragment has
+                    // arrived yet, mirroring the Anthropic adapter's
+                    // `content_block_start` for `tool_use`.
+                    if id_present || name_present {
+                        if self.tool_calls[idx].id.is_empty() {
+                            self.tool_calls[idx].id = tool_call_id(idx, "");
+                        }
+                        let call_id = tool_call_id(idx, &self.tool_calls[idx].id);
+                        let name = self.tool_calls[idx].name.clone();
+                        self.ensure_block(
+                            BlockRequest::ToolCall {
+                                slot: idx,
+                                id: call_id,
+                                name,
+                            },
+                            pending,
+                        );
                     }
                     if let Some(args) = function.arguments.filter(|a| !a.is_empty()) {
-                        slot.args.push_str(&args);
-                        if slot.id.is_empty() {
-                            slot.id = tool_call_id(idx, "");
+                        self.tool_calls[idx].args.push_str(&args);
+                        if self.tool_calls[idx].id.is_empty() {
+                            self.tool_calls[idx].id = tool_call_id(idx, "");
                         }
-                        let call_id = tool_call_id(idx, &slot.id);
+                        let call_id = tool_call_id(idx, &self.tool_calls[idx].id);
+                        let name = self.tool_calls[idx].name.clone();
+                        let block_index = self.ensure_block(
+                            BlockRequest::ToolCall {
+                                slot: idx,
+                                id: call_id.clone(),
+                                name: name.clone(),
+                            },
+                            pending,
+                        );
+                        if let Some(BlockBuf::ToolCall { args: buf, .. }) =
+                            self.blocks.get_mut(block_index)
+                        {
+                            buf.push_str(&args);
+                        }
+                        pending.push_back(ModelStreamItem::BlockDelta {
+                            index: block_index,
+                            delta: BlockDelta::ToolArgs(args.clone()),
+                        });
                         pending.push_back(ModelStreamItem::ToolCallDelta(ToolDelta {
                             call_id,
                             content: args,
-                            // Surface the tool name (captured into `slot.name` from
-                            // the call-opening fragment) so consumers can label the
-                            // call as it streams; the accumulator keeps the first.
-                            tool_name: Some(slot.name.clone()).filter(|n| !n.is_empty()),
+                            // Surface the tool name (captured into `slot.name`
+                            // from the call-opening fragment) so consumers can
+                            // label the call as it streams; the accumulator
+                            // keeps the first.
+                            tool_name: Some(name).filter(|n| !n.is_empty()),
+                            content_index: Some(block_index),
                         }));
                     }
                 }
             }
+            if finished {
+                self.close_current_block(pending);
+            }
+        }
+    }
+
+    /// Routes a text or reasoning fragment onto the block channel: opens (or
+    /// continues) the matching block via [`Self::ensure_block`], appends the
+    /// fragment into its buffer, and emits the corresponding
+    /// [`ModelStreamItem::BlockDelta`].
+    fn push_block_delta(
+        &mut self,
+        request: BlockRequest,
+        fragment: &str,
+        pending: &mut VecDeque<ModelStreamItem>,
+    ) {
+        let delta = match &request {
+            BlockRequest::Text => BlockDelta::Text(fragment.to_string()),
+            BlockRequest::Reasoning => BlockDelta::Thinking(fragment.to_string()),
+            BlockRequest::ToolCall { .. } => {
+                debug_assert!(false, "push_block_delta is only used for text/reasoning");
+                return;
+            }
+        };
+        let index = self.ensure_block(request, pending);
+        match self.blocks.get_mut(index) {
+            Some(BlockBuf::Text(buf)) => buf.push_str(fragment),
+            Some(BlockBuf::Reasoning(buf)) => buf.push_str(fragment),
+            _ => {}
+        }
+        pending.push_back(ModelStreamItem::BlockDelta { index, delta });
+    }
+
+    /// Returns the index of the block matching `request`, opening a new one
+    /// (emitting [`ModelStreamItem::BlockStart`] and closing whatever block
+    /// was previously open) if the requested kind is not already the current
+    /// block.
+    fn ensure_block(
+        &mut self,
+        request: BlockRequest,
+        pending: &mut VecDeque<ModelStreamItem>,
+    ) -> usize {
+        let kind = request.kind();
+        if let Some((index, open)) = self.current_block
+            && open == kind
+        {
+            return index;
+        }
+        self.close_current_block(pending);
+        let (buf, start_kind) = match request {
+            BlockRequest::Text => (BlockBuf::Text(String::new()), BlockKind::Text),
+            BlockRequest::Reasoning => (BlockBuf::Reasoning(String::new()), BlockKind::Thinking),
+            BlockRequest::ToolCall { id, name, .. } => (
+                BlockBuf::ToolCall {
+                    id: id.clone(),
+                    name: name.clone(),
+                    args: String::new(),
+                },
+                BlockKind::ToolCall { id, name },
+            ),
+        };
+        let index = self.blocks.len();
+        self.blocks.push(buf);
+        pending.push_back(ModelStreamItem::BlockStart {
+            index,
+            kind: start_kind,
+        });
+        self.current_block = Some((index, kind));
+        index
+    }
+
+    /// Closes whichever block is currently open (if any), emitting its
+    /// [`ModelStreamItem::BlockEnd`]. A no-op when no block is open.
+    fn close_current_block(&mut self, pending: &mut VecDeque<ModelStreamItem>) {
+        if let Some((index, _)) = self.current_block.take()
+            && let Some(buf) = self.blocks.get(index)
+        {
+            pending.push_back(ModelStreamItem::BlockEnd {
+                index,
+                block: buf.clone().into_content_block(),
+            });
         }
     }
 
@@ -270,6 +496,10 @@ impl OpenAiStreamAcc {
             content,
             tool_calls,
             usage: self.usage,
+            // Stamped by the `sse_next` call site (which owns
+            // `SseState::provider`/`model`); this accumulator has no
+            // provider/model context of its own.
+            origin: None,
         };
         ModelResponse {
             message,
@@ -377,21 +607,22 @@ impl SseState {
         if payload == "[DONE]" {
             self.completion_seen = true;
             self.finished = true;
+            // Defensive: normally already closed when the finish-reason chunk
+            // was ingested; a no-op if so.
+            let mut pending = std::mem::take(&mut self.pending);
+            self.acc.close_current_block(&mut pending);
+            self.pending = pending;
             return;
         }
         let Ok(value) = serde_json::from_str::<Value>(payload) else {
             if payload.starts_with('{') || payload.starts_with('[') {
-                self.pending
-                    .push_back(ModelStreamItem::ProviderFailed(ProviderError {
-                        provider: self.provider.clone(),
-                        model: Some(self.model.clone()),
-                        message: "provider returned malformed SSE JSON".into(),
-                        retryable: false,
-                        raw: Some(Value::String(payload.into())),
-                        ..ProviderError::default()
-                    }));
-                self.finished = true;
-                self.terminal_emitted = true;
+                let item = self.provider_failure(ProviderError {
+                    message: "provider returned malformed SSE JSON".into(),
+                    retryable: false,
+                    raw: Some(Value::String(payload.into())),
+                    ..ProviderError::default()
+                });
+                self.pending.push_back(item);
             }
             return;
         };
@@ -400,10 +631,9 @@ impl SseState {
         // `ChatCompletionChunk`, so it must be detected first and surfaced as a
         // terminal failure rather than folded in as an empty chunk and swallowed.
         if let Some(error) = value.get("error") {
-            self.pending
-                .push_back(ModelStreamItem::ProviderFailed(self.stream_error(error)));
-            self.finished = true;
-            self.terminal_emitted = true;
+            let error = self.stream_error(error);
+            let item = self.provider_failure(error);
+            self.pending.push_back(item);
             return;
         }
         if let Ok(chunk) = serde_json::from_value::<ChatCompletionChunk>(value) {
@@ -441,6 +671,26 @@ impl SseState {
             ..ProviderError::default()
         }
     }
+
+    /// Builds the terminal failure item, discarding any block/message deltas
+    /// still queued: a failure must be the last item a consumer sees, not
+    /// followed by fragments parsed before it surfaced (mirrors the
+    /// Anthropic adapter's `provider_failure`). Populates
+    /// `partial_message`/`stop_reason` from whatever had accumulated so a
+    /// mid-stream failure does not discard already-streamed content.
+    fn provider_failure(&mut self, mut error: ProviderError) -> ModelStreamItem {
+        self.pending.clear();
+        self.finished = true;
+        self.terminal_emitted = true;
+        error.provider = self.provider.clone();
+        error.model = Some(self.model.clone());
+        error.stop_reason = self.acc.finish_reason.clone();
+        let partial = std::mem::take(&mut self.acc).into_response().message;
+        if !partial.content.is_empty() || !partial.tool_calls.is_empty() {
+            error.partial_message = Some(partial);
+        }
+        ModelStreamItem::ProviderFailed(error)
+    }
 }
 
 /// Advances the SSE [`SseState`] by one item for [`futures::stream::unfold`].
@@ -461,7 +711,12 @@ pub(super) async fn sse_next(mut state: SseState) -> Option<(ModelStreamItem, Ss
             // Reconstruction is infallible: malformed tool arguments become an
             // `ToolCall::invalid` call inside the response (not a stream
             // failure), so the agent loop recovers instead of aborting the run.
-            let response = std::mem::take(&mut state.acc).into_response();
+            let mut response = std::mem::take(&mut state.acc).into_response();
+            response.message.origin = Some(crate::message::MessageOrigin {
+                provider: state.provider.clone(),
+                api: CHAT_COMPLETIONS_API.to_string(),
+                model: state.model.clone(),
+            });
             return Some((ModelStreamItem::Completed(response), state));
         }
         match state.bytes.next().await {
@@ -470,16 +725,12 @@ pub(super) async fn sse_next(mut state: SseState) -> Option<(ModelStreamItem, Ss
                 state.drain_lines();
             }
             Some(Err(error)) => {
-                state.finished = true;
-                state.terminal_emitted = true;
-                let provider_error = ProviderError {
-                    provider: state.provider.clone(),
-                    model: Some(state.model.clone()),
+                let item = state.provider_failure(ProviderError {
                     message: error.to_string(),
                     retryable: true,
                     ..ProviderError::default()
-                };
-                return Some((ModelStreamItem::ProviderFailed(provider_error), state));
+                });
+                return Some((item, state));
             }
             None => {
                 // Drain any final `data:` line the provider sent without a
@@ -488,18 +739,12 @@ pub(super) async fn sse_next(mut state: SseState) -> Option<(ModelStreamItem, Ss
                 if state.terminal_emitted || state.completion_seen {
                     state.finished = true;
                 } else {
-                    state.finished = true;
-                    state.terminal_emitted = true;
-                    return Some((
-                        ModelStreamItem::ProviderFailed(ProviderError {
-                            provider: state.provider.clone(),
-                            model: Some(state.model.clone()),
-                            message: "provider stream ended before a completion signal".into(),
-                            retryable: true,
-                            ..ProviderError::default()
-                        }),
-                        state,
-                    ));
+                    let item = state.provider_failure(ProviderError {
+                        message: "provider stream ended before a completion signal".into(),
+                        retryable: true,
+                        ..ProviderError::default()
+                    });
+                    return Some((item, state));
                 }
             }
         }

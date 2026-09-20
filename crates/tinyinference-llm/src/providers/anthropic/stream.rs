@@ -26,7 +26,9 @@ use futures::{Stream, StreamExt};
 use serde_json::Value;
 
 use crate::message::{AssistantMessage, ContentBlock, MessageDelta};
-use crate::model::{ModelResponse, ModelStream, ModelStreamItem, ProviderError};
+use crate::model::{
+    BlockDelta, BlockKind, ModelResponse, ModelStream, ModelStreamItem, ProviderError,
+};
 use crate::tool::{ToolCall, ToolDelta};
 use crate::usage::Usage;
 use crate::{Error, Result};
@@ -53,6 +55,40 @@ enum OpenBlock {
         signature: Option<String>,
     },
     Redacted(String),
+}
+
+impl OpenBlock {
+    /// Converts a closed block into the [`ContentBlock`] carried on
+    /// [`ModelStreamItem::BlockEnd`].
+    ///
+    /// [`ContentBlock`] has no dedicated tool-call variant (tool calls live on
+    /// [`AssistantMessage::tool_calls`]), so a closed tool-use block is
+    /// represented as [`ContentBlock::Json`] carrying `{id, name, arguments}`;
+    /// consumers that want the parsed [`crate::tool::ToolCall`] already saw the
+    /// id and name on the matching [`ModelStreamItem::BlockStart`].
+    fn into_content_block(self) -> ContentBlock {
+        match self {
+            OpenBlock::Text(text) => ContentBlock::Text(text),
+            OpenBlock::Thinking { text, signature } => ContentBlock::Thinking { text, signature },
+            OpenBlock::Redacted(data) => ContentBlock::RedactedThinking { data },
+            OpenBlock::ToolUse {
+                id,
+                name,
+                partial_json,
+            } => {
+                let arguments = if partial_json.trim().is_empty() {
+                    Value::Object(Default::default())
+                } else {
+                    serde_json::from_str(&partial_json).unwrap_or(Value::String(partial_json))
+                };
+                ContentBlock::Json(serde_json::json!({
+                    "id": id,
+                    "name": name,
+                    "arguments": arguments,
+                }))
+            }
+        }
+    }
 }
 
 /// Provider-side accumulator rebuilding the terminal [`ModelResponse`].
@@ -119,10 +155,18 @@ impl AnthropicStreamAcc {
                     Some("tool_use") => {
                         let id = block["id"].as_str().unwrap_or_default().to_string();
                         let name = block["name"].as_str().unwrap_or_default().to_string();
+                        pending.push_back(ModelStreamItem::BlockStart {
+                            index,
+                            kind: BlockKind::ToolCall {
+                                id: id.clone(),
+                                name: name.clone(),
+                            },
+                        });
                         pending.push_back(ModelStreamItem::ToolCallDelta(ToolDelta {
                             call_id: id.clone(),
                             content: String::new(),
                             tool_name: Some(name.clone()),
+                            content_index: Some(index),
                         }));
                         OpenBlock::ToolUse {
                             id,
@@ -130,16 +174,44 @@ impl AnthropicStreamAcc {
                             partial_json: String::new(),
                         }
                     }
-                    Some("thinking") => OpenBlock::Thinking {
-                        text: block["thinking"].as_str().unwrap_or_default().to_string(),
-                        signature: None,
-                    },
+                    Some("thinking") => {
+                        pending.push_back(ModelStreamItem::BlockStart {
+                            index,
+                            kind: BlockKind::Thinking,
+                        });
+                        let text = block["thinking"].as_str().unwrap_or_default().to_string();
+                        if !text.is_empty() {
+                            pending.push_back(ModelStreamItem::BlockDelta {
+                                index,
+                                delta: BlockDelta::Thinking(text.clone()),
+                            });
+                            pending.push_back(ModelStreamItem::MessageDelta(
+                                MessageDelta::reasoning(text.clone()),
+                            ));
+                        }
+                        OpenBlock::Thinking {
+                            text,
+                            signature: None,
+                        }
+                    }
                     Some("redacted_thinking") => {
+                        pending.push_back(ModelStreamItem::BlockStart {
+                            index,
+                            kind: BlockKind::Thinking,
+                        });
                         OpenBlock::Redacted(block["data"].as_str().unwrap_or_default().to_string())
                     }
                     _ => {
+                        pending.push_back(ModelStreamItem::BlockStart {
+                            index,
+                            kind: BlockKind::Text,
+                        });
                         let text = block["text"].as_str().unwrap_or_default().to_string();
                         if !text.is_empty() {
+                            pending.push_back(ModelStreamItem::BlockDelta {
+                                index,
+                                delta: BlockDelta::Text(text.clone()),
+                            });
                             pending.push_back(ModelStreamItem::MessageDelta(MessageDelta::text(
                                 text.clone(),
                             )));
@@ -157,6 +229,10 @@ impl AnthropicStreamAcc {
                     (Some("text_delta"), Some(OpenBlock::Text(text))) => {
                         let fragment = delta["text"].as_str().unwrap_or_default();
                         text.push_str(fragment);
+                        pending.push_back(ModelStreamItem::BlockDelta {
+                            index,
+                            delta: BlockDelta::Text(fragment.to_string()),
+                        });
                         pending.push_back(ModelStreamItem::MessageDelta(MessageDelta::text(
                             fragment.to_string(),
                         )));
@@ -171,15 +247,24 @@ impl AnthropicStreamAcc {
                     ) => {
                         let fragment = delta["partial_json"].as_str().unwrap_or_default();
                         partial_json.push_str(fragment);
+                        pending.push_back(ModelStreamItem::BlockDelta {
+                            index,
+                            delta: BlockDelta::ToolArgs(fragment.to_string()),
+                        });
                         pending.push_back(ModelStreamItem::ToolCallDelta(ToolDelta {
                             call_id: id.clone(),
                             content: fragment.to_string(),
                             tool_name: Some(name.clone()),
+                            content_index: Some(index),
                         }));
                     }
                     (Some("thinking_delta"), Some(OpenBlock::Thinking { text, .. })) => {
                         let fragment = delta["thinking"].as_str().unwrap_or_default();
                         text.push_str(fragment);
+                        pending.push_back(ModelStreamItem::BlockDelta {
+                            index,
+                            delta: BlockDelta::Thinking(fragment.to_string()),
+                        });
                         pending.push_back(ModelStreamItem::MessageDelta(MessageDelta {
                             text: String::new(),
                             reasoning: fragment.to_string(),
@@ -195,6 +280,15 @@ impl AnthropicStreamAcc {
                     // this adapter does not model: ignore rather than fail the
                     // turn.
                     _ => {}
+                }
+            }
+            Some("content_block_stop") => {
+                let index = event_index(&event)?;
+                if let Some(block) = self.slot(index).clone() {
+                    pending.push_back(ModelStreamItem::BlockEnd {
+                        index,
+                        block: block.into_content_block(),
+                    });
                 }
             }
             Some("message_delta") => {
@@ -289,6 +383,10 @@ impl AnthropicStreamAcc {
                 content,
                 tool_calls,
                 usage,
+                // Stamped by the `sse_next` call site (which owns
+                // `SseState::model`); this accumulator has no provider/model
+                // context of its own.
+                origin: None,
             },
             usage,
             finish_reason: self.stop_reason,
@@ -351,6 +449,11 @@ impl SseState {
         };
         provider_error.provider = PROVIDER.to_string();
         provider_error.model = Some(self.model.clone());
+        provider_error.stop_reason = self.acc.stop_reason.clone();
+        let partial = std::mem::take(&mut self.acc).into_response().message;
+        if !partial.content.is_empty() || !partial.tool_calls.is_empty() {
+            provider_error.partial_message = Some(partial);
+        }
         ModelStreamItem::ProviderFailed(provider_error)
     }
 
@@ -417,7 +520,12 @@ async fn sse_next(mut state: SseState) -> Option<(ModelStreamItem, SseState)> {
                 return None;
             }
             state.terminal_emitted = true;
-            let response = std::mem::take(&mut state.acc).into_response();
+            let mut response = std::mem::take(&mut state.acc).into_response();
+            response.message.origin = Some(crate::message::MessageOrigin {
+                provider: PROVIDER.to_string(),
+                api: super::MESSAGES_API.to_string(),
+                model: state.model.clone(),
+            });
             return Some((ModelStreamItem::Completed(response), state));
         }
         match state.bytes.next().await {

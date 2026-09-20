@@ -12,6 +12,7 @@ pub mod error;
 pub mod failure;
 pub mod message;
 pub mod model;
+mod network_guard;
 pub mod prompt_tools;
 pub mod providers;
 pub mod sentiment;
@@ -28,6 +29,7 @@ pub use model::{
     ChatModel, ModelRequest, ModelResponse, ModelStream, ModelStreamItem,
     context_window_for_model_id, model_id_supports_vision,
 };
+pub use network_guard::{allow_network_models, deny_network_models, network_models_denied};
 pub use providers::{MockModel, ProviderKind, ProviderSpec};
 pub use tool::{ToolCall, ToolDelta, ToolFormat, ToolSchema};
 pub use usage::{Usage, UsageTotals};

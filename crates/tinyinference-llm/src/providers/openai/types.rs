@@ -249,6 +249,11 @@ pub enum ContentPartWire {
         /// The `image_url` object.
         image_url: ImageUrlWire,
     },
+    /// Inline base64 audio, as OpenAI's Chat Completions `input_audio` part.
+    InputAudio {
+        /// The `input_audio` object.
+        input_audio: InputAudioWire,
+    },
 }
 
 /// The `image_url` payload of a [`ContentPartWire::ImageUrl`].
@@ -256,6 +261,16 @@ pub enum ContentPartWire {
 pub struct ImageUrlWire {
     /// URL or data URI of the image.
     pub url: String,
+}
+
+/// The `input_audio` payload of a [`ContentPartWire::InputAudio`].
+#[derive(Clone, Debug, Serialize)]
+pub struct InputAudioWire {
+    /// Base64-encoded audio bytes.
+    pub data: String,
+    /// Audio container format (for example `"wav"` or `"mp3"`), derived
+    /// from the media type.
+    pub format: String,
 }
 
 /// A single message in the request `messages` array.
