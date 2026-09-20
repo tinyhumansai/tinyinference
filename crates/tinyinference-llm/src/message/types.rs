@@ -210,7 +210,7 @@ impl SystemMessage {
 }
 
 /// Walks `messages` and folds every [`SystemMessage`] in order into one
-/// effective [`SystemState`]: the reconstructed named sections and tool set a
+/// effective `SystemState`: the reconstructed named sections and tool set a
 /// live run would have after processing the same sequence of patches.
 ///
 /// This is the read-side counterpart to a `declare_tool_changes`-style
