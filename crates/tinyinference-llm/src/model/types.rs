@@ -1288,7 +1288,7 @@ pub trait ChatModel<State: Send + Sync>: Send + Sync {
     /// [`ModelStreamItem::Deferred`]), returning the current
     /// [`DeferredStatus`].
     ///
-    /// The default implementation returns [`Error::Unsupported`]; only
+    /// The default implementation returns [`crate::Error::Unsupported`]; only
     /// adapters that can actually issue deferred calls (for example an
     /// OpenAI batch/background adapter) should override this.
     async fn fetch_deferred(&self, _handle: &DeferredHandle) -> Result<DeferredStatus> {
