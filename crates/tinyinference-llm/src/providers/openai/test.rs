@@ -10,8 +10,8 @@ use serde_json::json;
 use super::*;
 use crate::message::{ContentBlock, Message};
 use crate::model::{
-    BlockDelta, BlockKind, ChatModel, ModelRequest, ModelStreamItem, ProviderError, ResponseFormat,
-    StreamAccumulator, ToolChoice,
+    BlockDelta, BlockKind, ChatModel, ModelRequest, ModelStreamItem, ProviderError,
+    ReasoningEffort, ResponseFormat, StreamAccumulator, ToolChoice,
 };
 use crate::providers::{ProviderKind, ProviderSpec};
 use crate::tool::ToolSchema;
@@ -107,6 +107,16 @@ fn translates_request_to_openai_json_shape() {
     assert_eq!(value["max_tokens"], json!(256));
     assert_eq!(value["stop"], json!(["END"]));
     assert_eq!(value["seed"], json!(7));
+}
+
+#[test]
+fn translates_maximum_reasoning_effort() {
+    let request = ModelRequest::new(vec![Message::user("solve")])
+        .with_model("o3")
+        .with_reasoning_effort(ReasoningEffort::XHigh);
+    let body = model().translate_request(&request).unwrap();
+    let value = serde_json::to_value(body).unwrap();
+    assert_eq!(value["reasoning_effort"], "xhigh");
 }
 
 #[test]

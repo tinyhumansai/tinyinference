@@ -3,7 +3,7 @@ use serde_json::json;
 
 use super::*;
 use crate::cache::CachePolicy;
-use crate::message::{ContentBlock, ImageRef, Message, ToolMessage};
+use crate::message::{AssistantMessage, ContentBlock, ImageRef, Message, ToolMessage};
 use crate::model::{
     BlockDelta, BlockKind, ModelStreamItem, PromptSegment, ReasoningConfig, ReasoningEffort,
     SegmentRole, ToolChoice,
@@ -424,6 +424,72 @@ fn normalized_reasoning_is_lowered_to_anthropic_thinking() {
     let body = request_body(&adaptive, "m");
     assert_eq!(body["thinking"], json!({ "type": "adaptive" }));
     assert_eq!(body["output_config"]["effort"], "high");
+
+    let maximum =
+        ModelRequest::new(vec![Message::user("hi")]).with_reasoning_effort(ReasoningEffort::XHigh);
+    let body = request_body(&maximum, "m");
+    assert_eq!(body["output_config"]["effort"], "max");
+}
+
+#[test]
+fn provider_extension_blocks_round_trip_without_interpretation() {
+    let extension = json!({
+        "type": "server_tool_use",
+        "id": "srvtoolu_1",
+        "name": "web_search",
+        "input": { "query": "rust" },
+        "future_field": true,
+    });
+    let response = parse_response(json!({
+        "id": "msg_ext",
+        "content": [extension.clone()],
+        "stop_reason": "end_turn",
+        "usage": { "input_tokens": 1, "output_tokens": 1 }
+    }))
+    .unwrap();
+    assert_eq!(
+        response.message.content,
+        vec![ContentBlock::ProviderExtension(extension.clone())]
+    );
+
+    let replay = request_body(
+        &ModelRequest::new(vec![Message::Assistant(response.message.clone())]),
+        "m",
+    );
+    assert_eq!(replay["messages"][0]["content"][0], extension);
+
+    let future_extension = json!({ "type": "future_block", "payload": { "ok": true } });
+    let replay = request_body(
+        &ModelRequest::new(vec![Message::Assistant(AssistantMessage {
+            content: vec![ContentBlock::ProviderExtension(future_extension.clone())],
+            ..response.message
+        })]),
+        "m",
+    );
+    assert_eq!(replay["messages"][0]["content"][0], future_extension);
+}
+
+#[test]
+fn malformed_provider_extension_blocks_are_not_sent() {
+    let request = ModelRequest::new(vec![Message::User(crate::message::UserMessage {
+        content: vec![ContentBlock::ProviderExtension(json!({"opaque": true}))],
+    })]);
+    assert!(
+        request_body(&request, "m")["messages"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    let native_block = ModelRequest::new(vec![Message::User(crate::message::UserMessage {
+        content: vec![ContentBlock::ProviderExtension(json!({"type": "text"}))],
+    })]);
+    assert!(
+        request_body(&native_block, "m")["messages"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -574,10 +640,17 @@ fn temperature_policy_uses_the_effective_request_model() {
 
 #[test]
 fn debug_redacts_the_api_key() {
-    let model = AnthropicModel::new("secret-api-key");
+    let model =
+        AnthropicModel::new("secret-api-key").with_header("anthropic-beta", "secret-beta-value");
     let debug = format!("{model:?}");
     assert!(debug.contains("[redacted]"));
     assert!(!debug.contains("secret-api-key"));
+    assert!(!debug.contains("secret-beta-value"));
+    assert!(debug.contains("anthropic-beta"));
+    assert_eq!(
+        model.extra_headers,
+        vec![("anthropic-beta".into(), "secret-beta-value".into())]
+    );
 }
 
 fn sse(events: &[serde_json::Value]) -> Vec<u8> {
@@ -681,6 +754,74 @@ async fn streaming_thinking_arrives_on_the_reasoning_channel_with_its_signature(
         &response.message.content[0],
         ContentBlock::Thinking { text, signature: Some(s) } if text == "plan" && s == "sig"
     ));
+}
+
+#[tokio::test]
+async fn streaming_preserves_unknown_content_blocks_for_the_host() {
+    let extension = json!({
+        "type": "server_tool_use",
+        "id": "srvtoolu_1",
+        "name": "web_search",
+        "input": { "query": "rust" }
+    });
+    let events = [
+        json!({"type":"message_start","message":{"id":"m","usage":{"input_tokens":1,"output_tokens":0}}}),
+        json!({"type":"content_block_start","index":0,"content_block":extension.clone()}),
+        json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}),
+        json!({"type":"message_stop"}),
+    ];
+    let items: Vec<ModelStreamItem> = stream::stream_from_bytes(vec![sse(&events)], "m")
+        .collect()
+        .await;
+    let Some(ModelStreamItem::Completed(response)) = items.last() else {
+        panic!("stream must end in Completed, got {:?}", items.last());
+    };
+    assert_eq!(
+        response.message.content,
+        vec![ContentBlock::ProviderExtension(extension)]
+    );
+}
+
+#[tokio::test]
+async fn streaming_reconstructs_extension_input_fragments_and_boundaries() {
+    let events = [
+        json!({"type":"message_start","message":{"id":"m","usage":{"input_tokens":1,"output_tokens":0}}}),
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"srvtoolu_1","name":"web_search","input":{}}}),
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"query\":"}}),
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"rust\"}"}}),
+        json!({"type":"content_block_stop","index":0}),
+        json!({"type":"message_stop"}),
+    ];
+    let items: Vec<ModelStreamItem> = stream::stream_from_bytes(vec![sse(&events)], "m")
+        .collect()
+        .await;
+
+    assert!(items.iter().any(|item| matches!(
+        item,
+        ModelStreamItem::BlockStart {
+            index: 0,
+            kind: BlockKind::ProviderExtension { block_type }
+        } if block_type == "server_tool_use"
+    )));
+    assert!(items.iter().any(|item| matches!(
+        item,
+        ModelStreamItem::BlockEnd {
+            index: 0,
+            block: ContentBlock::ProviderExtension(value)
+        } if value["input"] == json!({"query": "rust"})
+    )));
+    assert!(matches!(
+        items.last(),
+        Some(ModelStreamItem::Completed(response))
+            if response.message.content
+                == vec![ContentBlock::ProviderExtension(json!({
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_1",
+                    "name": "web_search",
+                    "input": {"query": "rust"}
+                }))]
+    ));
+    assert!(matches!(items.last(), Some(ModelStreamItem::Completed(_))));
 }
 
 #[tokio::test]

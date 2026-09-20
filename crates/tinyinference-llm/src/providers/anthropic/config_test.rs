@@ -18,6 +18,7 @@ fn builds_a_native_anthropic_model_with_the_configured_profile() {
         model: "claude-sonnet-4-6",
         temperature_override: Some(0.2),
         temperature_unsupported_models: &[],
+        extra_headers: &[],
     });
     let profile = model.profile().expect("anthropic models expose a profile");
     assert_eq!(profile.provider.as_deref(), Some("anthropic"));
@@ -31,12 +32,14 @@ fn builds_a_native_anthropic_model_with_the_configured_profile() {
 
 #[test]
 fn debug_redacts_api_key() {
+    let headers = vec![("anthropic-beta".to_string(), "secret-beta".to_string())];
     let config = AnthropicConfig {
         endpoint: "https://endpoint-user:endpoint-pass@api.anthropic.com/v1?token=query-secret#fragment-secret",
         api_key: "sk-ant-secret",
         model: "claude-sonnet-4-6",
         temperature_override: None,
         temperature_unsupported_models: &[],
+        extra_headers: &headers,
     };
     let debug = format!("{config:?}");
     assert!(!debug.contains("sk-ant-secret"));
@@ -44,6 +47,8 @@ fn debug_redacts_api_key() {
     assert!(!debug.contains("endpoint-pass"));
     assert!(!debug.contains("query-secret"));
     assert!(!debug.contains("fragment-secret"));
+    assert!(!debug.contains("secret-beta"));
+    assert!(debug.contains("anthropic-beta"));
     assert!(debug.contains("token"));
     assert!(debug.contains("[REDACTED]"));
 }

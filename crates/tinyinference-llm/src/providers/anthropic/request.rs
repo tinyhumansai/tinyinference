@@ -154,6 +154,7 @@ pub(crate) fn request_body(request: &ModelRequest, default_model: &str) -> Value
                     ReasoningEffort::Low => "low",
                     ReasoningEffort::Medium => "medium",
                     ReasoningEffort::High => "high",
+                    ReasoningEffort::XHigh => "max",
                     ReasoningEffort::None => unreachable!(),
                 },
             });
@@ -229,12 +230,11 @@ fn content_blocks(content: &[ContentBlock]) -> Vec<Value> {
             ContentBlock::Text(text) => text_block(text),
             ContentBlock::Json(value) => text_block(&value.to_string()),
             ContentBlock::Image(image) => Some(image_block(image)),
+            ContentBlock::ProviderExtension(value) => provider_extension_block(value),
             ContentBlock::Document(media) => Some(document_block(media)),
             ContentBlock::Audio(media) => Some(unsupported_media_placeholder("audio", media)),
             ContentBlock::Video(media) => Some(unsupported_media_placeholder("video", media)),
-            ContentBlock::Thinking { .. }
-            | ContentBlock::RedactedThinking { .. }
-            | ContentBlock::ProviderExtension(_) => None,
+            ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => None,
         })
         .collect()
 }
@@ -260,16 +260,30 @@ fn assistant_blocks(content: &[ContentBlock]) -> Vec<Value> {
             ContentBlock::RedactedThinking { data } => {
                 Some(json!({ "type": "redacted_thinking", "data": data }))
             }
+            ContentBlock::ProviderExtension(value) => provider_extension_block(value),
             ContentBlock::Thinking {
                 signature: None, ..
             }
-            | ContentBlock::Image(_)
-            | ContentBlock::ProviderExtension(_)
-            | ContentBlock::Audio(_)
-            | ContentBlock::Video(_)
-            | ContentBlock::Document(_) => None,
+            | ContentBlock::Image(_) => None,
+            ContentBlock::Audio(_) | ContentBlock::Video(_) | ContentBlock::Document(_) => None,
         })
         .collect()
+}
+
+/// Returns an opaque Anthropic content block when it has the object shape the
+/// Messages API requires. Keeping the full object intact lets hosts persist and
+/// replay newer block types without waiting for a TinyInference release.
+fn provider_extension_block(value: &Value) -> Option<Value> {
+    let object = value.as_object()?;
+    let block_type = object.get("type").and_then(Value::as_str)?;
+    // Provider extensions are for block types this adapter does not model.
+    // Rejecting native types prevents callers from bypassing their normalized
+    // representations with incomplete provider-shaped JSON.
+    (!matches!(
+        block_type,
+        "text" | "image" | "document" | "tool_use" | "thinking" | "redacted_thinking"
+    ))
+    .then(|| value.clone())
 }
 
 /// Renders an image reference: a `data:` URI becomes an inline base64 source,

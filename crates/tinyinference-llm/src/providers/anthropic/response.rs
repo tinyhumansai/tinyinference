@@ -70,11 +70,7 @@ pub(crate) fn parse_response(body: Value) -> Result<ModelResponse> {
             "redacted_thinking" => content.push(ContentBlock::RedactedThinking {
                 data: required_string(block.get("data"), "content[].data")?.to_string(),
             }),
-            other => {
-                return Err(malformed(&format!(
-                    "unsupported content block type: {other}"
-                )));
-            }
+            _ => content.push(ContentBlock::ProviderExtension(block.clone())),
         }
     }
     Ok(ModelResponse {

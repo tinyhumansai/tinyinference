@@ -93,6 +93,7 @@ pub struct AnthropicModel {
     /// [`Self::with_temperature_override`].
     temperature_override: Option<f64>,
     temperature_unsupported: Vec<String>,
+    extra_headers: Vec<(String, String)>,
     allow_insecure_http: bool,
     request_options: crate::providers::ProviderRequestOptions,
 }
@@ -108,6 +109,14 @@ impl std::fmt::Debug for AnthropicModel {
             .field("profile", &self.profile)
             .field("temperature_override", &self.temperature_override)
             .field("temperature_unsupported", &self.temperature_unsupported)
+            .field(
+                "extra_header_names",
+                &self
+                    .extra_headers
+                    .iter()
+                    .map(|(name, _)| name)
+                    .collect::<Vec<_>>(),
+            )
             .field("allow_insecure_http", &self.allow_insecure_http)
             .field("request_options", &self.request_options)
             .finish()
@@ -154,6 +163,7 @@ impl AnthropicModel {
             model,
             temperature_override: None,
             temperature_unsupported: Vec::new(),
+            extra_headers: Vec::new(),
             allow_insecure_http: false,
             request_options: crate::providers::ProviderRequestOptions::default(),
         }
@@ -193,6 +203,16 @@ impl AnthropicModel {
         patterns: impl IntoIterator<Item = impl Into<String>>,
     ) -> Self {
         self.temperature_unsupported = patterns.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Attaches a static header to every Messages API request.
+    ///
+    /// Header values are redacted from [`Debug`](std::fmt::Debug) output.
+    /// Headers are applied after the built-in Anthropic authentication headers,
+    /// allowing compatible gateways to override them when necessary.
+    pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.extra_headers.push((name.into(), value.into()));
         self
     }
 
@@ -296,11 +316,24 @@ impl AnthropicModel {
         }
         self.request_options.apply_payload(&mut body);
         let client = self.request_options.http.as_ref().unwrap_or(&self.client);
-        let request_builder = client
-            .post(endpoint)
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", ANTHROPIC_VERSION)
-            .json(&body);
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            "x-api-key",
+            reqwest::header::HeaderValue::from_str(&self.api_key)
+                .map_err(|e| Error::Validation(e.to_string()))?,
+        );
+        headers.insert(
+            "anthropic-version",
+            reqwest::header::HeaderValue::from_static(ANTHROPIC_VERSION),
+        );
+        for (name, value) in &self.extra_headers {
+            let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+                .map_err(|e| Error::Validation(e.to_string()))?;
+            let value = reqwest::header::HeaderValue::from_str(value)
+                .map_err(|e| Error::Validation(e.to_string()))?;
+            headers.insert(name, value);
+        }
+        let request_builder = client.post(endpoint).headers(headers).json(&body);
         let request_builder = match (streaming, request.timeout_ms) {
             (false, Some(timeout_ms)) => request_builder.timeout(Duration::from_millis(timeout_ms)),
             _ => request_builder,

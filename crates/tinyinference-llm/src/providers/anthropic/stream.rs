@@ -55,6 +55,10 @@ enum OpenBlock {
         signature: Option<String>,
     },
     Redacted(String),
+    ProviderExtension {
+        value: Value,
+        partial_json: String,
+    },
 }
 
 impl OpenBlock {
@@ -87,8 +91,21 @@ impl OpenBlock {
                     "arguments": arguments,
                 }))
             }
+            OpenBlock::ProviderExtension {
+                value,
+                partial_json,
+            } => ContentBlock::ProviderExtension(provider_extension_value(value, partial_json)),
         }
     }
+}
+
+fn provider_extension_value(mut value: Value, partial_json: String) -> Value {
+    if !partial_json.trim().is_empty()
+        && let Ok(input) = serde_json::from_str::<Value>(&partial_json)
+    {
+        value["input"] = input;
+    }
+    value
 }
 
 /// Provider-side accumulator rebuilding the terminal [`ModelResponse`].
@@ -201,7 +218,7 @@ impl AnthropicStreamAcc {
                         });
                         OpenBlock::Redacted(block["data"].as_str().unwrap_or_default().to_string())
                     }
-                    _ => {
+                    Some("text") => {
                         pending.push_back(ModelStreamItem::BlockStart {
                             index,
                             kind: BlockKind::Text,
@@ -217,6 +234,18 @@ impl AnthropicStreamAcc {
                             )));
                         }
                         OpenBlock::Text(text)
+                    }
+                    _ => {
+                        pending.push_back(ModelStreamItem::BlockStart {
+                            index,
+                            kind: BlockKind::ProviderExtension {
+                                block_type: block["type"].as_str().unwrap_or_default().to_string(),
+                            },
+                        });
+                        OpenBlock::ProviderExtension {
+                            value: block.clone(),
+                            partial_json: String::new(),
+                        }
                     }
                 };
                 *self.slot(index) = Some(open);
@@ -257,6 +286,13 @@ impl AnthropicStreamAcc {
                             tool_name: Some(name.clone()),
                             content_index: Some(index),
                         }));
+                    }
+                    (
+                        Some("input_json_delta"),
+                        Some(OpenBlock::ProviderExtension { partial_json, .. }),
+                    ) => {
+                        let fragment = delta["partial_json"].as_str().unwrap_or_default();
+                        partial_json.push_str(fragment);
                     }
                     (Some("thinking_delta"), Some(OpenBlock::Thinking { text, .. })) => {
                         let fragment = delta["thinking"].as_str().unwrap_or_default();
@@ -339,6 +375,15 @@ impl AnthropicStreamAcc {
                     content.push(ContentBlock::Thinking { text, signature });
                 }
                 OpenBlock::Redacted(data) => content.push(ContentBlock::RedactedThinking { data }),
+                OpenBlock::ProviderExtension {
+                    value,
+                    partial_json,
+                } => {
+                    content.push(ContentBlock::ProviderExtension(provider_extension_value(
+                        value,
+                        partial_json,
+                    )));
+                }
                 OpenBlock::ToolUse {
                     id,
                     name,
@@ -371,6 +416,7 @@ impl AnthropicStreamAcc {
             "stop_reason": self.stop_reason,
             "content": content.iter().filter_map(|block| match block {
                 ContentBlock::Text(text) => Some(serde_json::json!({"type": "text", "text": text})),
+                ContentBlock::ProviderExtension(value) => Some(value.clone()),
                 _ => None,
             }).chain(tool_calls.iter().map(|call| serde_json::json!({
                 "type": "tool_use", "id": call.id, "name": call.name, "input": call.arguments,
