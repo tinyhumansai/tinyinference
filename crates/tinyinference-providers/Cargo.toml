@@ -12,22 +12,15 @@ keywords = ["llm", "inference", "oauth", "providers"]
 categories = ["api-bindings", "authentication"]
 
 [dependencies]
-async-trait = { workspace = true }
-base64 = "0.22"
-rand = "0.9"
+base64 = "0.23"
+rand = "0.10"
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
-thiserror = { workspace = true }
-tinyinference-core = { version = "0.3.0", path = "../tinyinference-core" }
-tinyinference-llm = { version = "0.3.0", path = "../tinyinference-llm" }
-tokio = { workspace = true }
-tracing = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
-tempfile = { workspace = true }
 
 [lints]
 workspace = true

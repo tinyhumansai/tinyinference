@@ -1074,6 +1074,15 @@ impl OpenAiModel {
         &self.base_url
     }
 
+    /// Whether `request` is served through the prompt-guided tool protocol:
+    /// the model has no native tool channel — by profile, or because a 400
+    /// latched native tools off the wire — yet was handed tools.
+    pub(super) fn prompt_guided_for(&self, request: &ModelRequest) -> bool {
+        (!self.profile.tool_calling || !self.native_tools_on_wire.load(Ordering::Relaxed))
+            && !request.tools.is_empty()
+            && request.tool_choice != ToolChoice::None
+    }
+
     /// The baseline request-shape degradations to apply for this instance,
     /// derived from its capability knobs. A `true` field means "degrade this
     /// shape on the wire".
@@ -1126,8 +1135,14 @@ impl OpenAiModel {
         };
         let instructed_messages;
         let base_messages: &[Message] = if prompt_guided_tools {
-            instructed_messages = prompt_tools::with_tool_instructions(
-                &request.messages,
+            // A prompt-guided model cannot read structured `tool_calls` or
+            // the `tool` role, and its own chat template may refuse a
+            // transcript with no user query — so the history is rewritten
+            // into the text protocol before the protocol block is added.
+            let coalesced = crate::prompt_tools::coalesce_tool_results(&request.messages);
+            let resolvable = crate::prompt_tools::ensure_resolvable_user_turn(&coalesced);
+            instructed_messages = crate::prompt_tools::with_tool_instructions(
+                &resolvable,
                 &prompt_tool_schemas,
                 &request.tool_choice,
             );
@@ -1834,14 +1849,12 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
         self.request_options.observe_response(&value);
         let mut response = parse_chat_response(value, self.effective_reasoning_tags())?;
         self.stamp_origin(&mut response, &request, CHAT_COMPLETIONS_API);
-        // Prompt-guided tools: recover the model's `<tool_call>` blocks into
+        // Prompt-guided tools: recover text-mode tool calls into
         // `message.tool_calls` when native tool calling was suppressed.
-        if !self.profile.tool_calling
-            && !request.tools.is_empty()
-            && request.tool_choice != ToolChoice::None
-        {
+        if self.prompt_guided_for(&request) {
             return Ok(
-                prompt_tools::apply_to_response(response).inherit_correlation(request.correlation)
+                crate::prompt_tools::recover_tool_calls(response, &request.tools)
+                    .inherit_correlation(request.correlation),
             );
         }
         Ok(response.inherit_correlation(request.correlation))
@@ -1913,11 +1926,8 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
             let value: Value = serde_json::from_str(&text)?;
             let mut parsed = parse_chat_response(value, self.effective_reasoning_tags())?;
             self.stamp_origin(&mut parsed, &request, CHAT_COMPLETIONS_API);
-            if !self.profile.tool_calling
-                && !request.tools.is_empty()
-                && request.tool_choice != ToolChoice::None
-            {
-                parsed = prompt_tools::apply_to_response(parsed);
+            if self.prompt_guided_for(&request) {
+                parsed = crate::prompt_tools::recover_tool_calls(parsed, &request.tools);
             }
             let delta = crate::message::MessageDelta {
                 text: parsed.text(),
@@ -1958,18 +1968,20 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
         };
 
         let stream = futures::stream::unfold(state, sse_next);
-        // Prompt-guided tools: recover `<tool_call>` blocks from the terminal
-        // `Completed` response into `message.tool_calls` (the streamed text deltas
-        // still carry the raw markup — cleaning them mid-stream is a follow-up).
-        if !self.profile.tool_calling
-            && !request.tools.is_empty()
-            && request.tool_choice != ToolChoice::None
-        {
-            let stream = ModelStream::new(Box::pin(stream.map(|item| match item {
-                ModelStreamItem::Completed(response) => {
-                    ModelStreamItem::Completed(prompt_tools::apply_to_response(response))
-                }
-                other => other,
+        // Prompt-guided tools: scrub tool-call markup from the streamed text
+        // deltas as they arrive, and recover the calls from the terminal
+        // `Completed` response into `message.tool_calls`. Calls are dispatched
+        // from the terminal response only, so a consumer sees each exactly
+        // once; the scrubber's own releases are dropped. Any narrative text
+        // the scrubber was withholding pending disambiguation (an in-progress
+        // marker prefix that never completed) is flushed as one final delta
+        // ahead of `Completed`, so a streaming consumer sees the same visible
+        // suffix the terminal response carries.
+        if self.prompt_guided_for(&request) {
+            let tools = request.tools.clone();
+            let mut scrubber = crate::prompt_tools::TextScrubber::new(&tools);
+            let stream = ModelStream::new(Box::pin(stream.flat_map(move |item| {
+                futures::stream::iter(scrub_prompt_guided_item(item, &mut scrubber, &tools))
             })));
             return Ok(match correlation {
                 Some(correlation) => stream.with_correlation(correlation),
@@ -1981,6 +1993,53 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
             Some(correlation) => stream.with_correlation(correlation),
             None => stream,
         })
+    }
+}
+
+/// Applies prompt-guided scrubbing/recovery to one streamed item, returning
+/// zero or more items to forward.
+///
+/// * A `MessageDelta` is fed through the scrubber; a delta the scrubber
+///   emptied entirely (and that carries no reasoning or tool-call fragment
+///   either) is dropped rather than waking a consumer for nothing.
+/// * The terminal `Completed` response runs tool-call recovery. Any
+///   narrative text the scrubber was withholding pending disambiguation — an
+///   in-progress marker prefix that never resolved — is flushed and emitted
+///   as one final `MessageDelta` immediately before `Completed`, so a
+///   streaming consumer sees the same visible suffix the terminal response
+///   carries. The scrubber's own recovered calls are discarded here: calls
+///   are dispatched from the terminal response only, so a consumer sees each
+///   exactly once.
+/// * Every other item passes through unchanged.
+pub(super) fn scrub_prompt_guided_item(
+    item: ModelStreamItem,
+    scrubber: &mut crate::prompt_tools::TextScrubber,
+    tools: &[crate::tool::ToolSchema],
+) -> Vec<ModelStreamItem> {
+    match item {
+        ModelStreamItem::MessageDelta(mut delta) if !delta.text.is_empty() => {
+            let (text, _released) = scrubber.feed(&delta.text);
+            delta.text = text;
+            if delta.text.is_empty() && delta.reasoning.is_empty() && delta.tool_call.is_none() {
+                Vec::new()
+            } else {
+                vec![ModelStreamItem::MessageDelta(delta)]
+            }
+        }
+        ModelStreamItem::Completed(response) => {
+            let (flushed_text, _released) = scrubber.flush();
+            let mut items = Vec::with_capacity(2);
+            if !flushed_text.is_empty() {
+                items.push(ModelStreamItem::MessageDelta(MessageDelta::text(
+                    flushed_text,
+                )));
+            }
+            items.push(ModelStreamItem::Completed(
+                crate::prompt_tools::recover_tool_calls(response, tools),
+            ));
+            items
+        }
+        other => vec![other],
     }
 }
 

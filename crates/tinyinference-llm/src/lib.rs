@@ -13,6 +13,7 @@ pub mod failure;
 pub mod message;
 pub mod model;
 mod network_guard;
+pub mod prompt_tools;
 pub mod providers;
 pub mod sentiment;
 pub mod tool;

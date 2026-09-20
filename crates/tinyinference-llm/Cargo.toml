@@ -21,9 +21,12 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
 tinyinference-core = { version = "0.3.0", path = "../tinyinference-core" }
+# The model-facing tool protocol: prompt-guided rendering, text-mode parsing,
+# argument repair, and streaming scrub. Owned once, in TinyTools, so this
+# adapter and every host share one grammar table.
+tinytools-agent = { version = "0.3.0", git = "https://github.com/tinyhumansai/tinytools", rev = "a5d04a7f3af0abc1dd748f87f94871b36ae9fe71" }
 tokio = { workspace = true }
 tracing = { workspace = true }
-url = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
