@@ -84,7 +84,7 @@ fn matches_context_pattern(lower: &str, pattern: &str, mode: ContextPatternMatch
     }
 }
 
-/// Derives the compatibility [`MessageDelta`] for a block-aware
+/// Derives the compatibility [`crate::message::MessageDelta`] for a block-aware
 /// [`ModelStreamItem::BlockDelta`] fragment.
 ///
 /// Block-aware adapters (Anthropic and, incrementally, the OpenAI adapters)
