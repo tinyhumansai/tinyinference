@@ -453,10 +453,20 @@ fn provider_extension_blocks_round_trip_without_interpretation() {
     );
 
     let replay = request_body(
-        &ModelRequest::new(vec![Message::Assistant(response.message)]),
+        &ModelRequest::new(vec![Message::Assistant(response.message.clone())]),
         "m",
     );
     assert_eq!(replay["messages"][0]["content"][0], extension);
+
+    let future_extension = json!({ "type": "future_block", "payload": { "ok": true } });
+    let replay = request_body(
+        &ModelRequest::new(vec![Message::Assistant(AssistantMessage {
+            content: vec![ContentBlock::ProviderExtension(future_extension.clone())],
+            ..response.message
+        })]),
+        "m",
+    );
+    assert_eq!(replay["messages"][0]["content"][0], future_extension);
 }
 
 #[test]
@@ -760,6 +770,37 @@ async fn streaming_preserves_unknown_content_blocks_for_the_host() {
         response.message.content,
         vec![ContentBlock::ProviderExtension(extension)]
     );
+}
+
+#[tokio::test]
+async fn streaming_reconstructs_extension_input_fragments_and_boundaries() {
+    let events = [
+        json!({"type":"message_start","message":{"id":"m","usage":{"input_tokens":1,"output_tokens":0}}}),
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"srvtoolu_1","name":"web_search","input":{}}}),
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"query\":"}}),
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"rust\"}"}}),
+        json!({"type":"content_block_stop","index":0}),
+        json!({"type":"message_stop"}),
+    ];
+    let items: Vec<ModelStreamItem> = stream::stream_from_bytes(vec![sse(&events)], "m")
+        .collect()
+        .await;
+
+    assert!(items.iter().any(|item| matches!(
+        item,
+        ModelStreamItem::BlockStart {
+            index: 0,
+            kind: BlockKind::ProviderExtension { block_type }
+        } if block_type == "server_tool_use"
+    )));
+    assert!(items.iter().any(|item| matches!(
+        item,
+        ModelStreamItem::BlockEnd {
+            index: 0,
+            block: ContentBlock::ProviderExtension(value)
+        } if value["input"] == json!({"query": "rust"})
+    )));
+    assert!(matches!(items.last(), Some(ModelStreamItem::Completed(_))));
 }
 
 #[tokio::test]
