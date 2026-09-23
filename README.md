@@ -50,8 +50,11 @@ can depend on `tinyinference-llm` for language models,
 `tinyinference-embeddings` for vector generation and retrieval,
 `tinyinference-local` for local runtimes and installers,
 `tinyinference-providers` for provider authentication and routing primitives,
-`tinyinference-voice` for speech inference and streaming-audio mechanics, and
-`tinyinference-core` only for shared infrastructure.
+`tinyinference-voice` for speech inference and streaming-audio mechanics,
+`tinyinference-image` for image generation and the shared media-reference
+standards and OpenRouter media transport,
+`tinyinference-video` for asynchronous video generation (submit, poll,
+download, resume), and `tinyinference-core` only for shared infrastructure.
 
 ## Layout
 
@@ -80,7 +83,25 @@ crates/tinyinference-providers/
 └── src/            OAuth/PKCE flows and provider error classification
 crates/tinyinference-voice/
 └── src/            hosted STT, Piper TTS, cleanup, and PCM streaming helpers
+crates/tinyinference-image/
+└── src/            ImageGenerator, media references and output-shape
+                    normalization, OpenRouter media transport, capabilities
+crates/tinyinference-video/
+└── src/            VideoGenerator, submit/poll/download job loop, resume by id
 ```
+
+### Media generation
+
+`tinyinference-image` and `tinyinference-video` speak OpenRouter's media wire
+format (`POST /images`, `POST /videos`, `GET /videos/{id}`,
+`GET /videos/{id}/content`). The same generators run against OpenRouter
+directly (`MediaAuth::ApiKey`) or against a host backend that proxies those
+routes verbatim (`MediaAuth::Bearer` with `MediaTransport::with_base_url`).
+A generator returns delivered media or an error — never an empty success —
+and every error after a billed submit names the job and says not to resubmit.
+Live smoke tests: `cargo run -p tinyinference-image --example
+live_openrouter_image` and `cargo run -p tinyinference-video --example
+live_openrouter_video` (skip without `OPENROUTER_API_KEY`).
 
 ## Development
 
