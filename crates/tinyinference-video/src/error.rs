@@ -26,9 +26,9 @@ pub enum Error {
         job_id: String,
         /// What was being done (`polling`, `downloading output 0`).
         stage: String,
-        /// The underlying failure.
+        /// The underlying failure (boxed to keep `Result` small).
         #[source]
-        source: tinyinference_image::Error,
+        source: Box<tinyinference_image::Error>,
     },
     /// The provider reported a terminal failure for the job.
     #[error("video job {job_id} ended as {state}: {message}")]

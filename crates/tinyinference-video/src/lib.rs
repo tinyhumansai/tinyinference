@@ -157,7 +157,7 @@ pub async fn wait_for_job<G: VideoGenerator + ?Sized>(
                 return Err(Error::Job {
                     job_id: job_id.to_owned(),
                     stage: "polling".into(),
-                    source: error,
+                    source: Box::new(error),
                 });
             }
             Err(other) => return Err(other),
@@ -211,7 +211,7 @@ async fn download_all<G: VideoGenerator + ?Sized>(
                 return Err(Error::Job {
                     job_id: job_id.to_owned(),
                     stage: format!("downloading output {index}"),
-                    source,
+                    source: Box::new(source),
                 });
             }
             Err(other) => return Err(other),
