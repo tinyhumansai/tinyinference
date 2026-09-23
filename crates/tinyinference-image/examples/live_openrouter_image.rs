@@ -28,11 +28,14 @@ fn api_key() -> Option<String> {
         return Some(key.trim().to_owned());
     }
     let env_file = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.env");
-    std::fs::read_to_string(env_file).ok()?.lines().find_map(|line| {
-        let value = line.trim().strip_prefix("OPENROUTER_API_KEY=")?;
-        let value = value.trim().trim_matches('"').trim_matches('\'');
-        (!value.is_empty()).then(|| value.to_owned())
-    })
+    std::fs::read_to_string(env_file)
+        .ok()?
+        .lines()
+        .find_map(|line| {
+            let value = line.trim().strip_prefix("OPENROUTER_API_KEY=")?;
+            let value = value.trim().trim_matches('"').trim_matches('\'');
+            (!value.is_empty()).then(|| value.to_owned())
+        })
 }
 
 #[tokio::main]
@@ -42,7 +45,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     };
     let generator = OpenRouterImageGenerator::new(MediaAuth::ApiKey(key));
-    let model = std::env::var("LIVE_IMAGE_MODEL").unwrap_or_else(|_| generator.default_model().to_owned());
+    let model =
+        std::env::var("LIVE_IMAGE_MODEL").unwrap_or_else(|_| generator.default_model().to_owned());
     let prompt = std::env::var("LIVE_PROMPT").unwrap_or_else(|_| {
         "A four-panel anime comic of two cheerful engineers shaking hands in front of a glowing \
          server, bright colors, thick ink outlines"
@@ -63,7 +67,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/live-media");
     for (index, image) in response.images.iter().enumerate() {
         let path = image
-            .persist(&out_dir, &format!("image-{}-{index}", model.replace('/', "_")), "png")
+            .persist(
+                &out_dir,
+                &format!("image-{}-{index}", model.replace('/', "_")),
+                "png",
+            )
             .await?;
         println!(
             "saved {} ({} bytes, {})",

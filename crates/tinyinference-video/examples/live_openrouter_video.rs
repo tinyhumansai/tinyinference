@@ -30,11 +30,14 @@ fn api_key() -> Option<String> {
         return Some(key.trim().to_owned());
     }
     let env_file = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.env");
-    std::fs::read_to_string(env_file).ok()?.lines().find_map(|line| {
-        let value = line.trim().strip_prefix("OPENROUTER_API_KEY=")?;
-        let value = value.trim().trim_matches('"').trim_matches('\'');
-        (!value.is_empty()).then(|| value.to_owned())
-    })
+    std::fs::read_to_string(env_file)
+        .ok()?
+        .lines()
+        .find_map(|line| {
+            let value = line.trim().strip_prefix("OPENROUTER_API_KEY=")?;
+            let value = value.trim().trim_matches('"').trim_matches('\'');
+            (!value.is_empty()).then(|| value.to_owned())
+        })
 }
 
 #[tokio::main]
@@ -44,8 +47,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     };
     let generator = OpenRouterVideoGenerator::new(MediaAuth::ApiKey(key));
-    let model = std::env::var("LIVE_VIDEO_MODEL")
-        .unwrap_or_else(|_| generator.default_model().to_owned());
+    let model =
+        std::env::var("LIVE_VIDEO_MODEL").unwrap_or_else(|_| generator.default_model().to_owned());
     let started = Instant::now();
     let wait = WaitPolicy::new(Duration::from_secs(5), Duration::from_secs(900)).with_progress(
         Arc::new(move |status: &VideoJobStatus| {
@@ -83,7 +86,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/live-media");
     for (index, video) in response.videos.iter().enumerate() {
         let path = video
-            .persist(&out_dir, &format!("video-{}-{index}", response.job_id), "mp4")
+            .persist(
+                &out_dir,
+                &format!("video-{}-{index}", response.job_id),
+                "mp4",
+            )
             .await?;
         println!(
             "saved {} ({} bytes, {})",
