@@ -1,0 +1,32 @@
+[package]
+name = "tinyinference-image"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Provider-neutral image generation, media references, and OpenRouter transport for Rust."
+documentation = "https://docs.rs/tinyinference-image"
+readme = "../../README.md"
+keywords = ["image-generation", "inference", "openrouter", "media"]
+categories = ["api-bindings", "asynchronous", "multimedia::images"]
+
+[dependencies]
+async-trait = { workspace = true }
+base64 = "0.23"
+bytes = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tinyinference-core = { version = "0.3.0", path = "../tinyinference-core" }
+tokio = { workspace = true, features = ["fs"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+axum = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["fs", "net"] }
+
+[lints]
+workspace = true
