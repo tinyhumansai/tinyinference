@@ -1435,6 +1435,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "tinyinference-video"
+version = "0.3.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tinyinference-image",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "tinyinference-voice"
 version = "0.3.0"
 dependencies = [
