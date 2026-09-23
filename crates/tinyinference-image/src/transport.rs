@@ -4,8 +4,10 @@
 //!
 //! - **Direct** — `https://openrouter.ai/api/v1` with the caller's OpenRouter
 //!   API key ([`MediaAuth::ApiKey`]).
-//! - **Proxied** — a host backend that forwards OpenRouter's request and
-//!   response bodies verbatim (for example TinyHumans'
+//! - **Proxied** — a host backend that forwards OpenRouter's request bodies
+//!   verbatim and returns OpenRouter's response body, optionally wrapped in a
+//!   `{"success": true, "data": …}` envelope that is unwrapped transparently
+//!   ([`unwrap_envelope`]) (for example TinyHumans'
 //!   `/agent-integrations/openrouter`), authenticated with a host-owned bearer
 //!   ([`MediaAuth::Bearer`]) so the credential lifecycle stays in the host.
 //!
@@ -393,12 +395,50 @@ async fn decode_json<T: DeserializeOwned>(response: reqwest::Response) -> Result
         .bytes()
         .await
         .map_err(|error| Error::Transport(sanitize_api_error(&error.to_string())))?;
-    serde_json::from_slice(&bytes).map_err(|error| {
+    let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
         Error::Decode(format!(
             "unexpected response body ({} bytes): {error}",
             bytes.len()
         ))
-    })
+    })?;
+    serde_json::from_value(unwrap_envelope(value)?)
+        .map_err(|error| Error::Decode(format!("unexpected response shape: {error}")))
+}
+
+/// Unwraps a proxying backend's `{"success": bool, "data": …}` envelope.
+///
+/// OpenRouter's own media responses never carry a top-level boolean
+/// `success`, so its presence identifies the envelope unambiguously; any other
+/// body passes through untouched.
+///
+/// # Errors
+///
+/// [`Error::Http`] for a `success: false` envelope delivered with a 2xx
+/// status, carrying the envelope's sanitized error message.
+pub fn unwrap_envelope(value: serde_json::Value) -> Result<serde_json::Value> {
+    let serde_json::Value::Object(mut map) = value else {
+        return Ok(value);
+    };
+    match map.get("success").and_then(serde_json::Value::as_bool) {
+        Some(true) => Ok(map.remove("data").unwrap_or(serde_json::Value::Null)),
+        Some(false) => {
+            let message = map
+                .get("error")
+                .and_then(|error| {
+                    error
+                        .as_str()
+                        .map(str::to_owned)
+                        .or_else(|| error.pointer("/message").and_then(|m| m.as_str()).map(str::to_owned))
+                })
+                .or_else(|| map.get("message").and_then(|m| m.as_str()).map(str::to_owned))
+                .unwrap_or_else(|| "request failed".to_owned());
+            Err(Error::Http {
+                status: 200,
+                message: sanitize_api_error(&message),
+            })
+        }
+        None => Ok(serde_json::Value::Object(map)),
+    }
 }
 
 /// Strips an `openrouter/` routing prefix from a model id.

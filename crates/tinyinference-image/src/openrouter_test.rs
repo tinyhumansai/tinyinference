@@ -243,16 +243,43 @@ async fn listing_without_capabilities_does_not_block_generation() {
         .unwrap();
 }
 
+/// A proxying backend wraps OpenRouter's body in `{success, data}`; the
+/// transport unwraps it transparently.
+fn enveloped_png_reply(_call: usize) -> Response {
+    axum::Json(json!({ "success": true, "data": {
+        "created": 1,
+        "data": [{ "b64_json": BASE64.encode(TINY_PNG), "media_type": "image/png" }],
+        "usage": { "cost": 0.035 }
+    }}))
+    .into_response()
+}
+
 #[tokio::test]
 async fn proxied_backend_base_url_and_bearer_resolver() {
-    let fixture = fixture("/agent-integrations/openrouter", png_reply, None).await;
+    let fixture = fixture("/agent-integrations/openrouter", enveloped_png_reply, None).await;
     let resolver: crate::BearerResolver = Arc::new(|| Ok("session-jwt-abcdefgh".to_owned()));
     let generator = OpenRouterImageGenerator::with_transport(
         MediaTransport::new(MediaAuth::Bearer(resolver)).with_base_url(&fixture.base_url),
     );
-    generator.generate(ImageRequest::new("x")).await.unwrap();
+    let response = generator.generate(ImageRequest::new("x")).await.unwrap();
+    assert_eq!(response.images.len(), 1);
+    assert_eq!(response.cost_usd, Some(0.035));
     let headers = fixture.captured.headers.lock().unwrap()[0].clone();
     assert_eq!(headers["authorization"], "Bearer session-jwt-abcdefgh");
+}
+
+#[tokio::test]
+async fn failed_envelope_is_an_error_even_with_a_2xx_status() {
+    fn failed(_call: usize) -> Response {
+        axum::Json(json!({ "success": false, "error": "Insufficient balance" })).into_response()
+    }
+    let fixture = fixture("/agent-integrations/openrouter", failed, None).await;
+    let error = generator(&fixture.base_url)
+        .with_capability_check(false)
+        .generate(ImageRequest::new("x"))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("Insufficient balance"), "{error}");
 }
 
 #[tokio::test]
