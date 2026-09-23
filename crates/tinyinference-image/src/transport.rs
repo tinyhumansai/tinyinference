@@ -69,7 +69,9 @@ impl MediaAuth {
         };
         let token = token.trim().to_owned();
         if token.is_empty() {
-            return Err(Error::Auth("no credential available for media generation".into()));
+            return Err(Error::Auth(
+                "no credential available for media generation".into(),
+            ));
         }
         Ok(token)
     }
@@ -147,7 +149,10 @@ impl MediaTransport {
             (Ok(name), Ok(value)) => {
                 self.headers.insert(name, value);
             }
-            _ => tracing::warn!(header = name, "[tinyinference-image] ignoring invalid header"),
+            _ => tracing::warn!(
+                header = name,
+                "[tinyinference-image] ignoring invalid header"
+            ),
         }
         self
     }
@@ -371,7 +376,11 @@ impl std::fmt::Debug for MediaTransport {
             .field("auth", &self.auth)
             .field(
                 "headers",
-                &self.headers.keys().map(HeaderName::as_str).collect::<Vec<_>>(),
+                &self
+                    .headers
+                    .keys()
+                    .map(HeaderName::as_str)
+                    .collect::<Vec<_>>(),
             )
             .field("max_retries", &self.max_retries)
             .field("max_media_bytes", &self.max_media_bytes)

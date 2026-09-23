@@ -12,8 +12,7 @@ use tokio::sync::Mutex;
 use crate::capabilities::ModelCapabilities;
 use crate::media::GeneratedMedia;
 use crate::reference::{
-    DEFAULT_MAX_REFERENCE_BYTES, normalize_aspect_ratio, normalize_image_resolution,
-    normalize_size,
+    DEFAULT_MAX_REFERENCE_BYTES, normalize_aspect_ratio, normalize_image_resolution, normalize_size,
 };
 use crate::transport::{MediaAuth, MediaTransport, wire_model_id};
 use crate::types::{ImageRequest, ImageResponse, MediaModel};
@@ -143,10 +142,20 @@ impl OpenRouterImageGenerator {
         if let Some(value) = &request.aspect_ratio
             && value != "auto"
         {
-            ModelCapabilities::check_one_of(model, "aspect_ratio", value, caps.aspect_ratios.as_deref())?;
+            ModelCapabilities::check_one_of(
+                model,
+                "aspect_ratio",
+                value,
+                caps.aspect_ratios.as_deref(),
+            )?;
         }
         if let Some(value) = &request.resolution {
-            ModelCapabilities::check_one_of(model, "resolution", value, caps.resolutions.as_deref())?;
+            ModelCapabilities::check_one_of(
+                model,
+                "resolution",
+                value,
+                caps.resolutions.as_deref(),
+            )?;
         }
         if let (Some(n), Some((min, max))) = (request.n, caps.n_range)
             && n > 1
@@ -248,7 +257,21 @@ fn sniff_image_type(data: &[u8]) -> &'static str {
     match data {
         [0x89, b'P', b'N', b'G', ..] => "image/png",
         [0xFF, 0xD8, 0xFF, ..] => "image/jpeg",
-        [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => "image/webp",
+        [
+            b'R',
+            b'I',
+            b'F',
+            b'F',
+            _,
+            _,
+            _,
+            _,
+            b'W',
+            b'E',
+            b'B',
+            b'P',
+            ..,
+        ] => "image/webp",
         [b'G', b'I', b'F', b'8', ..] => "image/gif",
         [b'<', ..] => "image/svg+xml",
         _ => "image/png",
@@ -267,7 +290,8 @@ impl ImageGenerator for OpenRouterImageGenerator {
 
     async fn generate(&self, request: ImageRequest) -> Result<ImageResponse> {
         request.validate()?;
-        let model = wire_model_id(request.model.as_deref().unwrap_or(&self.default_model)).to_owned();
+        let model =
+            wire_model_id(request.model.as_deref().unwrap_or(&self.default_model)).to_owned();
         let body = build_image_body(&model, &request, self.max_reference_bytes).await?;
 
         if self.check_capabilities
@@ -308,9 +332,9 @@ impl ImageGenerator for OpenRouterImageGenerator {
                     limit: self.transport.max_media_bytes(),
                 });
             }
-            let data = BASE64
-                .decode(encoded.as_bytes())
-                .map_err(|error| Error::Decode(format!("image {index} is not valid base64: {error}")))?;
+            let data = BASE64.decode(encoded.as_bytes()).map_err(|error| {
+                Error::Decode(format!("image {index} is not valid base64: {error}"))
+            })?;
             let media_type = image
                 .media_type
                 .filter(|value| !value.trim().is_empty())
@@ -341,6 +365,9 @@ impl ImageGenerator for OpenRouterImageGenerator {
 
     async fn list_models(&self) -> Result<Vec<MediaModel>> {
         let body: Value = self.transport.get_json("images/models").await?;
-        Ok(MediaModel::parse_listing(&body, ModelCapabilities::from_image_model))
+        Ok(MediaModel::parse_listing(
+            &body,
+            ModelCapabilities::from_image_model,
+        ))
     }
 }

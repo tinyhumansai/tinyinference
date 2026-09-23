@@ -337,7 +337,9 @@ pub fn normalize_video_resolution(value: &str) -> Option<String> {
 #[must_use]
 pub fn normalize_size(value: &str) -> Option<String> {
     let trimmed = value.trim();
-    if let Some(tier) = normalize_image_resolution(trimmed).filter(|_| trimmed.ends_with(['k', 'K'])) {
+    if let Some(tier) =
+        normalize_image_resolution(trimmed).filter(|_| trimmed.ends_with(['k', 'K']))
+    {
         return Some(tier);
     }
     let lower = trimmed.to_ascii_lowercase();

@@ -65,8 +65,14 @@ impl ImageGenerator for MockImageGenerator {
     async fn generate(&self, request: ImageRequest) -> Result<ImageResponse> {
         request.validate()?;
         let n = request.n.unwrap_or(1);
-        let model = request.model.clone().unwrap_or_else(|| self.default_model().to_owned());
-        self.requests.lock().expect("mock lock poisoned").push(request);
+        let model = request
+            .model
+            .clone()
+            .unwrap_or_else(|| self.default_model().to_owned());
+        self.requests
+            .lock()
+            .expect("mock lock poisoned")
+            .push(request);
         if self.return_no_media {
             return Err(Error::NoMedia {
                 request_id: Some("mock-request".into()),
@@ -74,7 +80,9 @@ impl ImageGenerator for MockImageGenerator {
         }
         Ok(ImageResponse {
             model,
-            images: (0..n).map(|_| GeneratedMedia::new("image/png", TINY_PNG)).collect(),
+            images: (0..n)
+                .map(|_| GeneratedMedia::new("image/png", TINY_PNG))
+                .collect(),
             cost_usd: Some(0.0),
             created: None,
         })

@@ -173,7 +173,8 @@ impl MediaModel {
                     .iter()
                     .filter_map(|record| {
                         let id = record.get("id").and_then(Value::as_str)?.to_owned();
-                        let text = |key: &str| record.get(key).and_then(Value::as_str).map(str::to_owned);
+                        let text =
+                            |key: &str| record.get(key).and_then(Value::as_str).map(str::to_owned);
                         Some(Self {
                             id,
                             name: text("name").or_else(|| text("display_name")),

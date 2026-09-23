@@ -40,7 +40,10 @@ impl ModelCapabilities {
     /// parameter is unsupported.
     #[must_use]
     pub fn from_image_model(record: &Value) -> Self {
-        let Some(params) = record.get("supported_parameters").and_then(Value::as_object) else {
+        let Some(params) = record
+            .get("supported_parameters")
+            .and_then(Value::as_object)
+        else {
             return Self::default();
         };
         let enum_values = |key: &str| {
@@ -124,7 +127,10 @@ impl ModelCapabilities {
         let Some(allowed) = allowed else {
             return Ok(());
         };
-        if allowed.iter().any(|candidate| candidate.eq_ignore_ascii_case(value)) {
+        if allowed
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(value))
+        {
             return Ok(());
         }
         Err(Error::Unsupported {

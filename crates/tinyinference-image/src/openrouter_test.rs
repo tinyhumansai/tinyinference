@@ -50,18 +50,22 @@ async fn fixture(
 ) -> Fixture {
     let captured = Captured::default();
     let images_state = captured.clone();
-    let images = post(move |State(state): State<Captured>, request: Request| async move {
-        let headers = request.headers().clone();
-        let body = axum::body::to_bytes(request.into_body(), usize::MAX).await.unwrap();
-        state.headers.lock().unwrap().push(headers);
-        state
-            .bodies
-            .lock()
-            .unwrap()
-            .push(serde_json::from_slice(&body).unwrap());
-        let call = state.image_calls.fetch_add(1, Ordering::SeqCst);
-        image_reply(call)
-    });
+    let images = post(
+        move |State(state): State<Captured>, request: Request| async move {
+            let headers = request.headers().clone();
+            let body = axum::body::to_bytes(request.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            state.headers.lock().unwrap().push(headers);
+            state
+                .bodies
+                .lock()
+                .unwrap()
+                .push(serde_json::from_slice(&body).unwrap());
+            let call = state.image_calls.fetch_add(1, Ordering::SeqCst);
+            image_reply(call)
+        },
+    );
     let models = get(move || async move {
         match listing {
             Some(listing) => axum::Json(listing).into_response(),
@@ -122,7 +126,10 @@ async fn generates_decodes_and_reports_cost() {
     assert_eq!(response.cost_usd, Some(0.035));
 
     let body = fixture.captured.bodies.lock().unwrap()[0].clone();
-    assert_eq!(body["model"], "bytedance-seed/seedream-5-0-lite", "openrouter/ prefix stripped");
+    assert_eq!(
+        body["model"], "bytedance-seed/seedream-5-0-lite",
+        "openrouter/ prefix stripped"
+    );
     assert_eq!(body["aspect_ratio"], "16:9");
     assert_eq!(body["resolution"], "2K");
     assert_eq!(body["seed"], 7);
@@ -213,7 +220,10 @@ async fn unsupported_seed_is_rejected_when_the_listing_omits_it() {
         )
         .await
         .unwrap_err();
-    assert!(matches!(error, Error::Unsupported { ref field, .. } if field == "seed"), "{error:?}");
+    assert!(
+        matches!(error, Error::Unsupported { ref field, .. } if field == "seed"),
+        "{error:?}"
+    );
 }
 
 #[tokio::test]
@@ -224,7 +234,11 @@ async fn listing_without_capabilities_does_not_block_generation() {
     }]});
     let fixture = fixture("/api/v1", png_reply, Some(listing)).await;
     generator(&fixture.base_url)
-        .generate(ImageRequest::new("x").with_aspect_ratio("21:9").with_seed(3))
+        .generate(
+            ImageRequest::new("x")
+                .with_aspect_ratio("21:9")
+                .with_seed(3),
+        )
         .await
         .unwrap();
 }
@@ -249,7 +263,10 @@ async fn blank_bearer_fails_without_a_request() {
         MediaTransport::new(MediaAuth::Bearer(resolver)).with_base_url(&fixture.base_url),
     )
     .with_capability_check(false);
-    let error = generator.generate(ImageRequest::new("x")).await.unwrap_err();
+    let error = generator
+        .generate(ImageRequest::new("x"))
+        .await
+        .unwrap_err();
     assert!(matches!(error, Error::Auth(_)), "{error:?}");
     assert_eq!(fixture.captured.image_calls.load(Ordering::SeqCst), 0);
 }
@@ -259,7 +276,10 @@ async fn blank_bearer_fails_without_a_request() {
 #[tokio::test]
 async fn billable_post_is_not_retried_on_server_error() {
     fn boom(_call: usize) -> Response {
-        (StatusCode::BAD_GATEWAY, axum::Json(json!({"error": {"code": 502, "message": "upstream"}})))
+        (
+            StatusCode::BAD_GATEWAY,
+            axum::Json(json!({"error": {"code": 502, "message": "upstream"}})),
+        )
             .into_response()
     }
     let fixture = fixture("/api/v1", boom, None).await;
@@ -268,7 +288,10 @@ async fn billable_post_is_not_retried_on_server_error() {
         .generate(ImageRequest::new("x"))
         .await
         .unwrap_err();
-    assert!(matches!(error, Error::Http { status: 502, .. }), "{error:?}");
+    assert!(
+        matches!(error, Error::Http { status: 502, .. }),
+        "{error:?}"
+    );
     assert_eq!(fixture.captured.image_calls.load(Ordering::SeqCst), 1);
 }
 
@@ -276,7 +299,12 @@ async fn billable_post_is_not_retried_on_server_error() {
 async fn billable_post_is_retried_on_rate_limit() {
     fn limited_once(call: usize) -> Response {
         if call == 0 {
-            (StatusCode::TOO_MANY_REQUESTS, [("retry-after", "0")], "slow down").into_response()
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                [("retry-after", "0")],
+                "slow down",
+            )
+                .into_response()
         } else {
             png_reply(call)
         }
@@ -301,7 +329,10 @@ async fn provider_errors_and_debug_never_leak_the_key() {
     }
     let fixture = fixture("/api/v1", echo_key, None).await;
     let generator = generator(&fixture.base_url).with_capability_check(false);
-    let error = generator.generate(ImageRequest::new("x")).await.unwrap_err();
+    let error = generator
+        .generate(ImageRequest::new("x"))
+        .await
+        .unwrap_err();
     assert!(matches!(error, Error::Auth(_)), "{error:?}");
     assert!(!error.to_string().contains(KEY), "{error}");
     assert!(!format!("{generator:?}").contains(KEY));

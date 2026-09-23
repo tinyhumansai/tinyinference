@@ -55,14 +55,26 @@ impl GeneratedMedia {
         fallback_extension: &str,
     ) -> Result<PathBuf> {
         if self.data.is_empty() {
-            return Err(Error::Validation("refusing to persist an empty artifact".into()));
+            return Err(Error::Validation(
+                "refusing to persist an empty artifact".into(),
+            ));
         }
         tokio::fs::create_dir_all(dir).await?;
         let stem: String = stem
             .chars()
-            .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
             .collect();
-        let stem = if stem.is_empty() { "media".to_owned() } else { stem };
+        let stem = if stem.is_empty() {
+            "media".to_owned()
+        } else {
+            stem
+        };
         let path = dir.join(format!("{stem}.{}", self.extension(fallback_extension)));
         tokio::fs::write(&path, &self.data).await?;
         tracing::debug!(

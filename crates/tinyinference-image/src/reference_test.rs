@@ -25,7 +25,11 @@ fn aspect_ratio_spellings_normalize() {
         ("auto", "auto"),
         ("2.35:1", "2.35:1"),
     ] {
-        assert_eq!(normalize_aspect_ratio(input).as_deref(), Some(expected), "{input}");
+        assert_eq!(
+            normalize_aspect_ratio(input).as_deref(),
+            Some(expected),
+            "{input}"
+        );
     }
     for input in ["wide-ish", "16:0", "1:2:3", ""] {
         assert_eq!(normalize_aspect_ratio(input), None, "{input}");
@@ -39,7 +43,10 @@ fn resolution_spellings_normalize() {
     assert_eq!(normalize_image_resolution("4K UHD").as_deref(), Some("4K"));
     assert_eq!(normalize_image_resolution("720p"), None);
     assert_eq!(normalize_video_resolution("720").as_deref(), Some("720p"));
-    assert_eq!(normalize_video_resolution("Full HD").as_deref(), Some("1080p"));
+    assert_eq!(
+        normalize_video_resolution("Full HD").as_deref(),
+        Some("1080p")
+    );
     assert_eq!(normalize_video_resolution("4k").as_deref(), Some("4K"));
     assert_eq!(normalize_video_resolution("hd").as_deref(), Some("720p"));
     assert_eq!(normalize_video_resolution("8k"), None);
@@ -56,13 +63,31 @@ fn sizes_normalize() {
 
 #[test]
 fn references_classify_and_infer_kind() {
-    assert!(matches!(MediaReference::parse("https://x.test/a.png"), MediaReference::Url(_)));
-    assert!(matches!(MediaReference::parse("data:image/png;base64,AA=="), MediaReference::DataUrl(_)));
-    assert!(matches!(MediaReference::parse("./frames/first.jpg"), MediaReference::Path(_)));
+    assert!(matches!(
+        MediaReference::parse("https://x.test/a.png"),
+        MediaReference::Url(_)
+    ));
+    assert!(matches!(
+        MediaReference::parse("data:image/png;base64,AA=="),
+        MediaReference::DataUrl(_)
+    ));
+    assert!(matches!(
+        MediaReference::parse("./frames/first.jpg"),
+        MediaReference::Path(_)
+    ));
 
-    assert_eq!(MediaReference::parse("https://x.test/clip.mp4?sig=1").kind(), ReferenceKind::Video);
-    assert_eq!(MediaReference::parse("data:audio/wav;base64,AA==").kind(), ReferenceKind::Audio);
-    assert_eq!(MediaReference::parse("photo.jpeg").kind(), ReferenceKind::Image);
+    assert_eq!(
+        MediaReference::parse("https://x.test/clip.mp4?sig=1").kind(),
+        ReferenceKind::Video
+    );
+    assert_eq!(
+        MediaReference::parse("data:audio/wav;base64,AA==").kind(),
+        ReferenceKind::Audio
+    );
+    assert_eq!(
+        MediaReference::parse("photo.jpeg").kind(),
+        ReferenceKind::Image
+    );
 }
 
 #[test]
@@ -95,13 +120,18 @@ async fn local_files_inline_as_data_urls_within_the_cap() {
 #[tokio::test]
 async fn malformed_and_empty_references_are_rejected() {
     assert!(matches!(
-        MediaReference::DataUrl("data:image/png;base64".into()).resolve(1024).await,
+        MediaReference::DataUrl("data:image/png;base64".into())
+            .resolve(1024)
+            .await,
         Err(Error::Validation(_))
     ));
     assert!(matches!(
-        MediaReference::Bytes { media_type: "image/png".into(), data: Bytes::new() }
-            .resolve(1024)
-            .await,
+        MediaReference::Bytes {
+            media_type: "image/png".into(),
+            data: Bytes::new()
+        }
+        .resolve(1024)
+        .await,
         Err(Error::Validation(_))
     ));
 }
@@ -113,7 +143,10 @@ fn debug_output_hides_payloads_and_signatures() {
         MediaReference::Url("https://x.test/a.png?X-Amz-Signature=secret".into()),
         MediaReference::DataUrl("data:image/png;base64,SECRETPAYLOAD".into())
     );
-    assert!(!debug.contains("secret") && !debug.contains("SECRETPAYLOAD"), "{debug}");
+    assert!(
+        !debug.contains("secret") && !debug.contains("SECRETPAYLOAD"),
+        "{debug}"
+    );
 }
 
 #[test]
@@ -121,15 +154,24 @@ fn media_types_and_extensions_round_trip() {
     assert_eq!(media_type_for_path(Path::new("a.WEBP")), "image/webp");
     assert_eq!(media_type_for_path(Path::new("a.mov")), "video/quicktime");
     assert_eq!(extension_for_media_type("image/jpeg", "bin"), "jpg");
-    assert_eq!(extension_for_media_type("video/mp4; codecs=avc1", "bin"), "mp4");
-    assert_eq!(extension_for_media_type("application/x-unknown", "bin"), "bin");
+    assert_eq!(
+        extension_for_media_type("video/mp4; codecs=avc1", "bin"),
+        "mp4"
+    );
+    assert_eq!(
+        extension_for_media_type("application/x-unknown", "bin"),
+        "bin"
+    );
 }
 
 #[tokio::test]
 async fn persist_sanitizes_the_stem_and_refuses_empty_artifacts() {
     let dir = tempfile::tempdir().unwrap();
     let media = GeneratedMedia::new("image/png", TINY_PNG);
-    let path = media.persist(dir.path(), "../../etc/passwd", "bin").await.unwrap();
+    let path = media
+        .persist(dir.path(), "../../etc/passwd", "bin")
+        .await
+        .unwrap();
     assert_eq!(path.parent().unwrap(), dir.path());
     assert_eq!(path.file_name().unwrap(), "______etc_passwd.png");
     assert_eq!(std::fs::read(&path).unwrap(), TINY_PNG);
@@ -144,7 +186,10 @@ async fn persist_sanitizes_the_stem_and_refuses_empty_artifacts() {
 #[tokio::test]
 async fn mock_generator_records_requests_and_simulates_no_media() {
     let mock = MockImageGenerator::new();
-    let response = mock.generate(ImageRequest::new("x").with_n(2)).await.unwrap();
+    let response = mock
+        .generate(ImageRequest::new("x").with_n(2))
+        .await
+        .unwrap();
     assert_eq!(response.images.len(), 2);
     assert_eq!(mock.requests().len(), 1);
 
