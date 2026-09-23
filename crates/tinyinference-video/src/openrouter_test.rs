@@ -22,6 +22,16 @@ struct Server {
     script: Arc<Vec<(StatusCode, Value)>>,
     listing: Option<Value>,
     content_queries: Arc<Mutex<Vec<String>>>,
+    /// Wrap JSON replies in the proxying backend's `{success, data}` envelope.
+    envelope: bool,
+}
+
+fn wrap(envelope: bool, body: Value) -> Value {
+    if envelope {
+        json!({ "success": true, "data": body })
+    } else {
+        body
+    }
 }
 
 async fn start(
@@ -35,6 +45,7 @@ async fn start(
         script: Arc::new(script),
         listing,
         content_queries: Arc::default(),
+        envelope: prefix.starts_with("/agent-integrations"),
     };
     let router = Router::new()
         .route(
@@ -42,9 +53,12 @@ async fn start(
             post(|State(s): State<Server>, request: Request| async move {
                 let body = axum::body::to_bytes(request.into_body(), usize::MAX).await.unwrap();
                 s.submits.lock().unwrap().push(serde_json::from_slice(&body).unwrap());
-                axum::Json(json!({
-                    "id": "gen-vid-1-abc", "polling_url": "/api/v1/videos/gen-vid-1-abc", "status": "pending"
-                }))
+                axum::Json(wrap(
+                    s.envelope,
+                    json!({
+                        "id": "gen-vid-1-abc", "polling_url": "/api/v1/videos/gen-vid-1-abc", "status": "pending"
+                    }),
+                ))
             }),
         )
         .route(
@@ -62,6 +76,7 @@ async fn start(
                 let call = s.polls.fetch_add(1, Ordering::SeqCst);
                 let (status, mut body) = s.script[call.min(s.script.len() - 1)].clone();
                 body["id"] = json!(id);
+                let body = if status.is_success() { wrap(s.envelope, body) } else { body };
                 (status, [("retry-after", "0")], axum::Json(body)).into_response()
             }),
         )
@@ -166,17 +181,20 @@ async fn full_lifecycle_polls_through_completed_without_urls() {
 }
 
 #[tokio::test]
-async fn proxied_base_url_serves_the_same_wire_format() {
+async fn proxied_base_url_unwraps_the_backend_envelope() {
     let (base, server) = start(
         "/agent-integrations/openrouter",
-        vec![poll("completed", &["u"])],
+        vec![poll("pending", &[]), poll("completed", &["u"])],
         None,
     )
     .await;
-    generator(&base)
+    let response = generator(&base)
         .generate(VideoRequest::new("x"), &fast())
         .await
         .unwrap();
+    assert_eq!(response.job_id, "gen-vid-1-abc");
+    assert_eq!(response.videos.len(), 1);
+    assert_eq!(response.cost_usd, Some(0.42));
     assert_eq!(server.submits.lock().unwrap().len(), 1);
 }
 

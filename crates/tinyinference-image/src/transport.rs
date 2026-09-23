@@ -425,12 +425,18 @@ pub fn unwrap_envelope(value: serde_json::Value) -> Result<serde_json::Value> {
             let message = map
                 .get("error")
                 .and_then(|error| {
-                    error
-                        .as_str()
-                        .map(str::to_owned)
-                        .or_else(|| error.pointer("/message").and_then(|m| m.as_str()).map(str::to_owned))
+                    error.as_str().map(str::to_owned).or_else(|| {
+                        error
+                            .pointer("/message")
+                            .and_then(|m| m.as_str())
+                            .map(str::to_owned)
+                    })
                 })
-                .or_else(|| map.get("message").and_then(|m| m.as_str()).map(str::to_owned))
+                .or_else(|| {
+                    map.get("message")
+                        .and_then(|m| m.as_str())
+                        .map(str::to_owned)
+                })
                 .unwrap_or_else(|| "request failed".to_owned());
             Err(Error::Http {
                 status: 200,

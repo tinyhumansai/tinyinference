@@ -279,7 +279,10 @@ async fn failed_envelope_is_an_error_even_with_a_2xx_status() {
         .generate(ImageRequest::new("x"))
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("Insufficient balance"), "{error}");
+    assert!(
+        error.to_string().contains("Insufficient balance"),
+        "{error}"
+    );
 }
 
 #[tokio::test]
