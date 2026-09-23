@@ -59,9 +59,9 @@ impl Error {
     #[must_use]
     pub fn job_id(&self) -> Option<&str> {
         match self {
-            Self::Job { job_id, .. } | Self::JobFailed { job_id, .. } | Self::Timeout { job_id, .. } => {
-                Some(job_id)
-            }
+            Self::Job { job_id, .. }
+            | Self::JobFailed { job_id, .. }
+            | Self::Timeout { job_id, .. } => Some(job_id),
             Self::Media(_) => None,
         }
     }

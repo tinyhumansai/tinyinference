@@ -122,7 +122,9 @@ impl VideoGenerator for Scripted {
 #[tokio::test]
 async fn completed_without_listed_outputs_falls_back_to_direct_download() {
     let generator = Scripted::new(JobState::Completed, 0, true);
-    let response = wait_for_job(&generator, "job-1", "m", &fast(20)).await.unwrap();
+    let response = wait_for_job(&generator, "job-1", "m", &fast(20))
+        .await
+        .unwrap();
     assert_eq!(response.videos.len(), 1);
 }
 
@@ -131,17 +133,24 @@ async fn completed_without_listed_outputs_falls_back_to_direct_download() {
 #[tokio::test]
 async fn completed_without_any_output_times_out_naming_the_job() {
     let generator = Scripted::new(JobState::Completed, 0, false);
-    let error = wait_for_job(&generator, "job-1", "m", &fast(20)).await.unwrap_err();
+    let error = wait_for_job(&generator, "job-1", "m", &fast(20))
+        .await
+        .unwrap_err();
     assert!(matches!(error, Error::Timeout { .. }), "{error:?}");
     assert_eq!(error.job_id(), Some("job-1"));
     let message = error.to_string();
-    assert!(message.contains("job-1") && message.contains("do not resubmit"), "{message}");
+    assert!(
+        message.contains("job-1") && message.contains("do not resubmit"),
+        "{message}"
+    );
 }
 
 #[tokio::test]
 async fn in_progress_past_the_deadline_times_out() {
     let generator = Scripted::new(JobState::InProgress, 0, true);
-    let error = wait_for_job(&generator, "job-1", "m", &fast(20)).await.unwrap_err();
+    let error = wait_for_job(&generator, "job-1", "m", &fast(20))
+        .await
+        .unwrap_err();
     match error {
         Error::Timeout { last_state, .. } => assert_eq!(last_state, "in_progress"),
         other => panic!("expected timeout, got {other:?}"),
@@ -151,9 +160,15 @@ async fn in_progress_past_the_deadline_times_out() {
 #[tokio::test]
 async fn terminal_failure_reports_state_and_reason() {
     let generator = Scripted::new(JobState::Failed, 0, true);
-    let error = wait_for_job(&generator, "job-1", "m", &fast(5_000)).await.unwrap_err();
+    let error = wait_for_job(&generator, "job-1", "m", &fast(5_000))
+        .await
+        .unwrap_err();
     match &error {
-        Error::JobFailed { job_id, state, message } => {
+        Error::JobFailed {
+            job_id,
+            state,
+            message,
+        } => {
             assert_eq!((job_id.as_str(), state.as_str()), ("job-1", "failed"));
             assert_eq!(message, "content policy");
         }
@@ -168,7 +183,9 @@ async fn transient_poll_errors_are_retried() {
         status: 503,
         message: "busy".into(),
     });
-    let response = wait_for_job(&generator, "job-1", "m", &fast(5_000)).await.unwrap();
+    let response = wait_for_job(&generator, "job-1", "m", &fast(5_000))
+        .await
+        .unwrap();
     assert_eq!(response.videos.len(), 1);
     assert_eq!(generator.polls.load(Ordering::SeqCst), 2);
 }
@@ -181,8 +198,13 @@ async fn hard_poll_errors_name_the_billed_job() {
         status: 404,
         message: "unknown job".into(),
     });
-    let error = wait_for_job(&generator, "job-1", "m", &fast(5_000)).await.unwrap_err();
-    assert!(matches!(error, Error::Job { ref stage, .. } if stage == "polling"), "{error:?}");
+    let error = wait_for_job(&generator, "job-1", "m", &fast(5_000))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, Error::Job { ref stage, .. } if stage == "polling"),
+        "{error:?}"
+    );
     assert_eq!(error.job_id(), Some("job-1"));
     assert!(error.to_string().contains("do not resubmit"));
 }
@@ -190,7 +212,9 @@ async fn hard_poll_errors_name_the_billed_job() {
 #[tokio::test]
 async fn download_failures_name_the_output() {
     let generator = Scripted::new(JobState::Completed, 1, false);
-    let error = wait_for_job(&generator, "job-1", "m", &fast(5_000)).await.unwrap_err();
+    let error = wait_for_job(&generator, "job-1", "m", &fast(5_000))
+        .await
+        .unwrap_err();
     assert!(
         matches!(error, Error::Job { ref stage, .. } if stage == "downloading output 0"),
         "{error:?}"
@@ -205,11 +229,14 @@ async fn requests_need_a_prompt_or_an_image() {
         generator.generate(empty, &fast(10)).await,
         Err(Error::Media(tinyinference_image::Error::Validation(_)))
     ));
-    let image_only = VideoRequest::default()
-        .with_first_frame(tinyinference_image::MediaReference::Url("https://x.test/f.png".into()));
+    let image_only = VideoRequest::default().with_first_frame(
+        tinyinference_image::MediaReference::Url("https://x.test/f.png".into()),
+    );
     generator.generate(image_only, &fast(5_000)).await.unwrap();
     assert!(matches!(
-        generator.generate(VideoRequest::new("x").with_duration(0), &fast(10)).await,
+        generator
+            .generate(VideoRequest::new("x").with_duration(0), &fast(10))
+            .await,
         Err(Error::Media(tinyinference_image::Error::Validation(_)))
     ));
 }
@@ -221,6 +248,9 @@ fn job_states_parse_provider_spellings() {
     assert_eq!(JobState::parse("succeeded"), JobState::Completed);
     assert_eq!(JobState::parse("canceled"), JobState::Cancelled);
     assert!(JobState::parse("expired").is_terminal_failure());
-    assert_eq!(JobState::parse("warming"), JobState::Other("warming".into()));
+    assert_eq!(
+        JobState::parse("warming"),
+        JobState::Other("warming".into())
+    );
     assert!(!JobState::parse("warming").is_terminal_failure());
 }

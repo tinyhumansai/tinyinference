@@ -10,7 +10,9 @@ use tinyinference_image::reference::{
     DEFAULT_MAX_REFERENCE_BYTES, normalize_aspect_ratio, normalize_size, normalize_video_resolution,
 };
 use tinyinference_image::transport::wire_model_id;
-use tinyinference_image::{GeneratedMedia, MediaAuth, MediaModel, MediaTransport, ModelCapabilities};
+use tinyinference_image::{
+    GeneratedMedia, MediaAuth, MediaModel, MediaTransport, ModelCapabilities,
+};
 use tokio::sync::Mutex;
 
 use crate::types::{JobState, VideoJob, VideoJobStatus, VideoRequest};
@@ -141,7 +143,12 @@ fn validate_against(
         ModelCapabilities::check_one_of(model, "resolution", value, caps.resolutions.as_deref())?;
     }
     if let Some(value) = field("aspect_ratio") {
-        ModelCapabilities::check_one_of(model, "aspect_ratio", value, caps.aspect_ratios.as_deref())?;
+        ModelCapabilities::check_one_of(
+            model,
+            "aspect_ratio",
+            value,
+            caps.aspect_ratios.as_deref(),
+        )?;
     }
     if let (Some(duration), Some(allowed)) = (request.duration_s, caps.durations.as_ref()) {
         let allowed: Vec<String> = allowed.iter().map(u32::to_string).collect();
@@ -152,7 +159,12 @@ fn validate_against(
         ("last_frame", request.last_frame.is_some()),
     ] {
         if present {
-            ModelCapabilities::check_one_of(model, "frame_images", role, caps.frame_images.as_deref())?;
+            ModelCapabilities::check_one_of(
+                model,
+                "frame_images",
+                role,
+                caps.frame_images.as_deref(),
+            )?;
         }
     }
     if request.generate_audio == Some(true) {
@@ -281,7 +293,8 @@ impl VideoGenerator for OpenRouterVideoGenerator {
 
     async fn submit(&self, request: VideoRequest) -> Result<VideoJob> {
         request.validate()?;
-        let model = wire_model_id(request.model.as_deref().unwrap_or(&self.default_model)).to_owned();
+        let model =
+            wire_model_id(request.model.as_deref().unwrap_or(&self.default_model)).to_owned();
         let body = build_video_body(&model, &request, self.max_reference_bytes).await?;
         if self.check_capabilities
             && let Some(caps) = self.capabilities_for(&model).await
@@ -312,7 +325,11 @@ impl VideoGenerator for OpenRouterVideoGenerator {
         Ok(VideoJobStatus {
             id: job.id,
             state: JobState::parse(job.status.as_deref().unwrap_or("pending")),
-            outputs: job.unsigned_urls.iter().filter(|url| !url.is_empty()).count(),
+            outputs: job
+                .unsigned_urls
+                .iter()
+                .filter(|url| !url.is_empty())
+                .count(),
             cost_usd: job.usage.and_then(|usage| usage.cost),
             error: error_text(job.error),
         })
@@ -337,6 +354,9 @@ impl VideoGenerator for OpenRouterVideoGenerator {
 
     async fn list_models(&self) -> Result<Vec<MediaModel>> {
         let body: Value = self.transport.get_json("videos/models").await?;
-        Ok(MediaModel::parse_listing(&body, ModelCapabilities::from_video_model))
+        Ok(MediaModel::parse_listing(
+            &body,
+            ModelCapabilities::from_video_model,
+        ))
     }
 }

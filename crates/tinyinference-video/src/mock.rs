@@ -85,8 +85,14 @@ impl VideoGenerator for MockVideoGenerator {
 
     async fn submit(&self, request: VideoRequest) -> Result<VideoJob> {
         request.validate()?;
-        let model = request.model.clone().unwrap_or_else(|| self.default_model().to_owned());
-        self.requests.lock().expect("mock lock poisoned").push(request);
+        let model = request
+            .model
+            .clone()
+            .unwrap_or_else(|| self.default_model().to_owned());
+        self.requests
+            .lock()
+            .expect("mock lock poisoned")
+            .push(request);
         Ok(VideoJob {
             id: "mock-job".into(),
             model,
@@ -103,7 +109,10 @@ impl VideoGenerator for MockVideoGenerator {
             }
             None => self.last.lock().expect("mock lock poisoned").clone(),
         };
-        let error = state.is_terminal_failure().then(|| self.error.clone()).flatten();
+        let error = state
+            .is_terminal_failure()
+            .then(|| self.error.clone())
+            .flatten();
         Ok(VideoJobStatus {
             id: job_id.to_owned(),
             state,

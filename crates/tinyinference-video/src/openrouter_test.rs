@@ -7,7 +7,7 @@ use std::time::Duration;
 use axum::Router;
 use axum::extract::{Path, Query, Request, State};
 use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use serde_json::{Value, json};
 use tinyinference_image::{MediaAuth, MediaReference, MediaTransport};
@@ -24,7 +24,11 @@ struct Server {
     content_queries: Arc<Mutex<Vec<String>>>,
 }
 
-async fn start(prefix: &str, script: Vec<(StatusCode, Value)>, listing: Option<Value>) -> (String, Server) {
+async fn start(
+    prefix: &str,
+    script: Vec<(StatusCode, Value)>,
+    listing: Option<Value>,
+) -> (String, Server) {
     let server = Server {
         submits: Arc::default(),
         polls: Arc::default(),
@@ -109,7 +113,10 @@ async fn full_lifecycle_polls_through_completed_without_urls() {
             poll("pending", &[]),
             poll("in_progress", &[]),
             poll("completed", &[]),
-            poll("completed", &["https://cdn.test/0.mp4", "https://cdn.test/1.mp4"]),
+            poll(
+                "completed",
+                &["https://cdn.test/0.mp4", "https://cdn.test/1.mp4"],
+            ),
         ],
         None,
     )
@@ -123,7 +130,9 @@ async fn full_lifecycle_polls_through_completed_without_urls() {
                 .with_aspect_ratio("landscape")
                 .with_audio(true)
                 .with_first_frame(MediaReference::Url("https://x.test/first.png".into()))
-                .with_last_frame(MediaReference::DataUrl("data:image/png;base64,iVBORw0KGgo=".into()))
+                .with_last_frame(MediaReference::DataUrl(
+                    "data:image/png;base64,iVBORw0KGgo=".into(),
+                ))
                 .with_reference(MediaReference::Url("https://x.test/style.mp4".into())),
             &fast(),
         )
@@ -144,10 +153,16 @@ async fn full_lifecycle_polls_through_completed_without_urls() {
     assert_eq!(body["aspect_ratio"], "16:9");
     assert_eq!(body["generate_audio"], true);
     assert_eq!(body["frame_images"][0]["frame_type"], "first_frame");
-    assert_eq!(body["frame_images"][0]["image_url"]["url"], "https://x.test/first.png");
+    assert_eq!(
+        body["frame_images"][0]["image_url"]["url"],
+        "https://x.test/first.png"
+    );
     assert_eq!(body["frame_images"][1]["frame_type"], "last_frame");
     assert_eq!(body["input_references"][0]["type"], "video_url");
-    assert_eq!(body["input_references"][0]["video_url"]["url"], "https://x.test/style.mp4");
+    assert_eq!(
+        body["input_references"][0]["video_url"]["url"],
+        "https://x.test/style.mp4"
+    );
 }
 
 #[tokio::test]
@@ -191,7 +206,10 @@ async fn transient_poll_server_errors_are_retried() {
     let (base, server) = start(
         "/api/v1",
         vec![
-            (StatusCode::BAD_GATEWAY, json!({"error": {"message": "busy"}})),
+            (
+                StatusCode::BAD_GATEWAY,
+                json!({"error": {"message": "busy"}}),
+            ),
             poll("completed", &["u"]),
         ],
         None,
