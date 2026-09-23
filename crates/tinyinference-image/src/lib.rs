@@ -2,7 +2,7 @@
 //!
 //! This crate owns three things:
 //!
-//! - **Media standards** ([`reference`]) — how a reference asset is described
+//! - **Media standards** ([`reference`](mod@crate::reference)) — how a reference asset is described
 //!   (URL, `data:` URL, bytes, local path) and inlined, and how loose
 //!   output-shape spellings (`"16x9"`, `"landscape"`, `"full hd"`) normalize to
 //!   canonical wire values. The video crate reuses these, so image and video

@@ -14,7 +14,7 @@ pub const MAX_IMAGES_PER_REQUEST: u32 = 10;
 ///
 /// Output-shape fields accept loose spellings (`"16x9"`, `"landscape"`,
 /// `"2k"`, `"1024×1024"`); providers normalize them with the helpers in
-/// [`crate::reference`] and forward anything unrecognized unchanged.
+/// [`reference`](mod@crate::reference) and forward anything unrecognized unchanged.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ImageRequest {
     /// Model id; `None` uses the generator's default. An `openrouter/` prefix
