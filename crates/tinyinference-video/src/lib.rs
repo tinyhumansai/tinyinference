@@ -243,19 +243,37 @@ async fn download_all<G: VideoGenerator + ?Sized>(
     model: &str,
     outputs: usize,
     cost_usd: Option<f64>,
+    started: Instant,
+    wait: &WaitPolicy,
 ) -> Result<VideoResponse> {
     let mut videos = Vec::with_capacity(outputs);
     for index in 0..outputs {
-        match generator.content(job_id, index).await {
-            Ok(video) => videos.push(video),
-            Err(Error::Media(source)) => {
+        let elapsed = started.elapsed();
+        if elapsed >= wait.timeout {
+            return Err(Error::Timeout {
+                job_id: job_id.to_owned(),
+                waited_secs: elapsed.as_secs(),
+                last_state: "downloading".to_owned(),
+            });
+        }
+        let remaining = wait.timeout - elapsed;
+        match tokio::time::timeout(remaining, generator.content(job_id, index)).await {
+            Ok(Ok(video)) => videos.push(video),
+            Ok(Err(Error::Media(source))) => {
                 return Err(Error::Job {
                     job_id: job_id.to_owned(),
                     stage: format!("downloading output {index}"),
                     source: Box::new(source),
                 });
             }
-            Err(other) => return Err(other),
+            Ok(Err(other)) => return Err(other),
+            Err(_) => {
+                return Err(Error::Timeout {
+                    job_id: job_id.to_owned(),
+                    waited_secs: started.elapsed().as_secs(),
+                    last_state: format!("downloading output {index}"),
+                });
+            }
         }
     }
     tracing::info!(
