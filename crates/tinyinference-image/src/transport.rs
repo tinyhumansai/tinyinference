@@ -307,7 +307,7 @@ impl MediaTransport {
                         .get(reqwest::header::RETRY_AFTER)
                         .and_then(|value| value.to_str().ok())
                         .map(str::to_owned);
-                    let message = self.error_message(response).await;
+                    let message = self.error_message(response, &token).await;
                     let error = match status {
                         401 | 403 => Error::Auth(format!("HTTP {status}: {message}")),
                         _ => Error::Http { status, message },
@@ -319,7 +319,7 @@ impl MediaTransport {
                     (retry, retry_after, error)
                 }
                 Err(error) => {
-                    let error = Error::Transport(self.scrub(&error.to_string()));
+                    let error = Error::Transport(self.scrub(&error.to_string(), Some(&token)));
                     (billing == Billing::Idempotent, None, error)
                 }
             };
