@@ -192,11 +192,15 @@ impl std::fmt::Debug for MediaReference {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Never print inline payloads or signed-URL query strings.
         match self {
-            Self::Typed { kind, url } => formatter
-                .debug_struct("Typed")
-                .field("kind", kind)
-                .field("url", &url.split('?').next().unwrap_or(url))
-                .finish(),
+            Self::Typed { kind, url } => {
+                let sanitized = url.split(['?', '#']).next().unwrap_or(url);
+                let sanitized = sanitized.split('@').next_back().unwrap_or(sanitized);
+                formatter
+                    .debug_struct("Typed")
+                    .field("kind", kind)
+                    .field("url", &sanitized)
+                    .finish()
+            }
             Self::Url(url) => {
                 let sanitized = url.split(['?', '#']).next().unwrap_or(url);
                 let sanitized = sanitized.split('@').next_back().unwrap_or(sanitized);
