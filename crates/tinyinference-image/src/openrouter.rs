@@ -30,7 +30,8 @@ pub struct OpenRouterImageGenerator {
     default_model: String,
     check_capabilities: bool,
     max_reference_bytes: usize,
-    capabilities: Mutex<Option<HashMap<String, ModelCapabilities>>>,
+    // Some(None) = listing unavailable; skip checks without refetching.
+    capabilities: Mutex<Option<Option<HashMap<String, ModelCapabilities>>>>,
 }
 
 #[derive(Deserialize)]
