@@ -197,13 +197,17 @@ impl std::fmt::Debug for MediaReference {
                 .field("kind", kind)
                 .field("url", &url.split('?').next().unwrap_or(url))
                 .finish(),
-            Self::Url(url) => formatter
-                .debug_tuple("Url")
-                .field(&url.split('?').next().unwrap_or(url))
-                .finish(),
-            Self::DataUrl(url) => formatter
+            Self::Url(url) => {
+                let sanitized = url.split(['?', '#']).next().unwrap_or(url);
+                let sanitized = sanitized.split('@').last().unwrap_or(sanitized);
+                formatter
+                    .debug_tuple("Url")
+                    .field(&sanitized)
+                    .finish()
+            }
+            Self::DataUrl(_) => formatter
                 .debug_struct("DataUrl")
-                .field("len", &url.len())
+                .field("data", &"<redacted>")
                 .finish(),
             Self::Bytes { media_type, data } => formatter
                 .debug_struct("Bytes")
