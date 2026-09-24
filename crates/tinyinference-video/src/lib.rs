@@ -121,21 +121,21 @@ pub async fn wait_for_job<G: VideoGenerator + ?Sized>(
         let poll_deadline = wait.timeout.saturating_sub(FALLBACK_TIMEOUT);
 
         if elapsed >= poll_deadline {
-            if last_state == JobState::Completed && elapsed < wait.timeout {
-                if let Ok(Ok(video)) =
+            if last_state == JobState::Completed
+                && elapsed < wait.timeout
+                && let Ok(Ok(video)) =
                     tokio::time::timeout(FALLBACK_TIMEOUT, generator.content(job_id, 0)).await
-                {
-                    tracing::info!(
-                        job_id,
-                        "[tinyinference-video] completed job without listed outputs delivered on direct download"
-                    );
-                    return Ok(VideoResponse {
-                        job_id: job_id.to_owned(),
-                        model: model.to_owned(),
-                        videos: vec![video],
-                        cost_usd: last_cost_usd,
-                    });
-                }
+            {
+                tracing::info!(
+                    job_id,
+                    "[tinyinference-video] completed job without listed outputs delivered on direct download"
+                );
+                return Ok(VideoResponse {
+                    job_id: job_id.to_owned(),
+                    model: model.to_owned(),
+                    videos: vec![video],
+                    cost_usd: last_cost_usd,
+                });
             }
             tracing::warn!(
                 job_id,
