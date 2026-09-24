@@ -122,8 +122,8 @@ pub async fn wait_for_job<G: VideoGenerator + ?Sized>(
         if elapsed >= wait.timeout {
             if last_state == JobState::Completed {
                 // Attempt one final direct download with a bounded timeout
-                if let Ok(Ok(video)) = tokio::time::timeout(FALLBACK_TIMEOUT, generator.content(job_id, 0))
-                    .await
+                if let Ok(Ok(video)) =
+                    tokio::time::timeout(FALLBACK_TIMEOUT, generator.content(job_id, 0)).await
                 {
                     tracing::info!(
                         job_id,
