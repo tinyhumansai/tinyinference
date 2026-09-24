@@ -349,11 +349,19 @@ impl MediaTransport {
 
     async fn error_message(&self, mut response: reqwest::Response, token: &str) -> String {
         let mut body = Vec::new();
-        while let Ok(Some(chunk)) = response.chunk().await {
-            let room = MAX_ERROR_BODY_BYTES.saturating_sub(body.len());
-            body.extend_from_slice(&chunk[..chunk.len().min(room)]);
-            if body.len() >= MAX_ERROR_BODY_BYTES {
-                break;
+        loop {
+            match response.chunk().await {
+                Ok(Some(chunk)) => {
+                    let room = MAX_ERROR_BODY_BYTES.saturating_sub(body.len());
+                    body.extend_from_slice(&chunk[..chunk.len().min(room)]);
+                    if body.len() >= MAX_ERROR_BODY_BYTES {
+                        break;
+                    }
+                }
+                Ok(None) => break,
+                Err(error) => {
+                    return self.scrub(&format!("response stream error: {error}"), Some(token))
+                }
             }
         }
         let text = String::from_utf8_lossy(&body).into_owned();
