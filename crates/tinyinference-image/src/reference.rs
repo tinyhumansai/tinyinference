@@ -199,7 +199,7 @@ impl std::fmt::Debug for MediaReference {
                 .finish(),
             Self::Url(url) => {
                 let sanitized = url.split(['?', '#']).next().unwrap_or(url);
-                let sanitized = sanitized.split('@').last().unwrap_or(sanitized);
+                let sanitized = sanitized.split('@').next_back().unwrap_or(sanitized);
                 formatter.debug_tuple("Url").field(&sanitized).finish()
             }
             Self::DataUrl(_) => formatter
