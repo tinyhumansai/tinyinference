@@ -46,12 +46,20 @@ impl ModelCapabilities {
         else {
             return Self::default();
         };
+        // OpenRouter's contract: within a present `supported_parameters` map,
+        // an absent key means the endpoint does not support that parameter.
+        // So an omitted enum is "supports nothing" (`Some(vec![])`), which
+        // rejects the field before a billed call instead of letting the
+        // provider silently ignore it.
         let enum_values = |key: &str| {
-            params
-                .get(key)
-                .and_then(|descriptor| descriptor.get("values"))
-                .and_then(Value::as_array)
-                .map(|values| string_list(values))
+            Some(
+                params
+                    .get(key)
+                    .and_then(|descriptor| descriptor.get("values"))
+                    .and_then(Value::as_array)
+                    .map(|values| string_list(values))
+                    .unwrap_or_default(),
+            )
         };
         let range = |key: &str| {
             params.get(key).map(|descriptor| {

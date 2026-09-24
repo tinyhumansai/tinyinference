@@ -149,7 +149,7 @@ pub async fn wait_for_job<G: VideoGenerator + ?Sized>(
                         generator,
                         job_id,
                         model,
-                        status.outputs,
+                        &status.download_indices(),
                         status.cost_usd,
                         started,
                         wait,
@@ -258,13 +258,13 @@ async fn download_all<G: VideoGenerator + ?Sized>(
     generator: &G,
     job_id: &str,
     model: &str,
-    outputs: usize,
+    indices: &[usize],
     cost_usd: Option<f64>,
     started: Instant,
     wait: &WaitPolicy,
 ) -> Result<VideoResponse> {
-    let mut videos = Vec::with_capacity(outputs);
-    for index in 0..outputs {
+    let mut videos = Vec::with_capacity(indices.len());
+    for &index in indices {
         let elapsed = started.elapsed();
         if elapsed >= wait.timeout {
             return Err(Error::Timeout {

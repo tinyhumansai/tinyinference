@@ -322,14 +322,18 @@ impl VideoGenerator for OpenRouterVideoGenerator {
     async fn poll(&self, job_id: &str) -> Result<VideoJobStatus> {
         let job_id = checked_job_id(job_id)?;
         let job: WireJob = self.transport.get_json(&format!("videos/{job_id}")).await?;
+        let output_indices: Vec<usize> = job
+            .unsigned_urls
+            .iter()
+            .enumerate()
+            .filter(|(_, url)| !url.trim().is_empty())
+            .map(|(index, _)| index)
+            .collect();
         Ok(VideoJobStatus {
             id: job.id,
             state: JobState::parse(job.status.as_deref().unwrap_or("pending")),
-            outputs: job
-                .unsigned_urls
-                .iter()
-                .filter(|url| !url.is_empty())
-                .count(),
+            outputs: output_indices.len(),
+            output_indices,
             cost_usd: job.usage.and_then(|usage| usage.cost),
             error: error_text(job.error),
         })

@@ -117,6 +117,7 @@ impl VideoGenerator for MockVideoGenerator {
             id: job_id.to_owned(),
             state,
             outputs,
+            output_indices: Vec::new(),
             cost_usd: Some(0.0),
             error,
         })

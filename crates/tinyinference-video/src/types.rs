@@ -221,6 +221,10 @@ pub struct VideoJobStatus {
     pub state: JobState,
     /// How many outputs the provider reports as ready (`unsigned_urls`).
     pub outputs: usize,
+    /// Provider slot index of each ready output. Slots can be sparse (a blank
+    /// entry between populated ones), so downloads use these indices rather
+    /// than `0..outputs`.
+    pub output_indices: Vec<usize>,
     /// Provider-reported cost in USD, once known.
     pub cost_usd: Option<f64>,
     /// Provider-reported error, for failed jobs.
@@ -236,6 +240,17 @@ impl VideoJobStatus {
     #[must_use]
     pub fn is_delivered(&self) -> bool {
         self.state == JobState::Completed && self.outputs > 0
+    }
+
+    /// The provider slots to download: `output_indices` when known, else the
+    /// dense range `0..outputs`.
+    #[must_use]
+    pub fn download_indices(&self) -> Vec<usize> {
+        if self.output_indices.is_empty() {
+            (0..self.outputs).collect()
+        } else {
+            self.output_indices.clone()
+        }
     }
 }
 

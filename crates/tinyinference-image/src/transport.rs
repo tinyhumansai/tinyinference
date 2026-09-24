@@ -240,6 +240,30 @@ impl MediaTransport {
     /// [`Error::TooLarge`] when the body exceeds the cap, plus the errors of
     /// [`MediaTransport::get_json`].
     pub async fn get_bytes(&self, path: &str) -> Result<(Bytes, Option<String>)> {
+        // A dropped connection mid-body is as transient as one before the
+        // headers, and the GET is idempotent, so the whole download is retried
+        // under the same budget as a failed request.
+        let mut attempt = 0u32;
+        loop {
+            match self.get_bytes_once(path).await {
+                Err(Error::Transport(message)) if attempt < self.max_retries => {
+                    let delay = backoff_ms_for_attempt(attempt, None);
+                    tracing::debug!(
+                        path,
+                        attempt,
+                        delay_ms = delay,
+                        error = %message,
+                        "[tinyinference-image] retrying interrupted download"
+                    );
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                    attempt += 1;
+                }
+                other => return other,
+            }
+        }
+    }
+
+    async fn get_bytes_once(&self, path: &str) -> Result<(Bytes, Option<String>)> {
         let token = self.auth.token()?;
         let mut response = self
             .send(reqwest::Method::GET, path, None, Billing::Idempotent)

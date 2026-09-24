@@ -98,6 +98,7 @@ impl VideoGenerator for Scripted {
             id: job_id.into(),
             state: self.status.0.clone(),
             outputs: self.status.1,
+            output_indices: Vec::new(),
             cost_usd: None,
             error: Some("content policy".into()),
         })
