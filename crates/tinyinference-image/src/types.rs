@@ -145,7 +145,6 @@ pub struct ImageResponse {
 
 /// One entry from a media model listing.
 #[derive(Debug, Clone, PartialEq)]
-#[non_exhaustive]
 pub struct MediaModel {
     /// Model slug to pass as `model`.
     pub id: String,
