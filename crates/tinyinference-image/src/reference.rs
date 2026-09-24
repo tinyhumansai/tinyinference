@@ -68,6 +68,13 @@ pub enum MediaReference {
     },
     /// A local file, read and inlined as a `data:` URL when the request is built.
     Path(PathBuf),
+    /// A URL with an explicitly-specified modality, useful for extensionless CDN URLs.
+    Typed {
+        /// The modality of this reference (image, video, or audio).
+        kind: ReferenceKind,
+        /// The URL, either HTTP(S) or a local file path.
+        url: String,
+    },
 }
 
 impl MediaReference {
