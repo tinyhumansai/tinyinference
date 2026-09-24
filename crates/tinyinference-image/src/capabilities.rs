@@ -47,14 +47,11 @@ impl ModelCapabilities {
             return Self::default();
         };
         let enum_values = |key: &str| {
-            Some(
-                params
-                    .get(key)
-                    .and_then(|descriptor| descriptor.get("values"))
-                    .and_then(Value::as_array)
-                    .map(|values| string_list(values))
-                    .unwrap_or_default(),
-            )
+            params
+                .get(key)
+                .and_then(|descriptor| descriptor.get("values"))
+                .and_then(Value::as_array)
+                .map(|values| string_list(values))
         };
         let range = |key: &str| {
             params.get(key).map(|descriptor| {
