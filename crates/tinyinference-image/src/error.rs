@@ -81,7 +81,7 @@ impl Error {
     #[must_use]
     pub fn is_retryable(&self) -> bool {
         match self {
-            Self::Http { status, .. } => *status == 429 || *status >= 500,
+            Self::Http { status, .. } => *status == 429 || (500..=599).contains(status),
             Self::Transport(_) => true,
             _ => false,
         }
