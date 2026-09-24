@@ -75,7 +75,24 @@ impl GeneratedMedia {
         } else {
             stem
         };
-        let path = dir.join(format!("{stem}.{}", self.extension(fallback_extension)));
+        // Sanitize the fallback extension to a safe filename component.
+        let safe_fallback: String = fallback_extension
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let safe_fallback = if safe_fallback.is_empty() {
+            "bin"
+        } else {
+            &safe_fallback
+        };
+        let extension = extension_for_media_type(&self.media_type, safe_fallback);
+        let path = dir.join(format!("{stem}.{extension}"));
         tokio::fs::write(&path, &self.data).await?;
         tracing::debug!(
             path = %path.display(),
