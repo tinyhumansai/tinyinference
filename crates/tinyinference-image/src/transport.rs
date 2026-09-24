@@ -346,7 +346,7 @@ impl MediaTransport {
         }
     }
 
-    async fn error_message(&self, mut response: reqwest::Response) -> String {
+    async fn error_message(&self, mut response: reqwest::Response, token: &str) -> String {
         let mut body = Vec::new();
         while let Ok(Some(chunk)) = response.chunk().await {
             let room = MAX_ERROR_BODY_BYTES.saturating_sub(body.len());
@@ -366,7 +366,7 @@ impl MediaTransport {
                     .and_then(|message| message.as_str().map(str::to_owned))
             })
             .unwrap_or(text);
-        self.scrub(&message)
+        self.scrub(&message, Some(token))
     }
 }
 
