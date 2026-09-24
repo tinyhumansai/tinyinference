@@ -115,8 +115,42 @@ pub async fn wait_for_job<G: VideoGenerator + ?Sized>(
     let mut last_state = JobState::Pending;
     let mut last_poll_error: Option<String>;
     loop {
-        match generator.poll(job_id).await {
-            Ok(status) => {
+        let elapsed = started.elapsed();
+        if elapsed >= wait.timeout {
+            if last_state == JobState::Completed {
+                let remaining = wait.timeout.saturating_sub(elapsed);
+                if let Ok(Ok(video)) =
+                    tokio::time::timeout(remaining, generator.content(job_id, 0)).await
+                {
+                    tracing::info!(
+                        job_id,
+                        "[tinyinference-video] completed job without listed outputs delivered on direct download"
+                    );
+                    return Ok(VideoResponse {
+                        job_id: job_id.to_owned(),
+                        model: model.to_owned(),
+                        videos: vec![video],
+                        cost_usd: None,
+                    });
+                }
+            }
+            tracing::warn!(
+                job_id,
+                last_state = %last_state,
+                last_poll_error = ?last_poll_error,
+                waited_secs = elapsed.as_secs(),
+                "[tinyinference-video] wait budget elapsed"
+            );
+            return Err(Error::Timeout {
+                job_id: job_id.to_owned(),
+                waited_secs: elapsed.as_secs(),
+                last_state: last_state.to_string(),
+            });
+        }
+
+        let remaining = wait.timeout - elapsed;
+        match tokio::time::timeout(remaining, generator.poll(job_id)).await {
+            Ok(Ok(status)) => {
                 if let Some(progress) = &wait.progress {
                     progress(&status);
                 }
@@ -128,7 +162,7 @@ pub async fn wait_for_job<G: VideoGenerator + ?Sized>(
                 );
                 last_poll_error = None;
                 if status.is_delivered() {
-                    return download_all(generator, job_id, model, status.outputs, status.cost_usd)
+                    return download_all(generator, job_id, model, status.outputs, status.cost_usd, started, wait)
                         .await;
                 }
                 if status.state.is_terminal_failure() {
@@ -149,35 +183,42 @@ pub async fn wait_for_job<G: VideoGenerator + ?Sized>(
                 }
                 last_state = status.state;
             }
-            Err(Error::Media(error)) if error.is_retryable() => {
+            Ok(Err(Error::Media(error))) if error.is_retryable() => {
                 tracing::warn!(job_id, %error, "[tinyinference-video] transient poll failure");
                 last_poll_error = Some(error.to_string());
             }
-            Err(Error::Media(error)) => {
+            Ok(Err(Error::Media(error))) => {
                 return Err(Error::Job {
                     job_id: job_id.to_owned(),
                     stage: "polling".into(),
                     source: Box::new(error),
                 });
             }
-            Err(other) => return Err(other),
+            Ok(Err(other)) => return Err(other),
+            Err(_) => {
+                tracing::warn!(job_id, "[tinyinference-video] poll request timeout");
+                last_poll_error = Some("poll request timed out".into());
+            }
         }
 
         let elapsed = started.elapsed();
         if elapsed >= wait.timeout {
-            if last_state == JobState::Completed
-                && let Ok(video) = generator.content(job_id, 0).await
-            {
-                tracing::info!(
-                    job_id,
-                    "[tinyinference-video] completed job without listed outputs delivered on direct download"
-                );
-                return Ok(VideoResponse {
-                    job_id: job_id.to_owned(),
-                    model: model.to_owned(),
-                    videos: vec![video],
-                    cost_usd: None,
-                });
+            if last_state == JobState::Completed {
+                let remaining = wait.timeout.saturating_sub(elapsed);
+                if let Ok(Ok(video)) =
+                    tokio::time::timeout(remaining, generator.content(job_id, 0)).await
+                {
+                    tracing::info!(
+                        job_id,
+                        "[tinyinference-video] completed job without listed outputs delivered on direct download"
+                    );
+                    return Ok(VideoResponse {
+                        job_id: job_id.to_owned(),
+                        model: model.to_owned(),
+                        videos: vec![video],
+                        cost_usd: None,
+                    });
+                }
             }
             tracing::warn!(
                 job_id,

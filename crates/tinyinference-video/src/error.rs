@@ -31,7 +31,9 @@ pub enum Error {
         source: Box<tinyinference_image::Error>,
     },
     /// The provider reported a terminal failure for the job.
-    #[error("video job {job_id} ended as {state}: {message}; it was accepted and billed and cannot be resubmitted — resume by job id or report this to the user")]
+    #[error(
+        "video job {job_id} ended as {state}: {message}; it was accepted and billed and cannot be resubmitted — resume by job id or report this to the user"
+    )]
     JobFailed {
         /// Provider job id.
         job_id: String,
