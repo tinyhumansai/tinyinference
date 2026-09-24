@@ -260,12 +260,12 @@ impl MediaTransport {
         format!("{}/{}", self.base_url, path.trim_start_matches('/'))
     }
 
-    fn scrub(&self, text: &str) -> String {
+    fn scrub(&self, text: &str, token: Option<&str>) -> String {
         let mut text = text.to_owned();
-        if let Ok(token) = self.auth.token()
-            && token.len() >= 8
+        if let Some(token) = token
+            && !token.is_empty()
         {
-            text = text.replace(&token, "[REDACTED]");
+            text = text.replace(token, "[REDACTED]");
         }
         sanitize_api_error(&text)
     }
