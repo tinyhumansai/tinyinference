@@ -69,7 +69,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let path = image
             .persist(
                 &out_dir,
-                &format!("image-{}-{index}", model.replace('/', "_")),
+                &format!(
+                    "image-{}-{}-{index}",
+                    model.replace('/', "_"),
+                    response.created.unwrap_or_default()
+                ),
                 "png",
             )
             .await?;
