@@ -98,6 +98,7 @@ impl MediaReference {
     #[must_use]
     pub fn kind(&self) -> ReferenceKind {
         match self {
+            Self::Typed { kind, .. } => *kind,
             Self::Bytes { media_type, .. } => ReferenceKind::from_media_type(media_type),
             Self::DataUrl(url) => ReferenceKind::from_media_type(
                 url.get(5..)
