@@ -117,25 +117,25 @@ pub async fn wait_for_job<G: VideoGenerator + ?Sized>(
     let mut last_poll_error: Option<String> = None;
     loop {
         let elapsed = started.elapsed();
-        const FALLBACK_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
-        let poll_deadline = wait.timeout.saturating_sub(FALLBACK_TIMEOUT);
+        const FALLBACK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
-        if elapsed >= poll_deadline {
-            if last_state == JobState::Completed
-                && elapsed < wait.timeout
-                && let Ok(Ok(video)) =
-                    tokio::time::timeout(FALLBACK_TIMEOUT, generator.content(job_id, 0)).await
-            {
-                tracing::info!(
-                    job_id,
-                    "[tinyinference-video] completed job without listed outputs delivered on direct download"
-                );
-                return Ok(VideoResponse {
-                    job_id: job_id.to_owned(),
-                    model: model.to_owned(),
-                    videos: vec![video],
-                    cost_usd: last_cost_usd,
-                });
+        if elapsed >= wait.timeout {
+            if last_state == JobState::Completed {
+                // Attempt one final direct download with a bounded timeout
+                if let Ok(Ok(video)) = tokio::time::timeout(FALLBACK_TIMEOUT, generator.content(job_id, 0))
+                    .await
+                {
+                    tracing::info!(
+                        job_id,
+                        "[tinyinference-video] completed job without listed outputs delivered on direct download"
+                    );
+                    return Ok(VideoResponse {
+                        job_id: job_id.to_owned(),
+                        model: model.to_owned(),
+                        videos: vec![video],
+                        cost_usd: last_cost_usd,
+                    });
+                }
             }
             tracing::warn!(
                 job_id,
@@ -151,7 +151,7 @@ pub async fn wait_for_job<G: VideoGenerator + ?Sized>(
             });
         }
 
-        let remaining = poll_deadline - elapsed;
+        let remaining = wait.timeout - elapsed;
         match tokio::time::timeout(remaining, generator.poll(job_id)).await {
             Ok(Ok(status)) => {
                 if let Some(progress) = &wait.progress {
