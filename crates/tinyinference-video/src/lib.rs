@@ -117,11 +117,13 @@ pub async fn wait_for_job<G: VideoGenerator + ?Sized>(
     let mut last_poll_error: Option<String> = None;
     loop {
         let elapsed = started.elapsed();
-        if elapsed >= wait.timeout {
-            if last_state == JobState::Completed {
-                let remaining = wait.timeout.saturating_sub(elapsed);
+        const FALLBACK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+        let poll_deadline = wait.timeout.saturating_sub(FALLBACK_TIMEOUT);
+
+        if elapsed >= poll_deadline {
+            if last_state == JobState::Completed && elapsed < wait.timeout {
                 if let Ok(Ok(video)) =
-                    tokio::time::timeout(remaining, generator.content(job_id, 0)).await
+                    tokio::time::timeout(FALLBACK_TIMEOUT, generator.content(job_id, 0)).await
                 {
                     tracing::info!(
                         job_id,
@@ -149,7 +151,7 @@ pub async fn wait_for_job<G: VideoGenerator + ?Sized>(
             });
         }
 
-        let remaining = wait.timeout - elapsed;
+        let remaining = poll_deadline - elapsed;
         match tokio::time::timeout(remaining, generator.poll(job_id)).await {
             Ok(Ok(status)) => {
                 if let Some(progress) = &wait.progress {
