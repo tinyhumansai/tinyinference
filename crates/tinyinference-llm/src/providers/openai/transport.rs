@@ -1491,15 +1491,27 @@ impl OpenAiModel {
         url: &str,
     ) -> Result<reqwest::Response> {
         let response = builder.send().await.map_err(|e| {
-            let error =
-                self.provider_error(format!("{what} to {url} failed: {e}"), None, None, None);
+            let error = self.provider_error(
+                format!("{what} to {url} failed: {e}"),
+                None,
+                None,
+                None,
+                None,
+            );
             Error::Provider(Box::new(error))
         })?;
 
         let status = response.status();
         if !status.is_success() {
+            // Read the header before `text()` consumes the response: a 429's
+            // `Retry-After` is the one wait the retry layer cannot guess.
+            let retry_after = response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string);
             let text = response.text().await.unwrap_or_default();
-            let error = self.parse_error_body(status.as_u16(), &text);
+            let error = self.parse_error_body(status.as_u16(), &text, retry_after.as_deref());
             return Err(Error::Provider(Box::new(error)));
         }
         Ok(response)
@@ -1595,6 +1607,7 @@ impl OpenAiModel {
         status: Option<u16>,
         code: Option<String>,
         raw: Option<Value>,
+        retry_after: Option<&str>,
     ) -> ProviderError {
         let message = message.into();
         let retryable =
@@ -1608,13 +1621,18 @@ impl OpenAiModel {
             message,
             retryable,
             raw,
-            retry_after_ms: None,
+            retry_after_ms: tinyinference_core::parse_retry_after_ms(retry_after),
             partial_message: None,
             stop_reason: None,
         }
     }
 
-    pub(super) fn parse_error_body(&self, status: u16, text: &str) -> ProviderError {
+    pub(super) fn parse_error_body(
+        &self,
+        status: u16,
+        text: &str,
+        retry_after: Option<&str>,
+    ) -> ProviderError {
         let raw = serde_json::from_str::<Value>(text).ok();
         let error_obj = raw.as_ref().and_then(|value| value.get("error"));
         let message = error_obj
@@ -1643,7 +1661,7 @@ impl OpenAiModel {
                 missing_model_remediation(kind, status, &message, &self.model, &self.base_url)
             })
             .unwrap_or(message);
-        self.provider_error(message, Some(status), code, raw)
+        self.provider_error(message, Some(status), code, raw, retry_after)
     }
 }
 
@@ -2077,7 +2095,7 @@ fn responses_sse_failure(body: &str, model: &OpenAiModel) -> Option<ProviderErro
             .or_else(|| detail.get("type"))
             .and_then(Value::as_str)
             .map(str::to_string);
-        return Some(model.provider_error(message, None, code, Some(event)));
+        return Some(model.provider_error(message, None, code, Some(event), None));
     }
     None
 }
