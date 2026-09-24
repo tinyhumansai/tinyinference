@@ -224,6 +224,7 @@ impl MediaTransport {
     /// [`Error::TooLarge`] when the body exceeds the cap, plus the errors of
     /// [`MediaTransport::get_json`].
     pub async fn get_bytes(&self, path: &str) -> Result<(Bytes, Option<String>)> {
+        let token = self.auth.token()?;
         let mut response = self
             .send(reqwest::Method::GET, path, None, Billing::Idempotent)
             .await?;
@@ -244,7 +245,7 @@ impl MediaTransport {
         while let Some(chunk) = response
             .chunk()
             .await
-            .map_err(|error| Error::Transport(self.scrub(&error.to_string())))?
+            .map_err(|error| Error::Transport(self.scrub(&error.to_string(), Some(&token))))?
         {
             if body.len() + chunk.len() > self.max_media_bytes {
                 return Err(Error::TooLarge {
