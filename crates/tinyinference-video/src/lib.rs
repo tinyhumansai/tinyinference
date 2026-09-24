@@ -117,7 +117,7 @@ pub async fn wait_for_job<G: VideoGenerator + ?Sized>(
     let mut last_poll_error: Option<String> = None;
     loop {
         let elapsed = started.elapsed();
-        const FALLBACK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+        const FALLBACK_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
         let poll_deadline = wait.timeout.saturating_sub(FALLBACK_TIMEOUT);
 
         if elapsed >= poll_deadline {
