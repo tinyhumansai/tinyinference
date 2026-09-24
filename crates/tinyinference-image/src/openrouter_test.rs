@@ -396,3 +396,30 @@ async fn lists_models_from_both_listing_shapes() {
     assert_eq!(models[0].capabilities.seed, None);
     assert_eq!(models[1].capabilities.seed, Some(true));
 }
+
+/// A billed response whose image payloads cannot be decoded is a billed
+/// non-delivery (`NoMedia`, do not retry), not a retryable decode error.
+#[tokio::test]
+async fn undecodable_images_are_a_billed_non_delivery() {
+    fn garbage(_call: usize) -> Response {
+        axum::Json(json!({ "created": 1, "data": [{ "b64_json": "!!!not base64!!!" }] }))
+            .into_response()
+    }
+    let fixture = fixture("/api/v1", garbage, None).await;
+    let error = generator(&fixture.base_url)
+        .with_capability_check(false)
+        .generate(ImageRequest::new("x"))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::NoMedia { .. }), "{error:?}");
+    assert!(!error.is_retryable());
+}
+
+#[test]
+fn transport_debug_redacts_base_url_userinfo() {
+    let transport = MediaTransport::new(MediaAuth::ApiKey(KEY.into()))
+        .with_base_url("https://user:hunter2secret@proxy.example/agent-integrations/openrouter");
+    let debug = format!("{transport:?}");
+    assert!(!debug.contains("hunter2secret"), "{debug}");
+    assert!(!transport.redacted_base_url().contains("hunter2secret"));
+}

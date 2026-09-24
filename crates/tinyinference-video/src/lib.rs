@@ -31,7 +31,7 @@ pub use types::{
     JobState, ProgressFn, VideoJob, VideoJobStatus, VideoRequest, VideoResponse, WaitPolicy,
 };
 
-use std::time::Instant;
+use tokio::time::Instant;
 
 use async_trait::async_trait;
 

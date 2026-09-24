@@ -200,7 +200,7 @@ impl MediaTransport {
         let response = self
             .send(reqwest::Method::POST, path, Some(body), Billing::Billable)
             .await?;
-        decode_json(response).await
+        decode_json_with_limit(response, self.json_limit()).await
     }
 
     /// Sends an idempotent JSON `GET`.
@@ -213,7 +213,23 @@ impl MediaTransport {
         let response = self
             .send(reqwest::Method::GET, path, None, Billing::Idempotent)
             .await?;
-        decode_json(response).await
+        decode_json_with_limit(response, self.json_limit()).await
+    }
+
+    /// Cap on a JSON body: the configured media cap plus base64's 4/3
+    /// inflation and a little envelope headroom, so lowering
+    /// [`MediaTransport::with_max_media_bytes`] also bounds image JSON.
+    fn json_limit(&self) -> usize {
+        self.max_media_bytes
+            .saturating_div(3)
+            .saturating_mul(4)
+            .saturating_add(64 * 1024)
+    }
+
+    /// The base URL with any userinfo and query string redacted, for logs.
+    #[must_use]
+    pub fn redacted_base_url(&self) -> String {
+        tinyinference_core::sanitize::redact_url(&self.base_url)
     }
 
     /// Downloads a binary body with an idempotent `GET`, enforcing the media
@@ -383,7 +399,7 @@ impl std::fmt::Debug for MediaTransport {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("MediaTransport")
-            .field("base_url", &self.base_url)
+            .field("base_url", &self.redacted_base_url())
             .field("auth", &self.auth)
             .field(
                 "headers",
@@ -397,10 +413,6 @@ impl std::fmt::Debug for MediaTransport {
             .field("max_media_bytes", &self.max_media_bytes)
             .finish()
     }
-}
-
-async fn decode_json<T: DeserializeOwned>(response: reqwest::Response) -> Result<T> {
-    decode_json_with_limit(response, DEFAULT_MAX_MEDIA_BYTES).await
 }
 
 async fn decode_json_with_limit<T: DeserializeOwned>(

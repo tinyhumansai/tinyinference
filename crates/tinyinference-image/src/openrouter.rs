@@ -317,7 +317,7 @@ impl ImageGenerator for OpenRouterImageGenerator {
             model = %model,
             n = request.n.unwrap_or(1),
             references = request.references.len(),
-            base_url = %self.transport.base_url(),
+            base_url = %self.transport.redacted_base_url(),
             "[tinyinference-image] generating image"
         );
         let response: WireResponse = self.transport.post_json("images", &body).await?;
@@ -334,9 +334,19 @@ impl ImageGenerator for OpenRouterImageGenerator {
                     limit: self.transport.max_media_bytes(),
                 });
             }
-            let data = BASE64.decode(encoded.as_bytes()).map_err(|error| {
-                Error::Decode(format!("image {index} is not valid base64: {error}"))
-            })?;
+            // The request was already billed: an undecodable entry is a
+            // non-delivery for that image, not a transient decode error the
+            // caller might retry. Skip it; if none decode, `NoMedia` below.
+            let data = match BASE64.decode(encoded.as_bytes()) {
+                Ok(data) if !data.is_empty() => data,
+                Ok(_) | Err(_) => {
+                    tracing::warn!(
+                        index,
+                        "[tinyinference-image] undecodable image entry skipped"
+                    );
+                    continue;
+                }
+            };
             let media_type = image
                 .media_type
                 .filter(|value| !value.trim().is_empty())

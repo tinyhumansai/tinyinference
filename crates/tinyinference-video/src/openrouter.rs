@@ -307,7 +307,7 @@ impl VideoGenerator for OpenRouterVideoGenerator {
             first_frame = request.first_frame.is_some(),
             last_frame = request.last_frame.is_some(),
             references = request.references.len(),
-            base_url = %self.transport.base_url(),
+            base_url = %self.transport.redacted_base_url(),
             "[tinyinference-video] submitting job"
         );
         let job: WireJob = self.transport.post_json("videos", &body).await?;
