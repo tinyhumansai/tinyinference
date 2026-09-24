@@ -148,7 +148,7 @@ async fn completed_without_any_output_times_out_naming_the_job() {
 #[tokio::test(start_paused = true)]
 async fn in_progress_past_the_deadline_times_out() {
     let generator = Scripted::new(JobState::InProgress, 0, true);
-    let error = wait_for_job(&generator, "job-1", "m", &fast(20))
+    let error = wait_for_job(&generator, "job-1", "m", &fast(100))
         .await
         .unwrap_err();
     match error {
