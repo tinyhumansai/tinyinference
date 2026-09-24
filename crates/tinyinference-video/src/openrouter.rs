@@ -185,7 +185,7 @@ pub async fn build_video_body(
     model: &str,
     request: &VideoRequest,
     max_reference_bytes: usize,
-) -> tinyinference_image::Result<Value> {
+) -> Result<Value> {
     let mut body = Map::new();
     body.insert("model".into(), json!(model));
     if let Some(prompt) = request.prompt.as_deref().filter(|p| !p.trim().is_empty()) {
