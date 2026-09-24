@@ -360,7 +360,7 @@ impl MediaTransport {
                 }
                 Ok(None) => break,
                 Err(error) => {
-                    return self.scrub(&format!("response stream error: {error}"), Some(token))
+                    return self.scrub(&format!("response stream error: {error}"), Some(token));
                 }
             }
         }
@@ -418,11 +418,7 @@ async fn decode_json_with_limit<T: DeserializeOwned>(
                 body.extend_from_slice(&chunk[..chunk.len().min(room)]);
             }
             Ok(None) => break,
-            Err(error) => {
-                return Err(Error::Transport(format!(
-                    "response stream error: {error}"
-                )))
-            }
+            Err(error) => return Err(Error::Transport(format!("response stream error: {error}"))),
         }
     }
     let value: serde_json::Value = serde_json::from_slice(&body).map_err(|error| {
