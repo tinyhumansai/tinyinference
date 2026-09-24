@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `tinyinference-image`: the `ImageGenerator` trait, `OpenRouterImageGenerator`
+  (`POST /images`), `MockImageGenerator`, media-reference standards
+  (URL, `data:` URL, bytes, local path → OpenRouter content parts), aspect-ratio,
+  resolution and size normalization, per-model capability pre-flight checks, and
+  a billing-aware OpenRouter media transport usable directly or through a
+  proxying backend.
+- `tinyinference-video`: the `VideoGenerator` trait, `OpenRouterVideoGenerator`
+  (`POST /videos`, `GET /videos/{id}`, `GET /videos/{id}/content`),
+  `wait_for_job` (resume by job id), and `MockVideoGenerator`. A `completed`
+  job with no outputs keeps polling instead of failing.
+
 ## 0.3.0
 
 ### Breaking changes

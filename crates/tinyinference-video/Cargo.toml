@@ -1,0 +1,29 @@
+[package]
+name = "tinyinference-video"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Provider-neutral asynchronous video generation (submit, poll, download) for Rust."
+documentation = "https://docs.rs/tinyinference-video"
+readme = "../../README.md"
+keywords = ["video-generation", "inference", "openrouter", "media"]
+categories = ["api-bindings", "asynchronous", "multimedia::video"]
+
+[dependencies]
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tinyinference-image = { version = "0.3.0", path = "../tinyinference-image" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+axum = { workspace = true }
+tokio = { workspace = true, features = ["net", "time"] }
+tokio-test = "0.4"
+
+[lints]
+workspace = true
