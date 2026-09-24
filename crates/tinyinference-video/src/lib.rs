@@ -113,7 +113,7 @@ pub async fn wait_for_job<G: VideoGenerator + ?Sized>(
 ) -> Result<VideoResponse> {
     let started = Instant::now();
     let mut last_state = JobState::Pending;
-    let mut last_poll_error: Option<String>;
+    let mut last_poll_error: Option<String> = None;
     loop {
         let elapsed = started.elapsed();
         if elapsed >= wait.timeout {
