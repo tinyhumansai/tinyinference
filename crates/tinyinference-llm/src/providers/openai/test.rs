@@ -583,6 +583,7 @@ fn parse_error_body_classifies_retryability_by_http_status() {
     let unauthorized = m.parse_error_body(
         401,
         r#"{"error":{"message":"Incorrect API key provided","type":"invalid_request_error","code":"invalid_api_key"}}"#,
+        None,
     );
     assert_eq!(unauthorized.status, Some(401));
     assert!(!unauthorized.retryable, "401 must not be retryable");
@@ -590,12 +591,37 @@ fn parse_error_body_classifies_retryability_by_http_status() {
     let rate_limited = m.parse_error_body(
         429,
         r#"{"error":{"message":"Rate limit reached","type":"requests","code":"rate_limit_exceeded"}}"#,
+        None,
     );
     assert_eq!(rate_limited.status, Some(429));
     assert!(rate_limited.retryable, "429 must be retryable");
 
-    let server_error = m.parse_error_body(500, r#"{"error":{"message":"internal error"}}"#);
+    let server_error = m.parse_error_body(500, r#"{"error":{"message":"internal error"}}"#, None);
     assert!(server_error.retryable, "5xx must be retryable");
+}
+
+#[test]
+fn parse_error_body_carries_retry_after_into_the_structured_error() {
+    // A 429 usually says how long to wait. The retry layer prefers
+    // `retry_after_ms` over its own backoff curve, and the Anthropic
+    // transport already fills it from the same header; this transport used
+    // to hardcode `None`, so a server-supplied wait was never honoured on
+    // OpenAI-compatible endpoints (including the managed backend).
+    let m = model();
+    let body = r#"{"error":{"message":"Upstream rate limit exceeded for model 'x'. Please retry shortly.","type":"rate_limit_error"}}"#;
+
+    let with_header = m.parse_error_body(429, body, Some("7"));
+    assert_eq!(with_header.status, Some(429));
+    assert!(with_header.retryable);
+    assert_eq!(with_header.retry_after_ms, Some(7_000));
+
+    // Without the header there is still no number in the message to fall
+    // back on, so the field stays empty rather than guessing.
+    let without_header = m.parse_error_body(429, body, None);
+    assert_eq!(without_header.retry_after_ms, None);
+
+    let unparseable = m.parse_error_body(429, body, Some("soon"));
+    assert_eq!(unparseable.retry_after_ms, None);
 }
 
 #[test]
