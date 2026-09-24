@@ -123,11 +123,26 @@ impl MediaReference {
     /// [`Error::Io`] when a local file cannot be read.
     pub async fn resolve(&self, max_bytes: usize) -> Result<String> {
         match self {
-            Self::Typed { url, .. } => {
-                if url.trim().is_empty() {
+            Self::Typed { kind, url } => {
+                let trimmed = url.trim();
+                if trimmed.is_empty() {
                     return Err(Error::Validation("reference URL is empty".into()));
                 }
-                Ok(url.clone())
+                match Self::parse(trimmed) {
+                    // A local path is inlined like `Path`, but keeps the
+                    // caller-stated kind when the extension says nothing.
+                    Self::Path(path) => {
+                        let data = read_local(&path, max_bytes).await?;
+                        let guessed = media_type_for_path(&path);
+                        let media_type = if guessed == "application/octet-stream" {
+                            default_media_type(*kind)
+                        } else {
+                            guessed
+                        };
+                        Ok(data_url(media_type, &data))
+                    }
+                    other => Box::pin(other.resolve(max_bytes)).await,
+                }
             }
             Self::Url(url) => {
                 if url.trim().is_empty() {
@@ -142,7 +157,13 @@ impl MediaReference {
                 if !header.to_ascii_lowercase().starts_with("data:") || payload.is_empty() {
                     return Err(Error::Validation("malformed data: URL reference".into()));
                 }
-                // Decode and validate the actual payload size.
+                // Reject on the encoded length first (base64 inflates by
+                // 4/3), so an oversized payload is never decoded.
+                if payload.len() / 4 * 3 > max_bytes.saturating_add(3) {
+                    return Err(Error::TooLarge { limit: max_bytes });
+                }
+                // Then decode, which validates the payload, and check the
+                // exact size.
                 let decoded = BASE64
                     .decode(payload)
                     .map_err(|_| Error::Validation("malformed base64 in data: URL".into()))?;
@@ -161,17 +182,7 @@ impl MediaReference {
                 Ok(data_url(media_type, data))
             }
             Self::Path(path) => {
-                let metadata = tokio::fs::metadata(path).await?;
-                if metadata.len() > max_bytes as u64 {
-                    return Err(Error::TooLarge { limit: max_bytes });
-                }
-                let data = tokio::fs::read(path).await?;
-                if data.is_empty() {
-                    return Err(Error::Validation(format!(
-                        "reference file {} is empty",
-                        path.display()
-                    )));
-                }
+                let data = read_local(path, max_bytes).await?;
                 Ok(data_url(media_type_for_path(path), &data))
             }
         }
@@ -229,6 +240,32 @@ pub fn content_part(kind: ReferenceKind, url: &str) -> serde_json::Value {
         ReferenceKind::Audio => "audio_url",
     };
     serde_json::json!({ "type": key, key: { "url": url } })
+}
+
+/// Reads a local reference, enforcing the size cap before reading.
+async fn read_local(path: &Path, max_bytes: usize) -> Result<Vec<u8>> {
+    let metadata = tokio::fs::metadata(path).await?;
+    if metadata.len() > max_bytes as u64 {
+        return Err(Error::TooLarge { limit: max_bytes });
+    }
+    let data = tokio::fs::read(path).await?;
+    if data.is_empty() {
+        return Err(Error::Validation(format!(
+            "reference file {} is empty",
+            path.display()
+        )));
+    }
+    Ok(data)
+}
+
+/// A generic media type for a kind, used when a typed local file's extension
+/// identifies nothing; providers sniff the actual format from the bytes.
+fn default_media_type(kind: ReferenceKind) -> &'static str {
+    match kind {
+        ReferenceKind::Image => "image/png",
+        ReferenceKind::Video => "video/mp4",
+        ReferenceKind::Audio => "audio/mpeg",
+    }
 }
 
 fn data_url(media_type: &str, data: &[u8]) -> String {

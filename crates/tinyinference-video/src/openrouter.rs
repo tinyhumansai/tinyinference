@@ -341,10 +341,10 @@ impl VideoGenerator for OpenRouterVideoGenerator {
             .transport
             .get_bytes(&format!("videos/{job_id}/content?index={index}"))
             .await?;
-        if content_type
-            .as_deref()
-            .is_some_and(|value| value.starts_with("application/json"))
-        {
+        if content_type.as_deref().is_some_and(|value| {
+            let value = value.trim().to_ascii_lowercase();
+            value.starts_with("application/json") || value.contains("+json")
+        }) {
             return Err(Error::Media(tinyinference_image::Error::NoMedia {
                 request_id: Some(job_id.to_owned()),
             }));

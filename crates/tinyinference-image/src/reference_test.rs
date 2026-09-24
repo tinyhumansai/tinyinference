@@ -199,3 +199,39 @@ async fn mock_generator_records_requests_and_simulates_no_media() {
         Err(Error::NoMedia { .. })
     ));
 }
+
+/// A `Typed` reference that names a local file is inlined (never sent as a
+/// raw path), and an extensionless file takes its media type from the stated
+/// kind.
+#[tokio::test]
+async fn typed_local_paths_are_inlined_with_the_stated_kind() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("frame-without-extension");
+    std::fs::write(&path, TINY_PNG).unwrap();
+    let reference = MediaReference::Typed {
+        kind: ReferenceKind::Video,
+        url: path.display().to_string(),
+    };
+    let url = reference.resolve(1024).await.unwrap();
+    assert!(url.starts_with("data:video/mp4;base64,"), "{url}");
+    assert_eq!(reference.kind(), ReferenceKind::Video);
+
+    let remote = MediaReference::Typed {
+        kind: ReferenceKind::Audio,
+        url: "https://cdn.test/opaque-id".into(),
+    };
+    assert_eq!(
+        remote.resolve(1024).await.unwrap(),
+        "https://cdn.test/opaque-id"
+    );
+}
+
+#[tokio::test]
+async fn oversized_data_urls_are_rejected_before_decoding() {
+    let payload = "A".repeat(4_000);
+    let reference = MediaReference::DataUrl(format!("data:image/png;base64,{payload}"));
+    assert!(matches!(
+        reference.resolve(100).await,
+        Err(Error::TooLarge { limit: 100 })
+    ));
+}

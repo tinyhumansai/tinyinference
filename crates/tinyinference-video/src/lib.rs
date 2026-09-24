@@ -117,38 +117,17 @@ pub async fn wait_for_job<G: VideoGenerator + ?Sized>(
     let mut last_poll_error: Option<String> = None;
     loop {
         let elapsed = started.elapsed();
-        const FALLBACK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
-
         if elapsed >= wait.timeout {
-            if last_state == JobState::Completed {
-                // Attempt one final direct download with a bounded timeout
-                if let Ok(Ok(video)) =
-                    tokio::time::timeout(FALLBACK_TIMEOUT, generator.content(job_id, 0)).await
-                {
-                    tracing::info!(
-                        job_id,
-                        "[tinyinference-video] completed job without listed outputs delivered on direct download"
-                    );
-                    return Ok(VideoResponse {
-                        job_id: job_id.to_owned(),
-                        model: model.to_owned(),
-                        videos: vec![video],
-                        cost_usd: last_cost_usd,
-                    });
-                }
-            }
-            tracing::warn!(
+            return deadline_outcome(
+                generator,
                 job_id,
-                last_state = %last_state,
-                last_poll_error = ?last_poll_error,
-                waited_secs = elapsed.as_secs(),
-                "[tinyinference-video] wait budget elapsed"
-            );
-            return Err(Error::Timeout {
-                job_id: job_id.to_owned(),
-                waited_secs: elapsed.as_secs(),
-                last_state: last_state.to_string(),
-            });
+                model,
+                &last_state,
+                last_cost_usd,
+                last_poll_error.as_deref(),
+                elapsed,
+            )
+            .await;
         }
 
         let remaining = wait.timeout - elapsed;
@@ -215,38 +194,64 @@ pub async fn wait_for_job<G: VideoGenerator + ?Sized>(
 
         let elapsed = started.elapsed();
         if elapsed >= wait.timeout {
-            if last_state == JobState::Completed {
-                let remaining = wait.timeout.saturating_sub(elapsed);
-                if let Ok(Ok(video)) =
-                    tokio::time::timeout(remaining, generator.content(job_id, 0)).await
-                {
-                    tracing::info!(
-                        job_id,
-                        "[tinyinference-video] completed job without listed outputs delivered on direct download"
-                    );
-                    return Ok(VideoResponse {
-                        job_id: job_id.to_owned(),
-                        model: model.to_owned(),
-                        videos: vec![video],
-                        cost_usd: None,
-                    });
-                }
-            }
-            tracing::warn!(
+            return deadline_outcome(
+                generator,
                 job_id,
-                last_state = %last_state,
-                last_poll_error = ?last_poll_error,
-                waited_secs = elapsed.as_secs(),
-                "[tinyinference-video] wait budget elapsed"
-            );
-            return Err(Error::Timeout {
-                job_id: job_id.to_owned(),
-                waited_secs: elapsed.as_secs(),
-                last_state: last_state.to_string(),
-            });
+                model,
+                &last_state,
+                last_cost_usd,
+                last_poll_error.as_deref(),
+                elapsed,
+            )
+            .await;
         }
         tokio::time::sleep(wait.interval.min(wait.timeout - elapsed)).await;
     }
+}
+
+/// Grace allowed for the one direct download attempted when the wait budget
+/// runs out on a job that reported `completed` without listing outputs. It is
+/// separate from the (already spent) wait budget so the attempt can finish.
+const FALLBACK_DOWNLOAD_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// What to return once the wait budget is spent: the output of a `completed`
+/// job via one bounded direct download, otherwise [`Error::Timeout`].
+async fn deadline_outcome<G: VideoGenerator + ?Sized>(
+    generator: &G,
+    job_id: &str,
+    model: &str,
+    last_state: &JobState,
+    last_cost_usd: Option<f64>,
+    last_poll_error: Option<&str>,
+    elapsed: std::time::Duration,
+) -> Result<VideoResponse> {
+    if *last_state == JobState::Completed
+        && let Ok(Ok(video)) =
+            tokio::time::timeout(FALLBACK_DOWNLOAD_GRACE, generator.content(job_id, 0)).await
+    {
+        tracing::info!(
+            job_id,
+            "[tinyinference-video] completed job without listed outputs delivered on direct download"
+        );
+        return Ok(VideoResponse {
+            job_id: job_id.to_owned(),
+            model: model.to_owned(),
+            videos: vec![video],
+            cost_usd: last_cost_usd,
+        });
+    }
+    tracing::warn!(
+        job_id,
+        last_state = %last_state,
+        last_poll_error = ?last_poll_error,
+        waited_secs = elapsed.as_secs(),
+        "[tinyinference-video] wait budget elapsed"
+    );
+    Err(Error::Timeout {
+        job_id: job_id.to_owned(),
+        waited_secs: elapsed.as_secs(),
+        last_state: last_state.to_string(),
+    })
 }
 
 async fn download_all<G: VideoGenerator + ?Sized>(
