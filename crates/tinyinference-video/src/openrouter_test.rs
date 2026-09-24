@@ -280,3 +280,21 @@ async fn hostile_job_ids_are_rejected_locally() {
         ));
     }
 }
+
+/// Sparse `unsigned_urls` (a blank slot before a populated one) download the
+/// populated slot's index, not `0`.
+#[tokio::test]
+async fn sparse_output_slots_download_their_own_index() {
+    let (base, server) = start(
+        "/api/v1",
+        vec![poll("completed", &["", "https://cdn.test/1.mp4"])],
+        None,
+    )
+    .await;
+    let response = generator(&base)
+        .generate(VideoRequest::new("x"), &fast())
+        .await
+        .unwrap();
+    assert_eq!(response.videos.len(), 1);
+    assert_eq!(*server.content_queries.lock().unwrap(), vec!["1"]);
+}

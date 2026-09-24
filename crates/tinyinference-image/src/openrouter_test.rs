@@ -423,3 +423,28 @@ fn transport_debug_redacts_base_url_userinfo() {
     assert!(!debug.contains("hunter2secret"), "{debug}");
     assert!(!transport.redacted_base_url().contains("hunter2secret"));
 }
+
+/// Per OpenRouter's listing contract, a key absent from a present
+/// `supported_parameters` map is unsupported: the request fails before the
+/// billed call instead of the provider silently ignoring the field.
+#[tokio::test]
+async fn omitted_enum_capability_is_unsupported() {
+    let listing = json!({ "data": [{
+        "id": "google/gemini-3.1-flash-lite-image",
+        "supported_parameters": { "n": { "type": "range", "min": 1, "max": 1 } }
+    }]});
+    let fixture = fixture("/api/v1", png_reply, Some(listing)).await;
+    let error = generator(&fixture.base_url)
+        .generate(
+            ImageRequest::new("x")
+                .with_model("google/gemini-3.1-flash-lite-image")
+                .with_resolution("2K"),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&error, Error::Unsupported { field, allowed, .. } if field == "resolution" && allowed.is_empty()),
+        "{error:?}"
+    );
+    assert_eq!(fixture.captured.image_calls.load(Ordering::SeqCst), 0);
+}
