@@ -22,7 +22,8 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 axum = { workspace = true }
-tokio = { workspace = true, features = ["net"] }
+tokio = { workspace = true, features = ["net", "time"] }
+tokio-test = "0.4"
 
 [lints]
 workspace = true
