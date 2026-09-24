@@ -162,8 +162,16 @@ pub async fn wait_for_job<G: VideoGenerator + ?Sized>(
                 );
                 last_poll_error = None;
                 if status.is_delivered() {
-                    return download_all(generator, job_id, model, status.outputs, status.cost_usd, started, wait)
-                        .await;
+                    return download_all(
+                        generator,
+                        job_id,
+                        model,
+                        status.outputs,
+                        status.cost_usd,
+                        started,
+                        wait,
+                    )
+                    .await;
                 }
                 if status.state.is_terminal_failure() {
                     tracing::warn!(job_id, state = %status.state, "[tinyinference-video] job failed");
