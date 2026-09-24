@@ -128,8 +128,11 @@ impl MediaReference {
                 if !header.to_ascii_lowercase().starts_with("data:") || payload.is_empty() {
                     return Err(Error::Validation("malformed data: URL reference".into()));
                 }
-                // base64 inflates by 4/3; bound the encoded payload accordingly.
-                if payload.len() / 4 * 3 > max_bytes {
+                // Decode and validate the actual payload size.
+                let decoded = BASE64
+                    .decode(payload)
+                    .map_err(|_| Error::Validation("malformed base64 in data: URL".into()))?;
+                if decoded.len() > max_bytes {
                     return Err(Error::TooLarge { limit: max_bytes });
                 }
                 Ok(url.clone())
