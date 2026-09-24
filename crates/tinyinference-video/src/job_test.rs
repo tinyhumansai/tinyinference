@@ -119,10 +119,10 @@ impl VideoGenerator for Scripted {
 
 /// Regression (R1): a provider that says `completed` but never lists outputs
 /// still delivers through one direct download at the deadline.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn completed_without_listed_outputs_falls_back_to_direct_download() {
     let generator = Scripted::new(JobState::Completed, 0, true);
-    let response = wait_for_job(&generator, "job-1", "m", &fast(20))
+    let response = wait_for_job(&generator, "job-1", "m", &fast(100))
         .await
         .unwrap();
     assert_eq!(response.videos.len(), 1);
@@ -130,10 +130,10 @@ async fn completed_without_listed_outputs_falls_back_to_direct_download() {
 
 /// Regression (R1/R2): when nothing is ever delivered, the result is a timeout
 /// that names the billed job and says not to resubmit — never a success.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn completed_without_any_output_times_out_naming_the_job() {
     let generator = Scripted::new(JobState::Completed, 0, false);
-    let error = wait_for_job(&generator, "job-1", "m", &fast(20))
+    let error = wait_for_job(&generator, "job-1", "m", &fast(100))
         .await
         .unwrap_err();
     assert!(matches!(error, Error::Timeout { .. }), "{error:?}");
@@ -145,7 +145,7 @@ async fn completed_without_any_output_times_out_naming_the_job() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn in_progress_past_the_deadline_times_out() {
     let generator = Scripted::new(JobState::InProgress, 0, true);
     let error = wait_for_job(&generator, "job-1", "m", &fast(20))
