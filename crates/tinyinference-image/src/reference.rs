@@ -123,6 +123,12 @@ impl MediaReference {
     /// [`Error::Io`] when a local file cannot be read.
     pub async fn resolve(&self, max_bytes: usize) -> Result<String> {
         match self {
+            Self::Typed { url, .. } => {
+                if url.trim().is_empty() {
+                    return Err(Error::Validation("reference URL is empty".into()));
+                }
+                Ok(url.clone())
+            }
             Self::Url(url) => {
                 if url.trim().is_empty() {
                     return Err(Error::Validation("reference URL is empty".into()));
