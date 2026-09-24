@@ -115,7 +115,43 @@ pub async fn wait_for_job<G: VideoGenerator + ?Sized>(
     let mut last_state = JobState::Pending;
     let mut last_poll_error: Option<String>;
     loop {
-        match generator.poll(job_id).await {
+        let elapsed = started.elapsed();
+        if elapsed >= wait.timeout {
+            if last_state == JobState::Completed {
+                let remaining = wait.timeout.saturating_sub(elapsed);
+                if remaining.as_millis() > 0 {
+                    if let Ok(video) = tokio::time::timeout(remaining, generator.content(job_id, 0)).await {
+                        if let Ok(video) = video {
+                            tracing::info!(
+                                job_id,
+                                "[tinyinference-video] completed job without listed outputs delivered on direct download"
+                            );
+                            return Ok(VideoResponse {
+                                job_id: job_id.to_owned(),
+                                model: model.to_owned(),
+                                videos: vec![video],
+                                cost_usd: None,
+                            });
+                        }
+                    }
+                }
+            }
+            tracing::warn!(
+                job_id,
+                last_state = %last_state,
+                last_poll_error = ?last_poll_error,
+                waited_secs = elapsed.as_secs(),
+                "[tinyinference-video] wait budget elapsed"
+            );
+            return Err(Error::Timeout {
+                job_id: job_id.to_owned(),
+                waited_secs: elapsed.as_secs(),
+                last_state: last_state.to_string(),
+            });
+        }
+        let remaining = wait.timeout - elapsed;
+        match tokio::time::timeout(remaining, generator.poll(job_id)).await {
+            Ok(Ok(status)) => {
             Ok(status) => {
                 if let Some(progress) = &wait.progress {
                     progress(&status);
