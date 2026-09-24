@@ -400,12 +400,22 @@ async fn decode_json_with_limit<T: DeserializeOwned>(
     limit: usize,
 ) -> Result<T> {
     let mut body = Vec::new();
-    while let Ok(Some(chunk)) = response.chunk().await {
-        let room = limit.saturating_sub(body.len());
-        if room == 0 {
-            return Err(Error::TooLarge { limit });
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                let room = limit.saturating_sub(body.len());
+                if room == 0 {
+                    return Err(Error::TooLarge { limit });
+                }
+                body.extend_from_slice(&chunk[..chunk.len().min(room)]);
+            }
+            Ok(None) => break,
+            Err(error) => {
+                return Err(Error::Transport(format!(
+                    "response stream error: {error}"
+                )))
+            }
         }
-        body.extend_from_slice(&chunk[..chunk.len().min(room)]);
     }
     let value: serde_json::Value = serde_json::from_slice(&body).map_err(|error| {
         Error::Decode(format!(
