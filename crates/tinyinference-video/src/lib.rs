@@ -131,7 +131,7 @@ pub async fn wait_for_job<G: VideoGenerator + ?Sized>(
                         job_id: job_id.to_owned(),
                         model: model.to_owned(),
                         videos: vec![video],
-                        cost_usd: None,
+                        cost_usd: last_cost_usd,
                     });
                 }
             }
@@ -162,6 +162,7 @@ pub async fn wait_for_job<G: VideoGenerator + ?Sized>(
                     "[tinyinference-video] poll"
                 );
                 last_poll_error = None;
+                last_cost_usd = status.cost_usd;
                 if status.is_delivered() {
                     return download_all(
                         generator,
