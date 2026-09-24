@@ -120,23 +120,24 @@ impl OpenRouterImageGenerator {
         if cache.is_none() {
             match self.list_models().await {
                 Ok(models) => {
-                    *cache = Some(
+                    *cache = Some(Some(
                         models
                             .into_iter()
                             .map(|model| (wire_model_id(&model.id).to_owned(), model.capabilities))
                             .collect(),
-                    );
+                    ));
                 }
                 Err(error) => {
                     tracing::debug!(
                         %error,
                         "[tinyinference-image] model listing unavailable; skipping capability check"
                     );
+                    *cache = Some(None);
                     return None;
                 }
             }
         }
-        cache.as_ref()?.get(model).cloned()
+        cache.as_ref()?.as_ref()?.get(model).cloned()
     }
 
     fn validate_against(model: &str, request: &WireFields, caps: &ModelCapabilities) -> Result<()> {
