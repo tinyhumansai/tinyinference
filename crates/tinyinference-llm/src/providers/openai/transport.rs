@@ -1141,8 +1141,9 @@ impl OpenAiModel {
             // into the text protocol before the protocol block is added.
             let coalesced = crate::prompt_tools::coalesce_tool_results(&request.messages);
             let resolvable = crate::prompt_tools::ensure_resolvable_user_turn(&coalesced);
+            let anchored = crate::prompt_tools::anchor_user_request_after_tool_result(&resolvable);
             instructed_messages = crate::prompt_tools::with_tool_instructions(
-                &resolvable,
+                &anchored,
                 &prompt_tool_schemas,
                 &request.tool_choice,
             );

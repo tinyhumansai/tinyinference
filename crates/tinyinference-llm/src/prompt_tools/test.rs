@@ -167,6 +167,44 @@ fn user_turn_normalization_does_not_count_folded_tool_results() {
 }
 
 #[test]
+fn tool_continuation_anchors_the_latest_request_after_search_results() {
+    let messages = coalesce_tool_results(&[
+        Message::system("system"),
+        Message::user("hey"),
+        Message::assistant("Hey! What's up?"),
+        Message::user("fetch my latest email"),
+        Message::assistant(""),
+        Message::tool("search-1", "GMAIL_FETCH_EMAILS schema"),
+    ]);
+    let anchored = anchor_user_request_after_tool_result(&messages);
+    assert_eq!(anchored.len(), messages.len() + 1);
+    assert!(
+        anchored[anchored.len() - 2]
+            .text()
+            .contains("GMAIL_FETCH_EMAILS")
+    );
+    assert!(
+        anchored
+            .last()
+            .unwrap()
+            .text()
+            .contains("fetch my latest email")
+    );
+    assert!(!anchored.last().unwrap().text().contains("Hey! What's up?"));
+    assert_eq!(anchor_user_request_after_tool_result(&anchored), anchored);
+}
+
+#[test]
+fn tool_continuation_without_a_real_user_request_stays_unchanged() {
+    let messages = coalesce_tool_results(&[
+        Message::system("system"),
+        Message::assistant("calling"),
+        Message::tool("call-1", "result"),
+    ]);
+    assert_eq!(anchor_user_request_after_tool_result(&messages), messages);
+}
+
+#[test]
 fn user_turn_normalization_ignores_blank_and_accepts_non_text_turns() {
     let out = ensure_resolvable_user_turn(&[Message::system("system"), Message::user("   ")]);
     assert_eq!(out.len(), 3);

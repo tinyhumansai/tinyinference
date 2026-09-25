@@ -229,6 +229,41 @@ pub fn ensure_resolvable_user_turn(messages: &[Message]) -> Vec<Message> {
     out
 }
 
+/// Keep the active request at the end of a prompt-guided tool continuation.
+/// Some chat templates treat the synthetic tool-result user turn as transport
+/// data and resolve an earlier user message as the query. Repeating the latest
+/// real text request after a terminal result gives those templates the correct
+/// query without changing the durable transcript.
+#[must_use]
+pub fn anchor_user_request_after_tool_result(messages: &[Message]) -> Vec<Message> {
+    if !messages.last().is_some_and(|message| {
+        matches!(message, Message::User(_))
+            && message
+                .text()
+                .trim_start()
+                .starts_with(TOOL_RESULTS_PREFIX.trim_end())
+    }) {
+        return messages.to_vec();
+    }
+    let Some(request) = messages
+        .iter()
+        .rev()
+        .skip(1)
+        .find(|message| is_resolvable_user_query(message))
+    else {
+        return messages.to_vec();
+    };
+    let request = request.text();
+    if request.trim().is_empty() {
+        return messages.to_vec();
+    }
+    let mut out = messages.to_vec();
+    out.push(Message::user(format!(
+        "Continue the latest user request using the tool result above. Latest user request:\n{request}"
+    )));
+    out
+}
+
 /// Converts a recovered call into this crate's [`ToolCall`], minting a
 /// process-unique id.
 ///
