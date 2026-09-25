@@ -260,12 +260,18 @@ pub fn anchor_user_request_after_tool_result(messages: &[Message]) -> Vec<Messag
         return messages.to_vec();
     }
     let mut out = messages.to_vec();
-    let result = out.last().expect("terminal tool result exists").text();
+    // `coalesce_tool_results` supplies a user-role result here. Keep every
+    // original block intact: direct callers can also pass JSON or media blocks
+    // alongside the result text.
     if let Some(Message::User(last)) = out.last_mut() {
-        last.content = vec![ContentBlock::Text(format!(
-            "Continue the active user request using the completed tool result below. \
-             Do not repeat the completed tool call.\nActive user request:\n{request}\n\n{result}"
-        ))];
+        last.content.insert(
+            0,
+            ContentBlock::Text(format!(
+                "Continue the active user request using the completed tool result below. \
+             Do not repeat the completed tool call unless new information requires it.\n\
+             Active user request:\n{request}\n\n"
+            )),
+        );
     }
     out
 }

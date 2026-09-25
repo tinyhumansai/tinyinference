@@ -208,6 +208,27 @@ fn tool_continuation_without_a_real_user_request_stays_unchanged() {
 }
 
 #[test]
+fn tool_continuation_preserves_non_text_result_blocks() {
+    let mut result = Message::user("[Tool results]\nlookup completed");
+    let Message::User(user) = &mut result else {
+        unreachable!()
+    };
+    let json_block = ContentBlock::Json(serde_json::json!({"count": 1}));
+    user.content.push(json_block.clone());
+    let anchored =
+        anchor_user_request_after_tool_result(&[Message::user("find the count"), result]);
+    let Message::User(last) = anchored.last().unwrap() else {
+        panic!("tool result remains a user turn");
+    };
+    assert_eq!(last.content.last(), Some(&json_block));
+    assert!(
+        last.content[0]
+            .as_text()
+            .is_some_and(|text| text.contains("find the count"))
+    );
+}
+
+#[test]
 fn user_turn_normalization_ignores_blank_and_accepts_non_text_turns() {
     let out = ensure_resolvable_user_turn(&[Message::system("system"), Message::user("   ")]);
     assert_eq!(out.len(), 3);
