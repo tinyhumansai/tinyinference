@@ -177,9 +177,11 @@ fn tool_continuation_anchors_the_latest_request_after_search_results() {
         Message::tool("search-1", "GMAIL_FETCH_EMAILS schema"),
     ]);
     let anchored = anchor_user_request_after_tool_result(&messages);
-    assert_eq!(anchored.len(), messages.len() + 1);
+    assert_eq!(anchored.len(), messages.len());
     assert!(
-        anchored[anchored.len() - 2]
+        anchored
+            .last()
+            .unwrap()
             .text()
             .contains("GMAIL_FETCH_EMAILS")
     );
@@ -191,6 +193,7 @@ fn tool_continuation_anchors_the_latest_request_after_search_results() {
             .contains("fetch my latest email")
     );
     assert!(!anchored.last().unwrap().text().contains("Hey! What's up?"));
+    assert!(anchored.last().unwrap().text().contains("Do not repeat"));
     assert_eq!(anchor_user_request_after_tool_result(&anchored), anchored);
 }
 
