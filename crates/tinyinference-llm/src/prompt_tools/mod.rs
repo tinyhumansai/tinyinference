@@ -232,8 +232,10 @@ pub fn ensure_resolvable_user_turn(messages: &[Message]) -> Vec<Message> {
 /// Keep the active request at the end of a prompt-guided tool continuation.
 /// Some chat templates treat the synthetic tool-result user turn as transport
 /// data and resolve an earlier user message as the query. Repeating the latest
-/// real text request after a terminal result gives those templates the correct
-/// query without changing the durable transcript.
+/// real text request alongside a terminal result gives those templates the
+/// correct query without changing the durable transcript. Both belong in one
+/// user turn: a separate trailing request makes a model restart discovery and
+/// ignore the result it just received.
 #[must_use]
 pub fn anchor_user_request_after_tool_result(messages: &[Message]) -> Vec<Message> {
     if !messages.last().is_some_and(|message| {
@@ -258,9 +260,19 @@ pub fn anchor_user_request_after_tool_result(messages: &[Message]) -> Vec<Messag
         return messages.to_vec();
     }
     let mut out = messages.to_vec();
-    out.push(Message::user(format!(
-        "Continue the latest user request using the tool result above. Latest user request:\n{request}"
-    )));
+    // `coalesce_tool_results` supplies a user-role result here. Keep every
+    // original block intact: direct callers can also pass JSON or media blocks
+    // alongside the result text.
+    if let Some(Message::User(last)) = out.last_mut() {
+        last.content.insert(
+            0,
+            ContentBlock::Text(format!(
+                "Continue the active user request using the completed tool result below. \
+             Do not repeat the completed tool call unless new information requires it.\n\
+             Active user request:\n{request}\n\n"
+            )),
+        );
+    }
     out
 }
 

@@ -177,9 +177,11 @@ fn tool_continuation_anchors_the_latest_request_after_search_results() {
         Message::tool("search-1", "GMAIL_FETCH_EMAILS schema"),
     ]);
     let anchored = anchor_user_request_after_tool_result(&messages);
-    assert_eq!(anchored.len(), messages.len() + 1);
+    assert_eq!(anchored.len(), messages.len());
     assert!(
-        anchored[anchored.len() - 2]
+        anchored
+            .last()
+            .unwrap()
             .text()
             .contains("GMAIL_FETCH_EMAILS")
     );
@@ -191,6 +193,7 @@ fn tool_continuation_anchors_the_latest_request_after_search_results() {
             .contains("fetch my latest email")
     );
     assert!(!anchored.last().unwrap().text().contains("Hey! What's up?"));
+    assert!(anchored.last().unwrap().text().contains("Do not repeat"));
     assert_eq!(anchor_user_request_after_tool_result(&anchored), anchored);
 }
 
@@ -202,6 +205,27 @@ fn tool_continuation_without_a_real_user_request_stays_unchanged() {
         Message::tool("call-1", "result"),
     ]);
     assert_eq!(anchor_user_request_after_tool_result(&messages), messages);
+}
+
+#[test]
+fn tool_continuation_preserves_non_text_result_blocks() {
+    let mut result = Message::user("[Tool results]\nlookup completed");
+    let Message::User(user) = &mut result else {
+        unreachable!()
+    };
+    let json_block = ContentBlock::Json(serde_json::json!({"count": 1}));
+    user.content.push(json_block.clone());
+    let anchored =
+        anchor_user_request_after_tool_result(&[Message::user("find the count"), result]);
+    let Message::User(last) = anchored.last().unwrap() else {
+        panic!("tool result remains a user turn");
+    };
+    assert_eq!(last.content.last(), Some(&json_block));
+    assert!(
+        last.content[0]
+            .as_text()
+            .is_some_and(|text| text.contains("find the count"))
+    );
 }
 
 #[test]
