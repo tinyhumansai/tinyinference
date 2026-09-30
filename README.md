@@ -125,6 +125,8 @@ crates/tinyinference-video/
 └── src/            VideoGenerator, submit/poll/download job loop, resume by id
 crates/tinyinference-decisions/
 └── src/            typed Jev and Sage decisions and HTTP clients
+crates/tinyinference-hub/
+└── src/            provider taxonomy, catalogue, typed errors, endpoint policy
 ```
 
 ### Media generation

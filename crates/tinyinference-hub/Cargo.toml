@@ -1,0 +1,51 @@
+[package]
+name = "tinyinference-hub"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "One provider taxonomy, catalogue, typed errors, and endpoint policy for TinyInference hosts."
+documentation = "https://docs.rs/tinyinference-hub"
+readme = "README.md"
+keywords = ["llm", "inference", "providers", "catalogue"]
+categories = ["api-bindings", "asynchronous"]
+
+[dependencies]
+# HTTP-date `Retry-After` values, resolved against a supplied instant.
+httpdate = { workspace = true }
+# `HubError` maps llm's error in, and the taxonomy bridges its provider kinds.
+tinyinference-llm = { version = "0.3.0", path = "../tinyinference-llm" }
+# Serialisable taxonomy, descriptors, and (later) the persisted hub config.
+serde = { workspace = true }
+serde_json = { workspace = true }
+# The hub's own typed error enum.
+thiserror = { workspace = true }
+# Endpoint parsing for the SSRF policy and credential scrubbing.
+url = { workspace = true }
+# Bridges `LocalRuntime` to the other crates' local-runtime enums
+# (feature `local-bridge`).
+tinyinference-local = { version = "0.3.0", path = "../tinyinference-local", optional = true }
+
+[dev-dependencies]
+# The compat guard matches embeddings' frozen error exhaustively.
+tinyinference-embeddings = { version = "0.3.0", path = "../tinyinference-embeddings" }
+# Property tests for parsers, classifiers, and redaction (the workspace has no
+# proptest entry, so this dev-dependency is declared here).
+proptest = { version = "1", default-features = false, features = ["std"] }
+
+[features]
+default = []
+# Subprocess CLI-login readiness (a later milestone); off by default.
+cli = []
+# Types only. No OAuth flow is ever enabled by this feature.
+oauth = []
+# The no-socket simulation harness (a later milestone).
+testing = []
+# `From`/`TryFrom` bridges to `tinyinference-local`'s enums.
+local-bridge = ["dep:tinyinference-local"]
+# Reference `Http` implementation over reqwest (a later milestone).
+http-reqwest = []
+
+[lints]
+workspace = true
