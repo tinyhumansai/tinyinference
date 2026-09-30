@@ -1,0 +1,23 @@
+{
+  "cloud_providers": [
+    {"id": "p_openai_a1b2c", "slug": "openai", "label": "OpenAI", "endpoint": "https://api.openai.com/v1", "auth_style": "bearer", "default_model": "gpt-5"},
+    {"id": "p_deepseek_d3e4f", "slug": "deepseek", "label": "DeepSeek", "endpoint": "https://api.deepseek.com/v1", "auth_style": "bearer", "type": "cloud"},
+    {"id": "p_acme_g5h6i", "slug": "acme", "label": "Acme", "endpoint": "https://llm.acme.test/v1", "auth_style": "openhumanjwt"},
+    {"id": "p_openhuman", "slug": "openhuman", "label": "OpenHuman", "endpoint": "https://api.openhuman.ai/v1", "auth_style": "openhuman_jwt"},
+    {"id": "p_cc", "slug": "claude-code", "label": "Claude Code", "endpoint": "cli://claude-code", "auth_style": "none"}
+  ],
+  "primary_cloud": "p_openai_a1b2c",
+  "default_model": "gpt-5",
+  "routes": {
+    "chat_provider": "openhuman", "reasoning_provider": "openai:o3@0.2", "agentic_provider": "",
+    "coding_provider": "claude-code:sonnet", "vision_provider": "hint",
+    "memory_provider": "ollama:llama3", "embeddings_provider": "cloud", "heartbeat_provider": "vllm",
+    "learning_provider": "acme:hint:fast", "subconscious_provider": "__byok_incomplete__",
+    "burst": "openai:gpt-5", "summarization": "acme:m"
+  },
+  "local_ai": {"provider": "lmstudio", "base_url": "http://localhost:1234/v1", "api_key": "sk-not-a-real-key", "model_id": "qwen"},
+  "byok": {"url": "https://byok.acme.test/v1", "api_key": "sk-byok-fake", "model": "b1"},
+  "model_registry": [{"id": "gpt-5", "provider": "openai", "cost_per_1m_input": 1.25, "cost_per_1m_output": 10.0, "context_window": 400000, "vision": true}, {"id": "bad id"}],
+  "temperature_unsupported_models": ["o3", "bad id"],
+  "openai_oauth": true
+}

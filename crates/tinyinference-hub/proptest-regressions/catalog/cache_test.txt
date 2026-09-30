@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc c7d9e3c85093e0f5595551049c7f58b6ba3a7f51b3a205c39a484ca0a0587ab9 # shrinks to ops = [Read { scope: 0, credentialed: false, refresh: false, outcome: 2 }, Read { scope: 0, credentialed: false, refresh: false, outcome: 0 }]

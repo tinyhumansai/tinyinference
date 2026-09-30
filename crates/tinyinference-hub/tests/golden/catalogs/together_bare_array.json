@@ -1,0 +1,3 @@
+[{"id":"meta-llama/Llama-3.3-70B-Instruct-Turbo","object":"model","type":"chat","context_length":131072,
+  "pricing":{"inputPer1M":0.88,"outputPer1M":0.88}},
+ {"id":"Qwen/Qwen2.5-72B-Instruct-Turbo","object":"model","type":"chat","context_length":32768}]

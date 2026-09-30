@@ -1,0 +1,860 @@
+[
+  {
+    "aliases": [
+      "openhuman",
+      "managed",
+      "cloud"
+    ],
+    "auth": "bearer",
+    "catalog": "paged_envelope",
+    "cli": null,
+    "default_endpoint": null,
+    "endpoint_editable": false,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "managed",
+    "key_placeholder": "th-...",
+    "kind": "tinyhumans",
+    "label": "TinyHumans",
+    "local_runtime": null,
+    "needs_key": false,
+    "protocol": "open_ai_chat",
+    "quirks": [
+      "product_header",
+      "credential_chain"
+    ],
+    "test_depths": [
+      "catalog",
+      "completion"
+    ],
+    "transport": "http"
+  },
+  {
+    "aliases": [],
+    "auth": "bearer",
+    "catalog": "open_ai",
+    "cli": null,
+    "default_endpoint": "https://api.openai.com/v1",
+    "endpoint_editable": false,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "cloud",
+    "key_placeholder": "sk-...",
+    "kind": "openai",
+    "label": "OpenAI",
+    "local_runtime": null,
+    "needs_key": true,
+    "protocol": "open_ai_chat",
+    "quirks": [
+      "responses_api",
+      "max_completion_tokens"
+    ],
+    "test_depths": [
+      "catalog",
+      "completion"
+    ],
+    "transport": "http"
+  },
+  {
+    "aliases": [],
+    "auth": "anthropic",
+    "catalog": "open_ai",
+    "cli": null,
+    "default_endpoint": "https://api.anthropic.com/v1",
+    "endpoint_editable": false,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "cloud",
+    "key_placeholder": "sk-ant-...",
+    "kind": "anthropic",
+    "label": "Anthropic",
+    "local_runtime": null,
+    "needs_key": true,
+    "protocol": "anthropic_messages",
+    "quirks": [
+      "native_messages_first_party"
+    ],
+    "test_depths": [
+      "catalog",
+      "completion"
+    ],
+    "transport": "http"
+  },
+  {
+    "aliases": [],
+    "auth": "bearer",
+    "catalog": "open_ai",
+    "cli": null,
+    "default_endpoint": "https://openrouter.ai/api/v1",
+    "endpoint_editable": false,
+    "extra_headers": [
+      [
+        "HTTP-Referer",
+        "https://tinyhumans.ai"
+      ],
+      [
+        "X-Title",
+        "TinyHumans"
+      ]
+    ],
+    "free_text_models": false,
+    "group": "cloud",
+    "key_placeholder": "sk-or-...",
+    "kind": "openrouter",
+    "label": "OpenRouter",
+    "local_runtime": null,
+    "needs_key": true,
+    "protocol": "open_ai_chat",
+    "quirks": [
+      "attribution_headers",
+      "scoped_catalog_path",
+      "key_check_endpoint"
+    ],
+    "test_depths": [
+      "key_only",
+      "catalog",
+      "completion"
+    ],
+    "transport": "http"
+  },
+  {
+    "aliases": [],
+    "auth": "bearer",
+    "catalog": "open_ai",
+    "cli": null,
+    "default_endpoint": "https://api.orcarouter.ai/v1",
+    "endpoint_editable": false,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "cloud",
+    "key_placeholder": "sk-orca-...",
+    "kind": "orcarouter",
+    "label": "OrcaRouter",
+    "local_runtime": null,
+    "needs_key": true,
+    "protocol": "open_ai_chat",
+    "quirks": [
+      "endpoint_unverified"
+    ],
+    "test_depths": [
+      "catalog",
+      "completion"
+    ],
+    "transport": "http"
+  },
+  {
+    "aliases": [],
+    "auth": "bearer",
+    "catalog": "open_ai",
+    "cli": null,
+    "default_endpoint": "https://api.gmi-serving.com/v1",
+    "endpoint_editable": false,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "cloud",
+    "key_placeholder": "eyJ....",
+    "kind": "gmi",
+    "label": "GMI",
+    "local_runtime": null,
+    "needs_key": true,
+    "protocol": "open_ai_chat",
+    "quirks": [],
+    "test_depths": [
+      "catalog",
+      "completion"
+    ],
+    "transport": "http"
+  },
+  {
+    "aliases": [],
+    "auth": "bearer",
+    "catalog": "open_ai",
+    "cli": null,
+    "default_endpoint": "https://api.fireworks.ai/inference/v1",
+    "endpoint_editable": false,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "cloud",
+    "key_placeholder": "fw-...",
+    "kind": "fireworks",
+    "label": "Fireworks",
+    "local_runtime": null,
+    "needs_key": true,
+    "protocol": "open_ai_chat",
+    "quirks": [
+      "catalog_account_scoped"
+    ],
+    "test_depths": [
+      "catalog",
+      "completion"
+    ],
+    "transport": "http"
+  },
+  {
+    "aliases": [],
+    "auth": "bearer",
+    "catalog": "open_ai",
+    "cli": null,
+    "default_endpoint": "https://api.moonshot.ai/v1",
+    "endpoint_editable": false,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "cloud",
+    "key_placeholder": "sk-...",
+    "kind": "moonshot",
+    "label": "Kimi (Moonshot)",
+    "local_runtime": null,
+    "needs_key": true,
+    "protocol": "open_ai_chat",
+    "quirks": [],
+    "test_depths": [
+      "catalog",
+      "completion"
+    ],
+    "transport": "http"
+  },
+  {
+    "aliases": [],
+    "auth": "bearer",
+    "catalog": "open_ai",
+    "cli": null,
+    "default_endpoint": "https://api.groq.com/openai/v1",
+    "endpoint_editable": false,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "cloud",
+    "key_placeholder": "gsk_...",
+    "kind": "groq",
+    "label": "Groq",
+    "local_runtime": null,
+    "needs_key": true,
+    "protocol": "open_ai_chat",
+    "quirks": [],
+    "test_depths": [
+      "catalog",
+      "completion"
+    ],
+    "transport": "http"
+  },
+  {
+    "aliases": [],
+    "auth": "bearer",
+    "catalog": "open_ai",
+    "cli": null,
+    "default_endpoint": "https://api.mistral.ai/v1",
+    "endpoint_editable": false,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "cloud",
+    "key_placeholder": null,
+    "kind": "mistral",
+    "label": "Mistral",
+    "local_runtime": null,
+    "needs_key": true,
+    "protocol": "open_ai_chat",
+    "quirks": [
+      "regional_endpoint_split",
+      "moving_alias_models"
+    ],
+    "test_depths": [
+      "catalog",
+      "completion"
+    ],
+    "transport": "http"
+  },
+  {
+    "aliases": [],
+    "auth": "bearer",
+    "catalog": "open_ai",
+    "cli": null,
+    "default_endpoint": "https://api.deepseek.com",
+    "endpoint_editable": false,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "cloud",
+    "key_placeholder": "sk-...",
+    "kind": "deepseek",
+    "label": "DeepSeek",
+    "local_runtime": null,
+    "needs_key": true,
+    "protocol": "open_ai_chat",
+    "quirks": [
+      "moving_alias_models"
+    ],
+    "test_depths": [
+      "catalog",
+      "completion"
+    ],
+    "transport": "http"
+  },
+  {
+    "aliases": [],
+    "auth": "bearer",
+    "catalog": "open_ai",
+    "cli": null,
+    "default_endpoint": "https://api.together.ai/v1",
+    "endpoint_editable": false,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "cloud",
+    "key_placeholder": null,
+    "kind": "together",
+    "label": "Together AI",
+    "local_runtime": null,
+    "needs_key": true,
+    "protocol": "open_ai_chat",
+    "quirks": [],
+    "test_depths": [
+      "catalog",
+      "completion"
+    ],
+    "transport": "http"
+  },
+  {
+    "aliases": [],
+    "auth": "bearer",
+    "catalog": "open_ai",
+    "cli": null,
+    "default_endpoint": "https://generativelanguage.googleapis.com/v1beta/openai",
+    "endpoint_editable": false,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "cloud",
+    "key_placeholder": null,
+    "kind": "google",
+    "label": "Google Gemini",
+    "local_runtime": null,
+    "needs_key": true,
+    "protocol": "open_ai_chat",
+    "quirks": [],
+    "test_depths": [
+      "catalog",
+      "completion"
+    ],
+    "transport": "http"
+  },
+  {
+    "aliases": [],
+    "auth": "bearer",
+    "catalog": "open_ai",
+    "cli": null,
+    "default_endpoint": "https://api.cerebras.ai/v1",
+    "endpoint_editable": false,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "cloud",
+    "key_placeholder": null,
+    "kind": "cerebras",
+    "label": "Cerebras",
+    "local_runtime": null,
+    "needs_key": true,
+    "protocol": "open_ai_chat",
+    "quirks": [
+      "catalog_keyless_twin"
+    ],
+    "test_depths": [
+      "catalog",
+      "completion"
+    ],
+    "transport": "http"
+  },
+  {
+    "aliases": [],
+    "auth": "bearer",
+    "catalog": "open_ai",
+    "cli": null,
+    "default_endpoint": "https://api.x.ai/v1",
+    "endpoint_editable": false,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "cloud",
+    "key_placeholder": null,
+    "kind": "xai",
+    "label": "xAI",
+    "local_runtime": null,
+    "needs_key": true,
+    "protocol": "open_ai_chat",
+    "quirks": [
+      "moving_alias_models"
+    ],
+    "test_depths": [
+      "catalog",
+      "completion"
+    ],
+    "transport": "http"
+  },
+  {
+    "aliases": [],
+    "auth": "bearer",
+    "catalog": "open_ai",
+    "cli": null,
+    "default_endpoint": "https://router.huggingface.co/v1",
+    "endpoint_editable": false,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "cloud",
+    "key_placeholder": "hf_...",
+    "kind": "huggingface",
+    "label": "Hugging Face",
+    "local_runtime": null,
+    "needs_key": true,
+    "protocol": "open_ai_chat",
+    "quirks": [
+      "catalog_unauthenticated"
+    ],
+    "test_depths": [
+      "catalog",
+      "completion"
+    ],
+    "transport": "http"
+  },
+  {
+    "aliases": [],
+    "auth": "bearer",
+    "catalog": "open_ai",
+    "cli": null,
+    "default_endpoint": "https://integrate.api.nvidia.com/v1",
+    "endpoint_editable": false,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "cloud",
+    "key_placeholder": null,
+    "kind": "nvidia",
+    "label": "NVIDIA",
+    "local_runtime": null,
+    "needs_key": true,
+    "protocol": "open_ai_chat",
+    "quirks": [],
+    "test_depths": [
+      "catalog",
+      "completion"
+    ],
+    "transport": "http"
+  },
+  {
+    "aliases": [],
+    "auth": "bearer",
+    "catalog": "open_ai",
+    "cli": null,
+    "default_endpoint": "https://api.z.ai/api/paas/v4",
+    "endpoint_editable": false,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "cloud",
+    "key_placeholder": null,
+    "kind": "zai",
+    "label": "Z.AI",
+    "local_runtime": null,
+    "needs_key": true,
+    "protocol": "open_ai_chat",
+    "quirks": [
+      "regional_endpoint_split"
+    ],
+    "test_depths": [
+      "catalog",
+      "completion"
+    ],
+    "transport": "http"
+  },
+  {
+    "aliases": [],
+    "auth": "bearer",
+    "catalog": "open_ai",
+    "cli": null,
+    "default_endpoint": "https://api.minimax.io/v1",
+    "endpoint_editable": false,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "cloud",
+    "key_placeholder": null,
+    "kind": "minimax",
+    "label": "MiniMax",
+    "local_runtime": null,
+    "needs_key": true,
+    "protocol": "open_ai_chat",
+    "quirks": [],
+    "test_depths": [
+      "catalog",
+      "completion"
+    ],
+    "transport": "http"
+  },
+  {
+    "aliases": [],
+    "auth": "bearer",
+    "catalog": "open_ai",
+    "cli": null,
+    "default_endpoint": "https://api.stepfun.ai/v1",
+    "endpoint_editable": false,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "cloud",
+    "key_placeholder": null,
+    "kind": "stepfun",
+    "label": "StepFun",
+    "local_runtime": null,
+    "needs_key": true,
+    "protocol": "open_ai_chat",
+    "quirks": [
+      "regional_endpoint_split"
+    ],
+    "test_depths": [
+      "catalog",
+      "completion"
+    ],
+    "transport": "http"
+  },
+  {
+    "aliases": [],
+    "auth": "bearer",
+    "catalog": "open_ai",
+    "cli": null,
+    "default_endpoint": "https://api.kilo.ai/api/gateway",
+    "endpoint_editable": false,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "cloud",
+    "key_placeholder": null,
+    "kind": "kilocode",
+    "label": "Kilo Code",
+    "local_runtime": null,
+    "needs_key": true,
+    "protocol": "open_ai_chat",
+    "quirks": [
+      "endpoint_unverified"
+    ],
+    "test_depths": [
+      "catalog",
+      "completion"
+    ],
+    "transport": "http"
+  },
+  {
+    "aliases": [],
+    "auth": "bearer",
+    "catalog": "open_ai",
+    "cli": null,
+    "default_endpoint": "https://api.deepinfra.com/v1/openai",
+    "endpoint_editable": false,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "cloud",
+    "key_placeholder": null,
+    "kind": "deepinfra",
+    "label": "DeepInfra",
+    "local_runtime": null,
+    "needs_key": true,
+    "protocol": "open_ai_chat",
+    "quirks": [],
+    "test_depths": [
+      "catalog",
+      "completion"
+    ],
+    "transport": "http"
+  },
+  {
+    "aliases": [],
+    "auth": "bearer",
+    "catalog": "open_ai",
+    "cli": null,
+    "default_endpoint": "https://api.novita.ai/v3/openai",
+    "endpoint_editable": false,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "cloud",
+    "key_placeholder": null,
+    "kind": "novita",
+    "label": "Novita",
+    "local_runtime": null,
+    "needs_key": true,
+    "protocol": "open_ai_chat",
+    "quirks": [],
+    "test_depths": [
+      "catalog",
+      "completion"
+    ],
+    "transport": "http"
+  },
+  {
+    "aliases": [],
+    "auth": "bearer",
+    "catalog": "open_ai",
+    "cli": null,
+    "default_endpoint": "https://api.venice.ai/api/v1",
+    "endpoint_editable": false,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "cloud",
+    "key_placeholder": null,
+    "kind": "venice",
+    "label": "Venice",
+    "local_runtime": null,
+    "needs_key": true,
+    "protocol": "open_ai_chat",
+    "quirks": [
+      "catalog_unauthenticated"
+    ],
+    "test_depths": [
+      "catalog",
+      "completion"
+    ],
+    "transport": "http"
+  },
+  {
+    "aliases": [],
+    "auth": "bearer",
+    "catalog": "open_ai",
+    "cli": null,
+    "default_endpoint": "https://ai-gateway.vercel.sh/v1",
+    "endpoint_editable": false,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "cloud",
+    "key_placeholder": null,
+    "kind": "vercel-ai-gateway",
+    "label": "Vercel AI Gateway",
+    "local_runtime": null,
+    "needs_key": true,
+    "protocol": "open_ai_chat",
+    "quirks": [],
+    "test_depths": [
+      "catalog",
+      "completion"
+    ],
+    "transport": "http"
+  },
+  {
+    "aliases": [],
+    "auth": "bearer",
+    "catalog": "open_ai",
+    "cli": null,
+    "default_endpoint": "https://ai.sumopod.com/v1",
+    "endpoint_editable": false,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "cloud",
+    "key_placeholder": "sk-...",
+    "kind": "sumopod",
+    "label": "SumoPod",
+    "local_runtime": null,
+    "needs_key": true,
+    "protocol": "open_ai_chat",
+    "quirks": [
+      "endpoint_unverified"
+    ],
+    "test_depths": [
+      "catalog",
+      "completion"
+    ],
+    "transport": "http"
+  },
+  {
+    "aliases": [],
+    "auth": "bearer",
+    "catalog": "open_ai",
+    "cli": null,
+    "default_endpoint": "https://api-inference.modelscope.cn/v1",
+    "endpoint_editable": false,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "cloud",
+    "key_placeholder": "ms-...",
+    "kind": "modelscope",
+    "label": "ModelScope",
+    "local_runtime": null,
+    "needs_key": true,
+    "protocol": "open_ai_chat",
+    "quirks": [
+      "metered_free_tier"
+    ],
+    "test_depths": [
+      "catalog",
+      "completion"
+    ],
+    "transport": "http"
+  },
+  {
+    "aliases": [],
+    "auth": "none",
+    "catalog": "open_ai",
+    "cli": null,
+    "default_endpoint": "http://localhost:11434",
+    "endpoint_editable": true,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "local",
+    "key_placeholder": null,
+    "kind": "ollama",
+    "label": "Ollama",
+    "local_runtime": "ollama",
+    "needs_key": false,
+    "protocol": "open_ai_chat",
+    "quirks": [
+      "key_causes_local_auth_errors"
+    ],
+    "test_depths": [
+      "catalog",
+      "completion"
+    ],
+    "transport": "http"
+  },
+  {
+    "aliases": [
+      "lm-studio",
+      "lm_studio"
+    ],
+    "auth": "none",
+    "catalog": "open_ai",
+    "cli": null,
+    "default_endpoint": "http://localhost:1234/v1",
+    "endpoint_editable": true,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "local",
+    "key_placeholder": null,
+    "kind": "lmstudio",
+    "label": "LM Studio",
+    "local_runtime": "lm_studio",
+    "needs_key": false,
+    "protocol": "open_ai_chat",
+    "quirks": [
+      "no_model_loaded_error"
+    ],
+    "test_depths": [
+      "catalog",
+      "completion"
+    ],
+    "transport": "http"
+  },
+  {
+    "aliases": [
+      "omlx-server"
+    ],
+    "auth": "bearer",
+    "catalog": "open_ai",
+    "cli": null,
+    "default_endpoint": null,
+    "endpoint_editable": true,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "local",
+    "key_placeholder": null,
+    "kind": "omlx",
+    "label": "OMLX",
+    "local_runtime": "omlx",
+    "needs_key": false,
+    "protocol": "open_ai_chat",
+    "quirks": [
+      "ambiguous_runtime"
+    ],
+    "test_depths": [
+      "catalog",
+      "completion"
+    ],
+    "transport": "http"
+  },
+  {
+    "aliases": [
+      "mlx-server",
+      "mlx_lm"
+    ],
+    "auth": "none",
+    "catalog": "open_ai",
+    "cli": null,
+    "default_endpoint": "http://127.0.0.1:8080/v1",
+    "endpoint_editable": true,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "local",
+    "key_placeholder": null,
+    "kind": "mlx",
+    "label": "MLX",
+    "local_runtime": "mlx",
+    "needs_key": false,
+    "protocol": "open_ai_chat",
+    "quirks": [
+      "port_collides_with_host"
+    ],
+    "test_depths": [
+      "catalog",
+      "completion"
+    ],
+    "transport": "http"
+  },
+  {
+    "aliases": [
+      "custom-openai",
+      "custom_openai",
+      "local_openai",
+      "openai_compatible",
+      "open_ai_compatible",
+      "llamacpp",
+      "llama.cpp",
+      "llama_cpp",
+      "llama-cpp",
+      "vllm"
+    ],
+    "auth": "bearer",
+    "catalog": "open_ai",
+    "cli": null,
+    "default_endpoint": "http://127.0.0.1:8080/v1",
+    "endpoint_editable": true,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "local",
+    "key_placeholder": null,
+    "kind": "local-openai",
+    "label": "Local OpenAI-compatible",
+    "local_runtime": "openai_compatible",
+    "needs_key": false,
+    "protocol": "open_ai_chat",
+    "quirks": [
+      "port_collides_with_host"
+    ],
+    "test_depths": [
+      "catalog",
+      "completion"
+    ],
+    "transport": "http"
+  },
+  {
+    "aliases": [],
+    "auth": "none",
+    "catalog": "none",
+    "cli": "claude_code",
+    "default_endpoint": null,
+    "endpoint_editable": false,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "cli",
+    "key_placeholder": null,
+    "kind": "claude-code",
+    "label": "Claude Code",
+    "local_runtime": null,
+    "needs_key": false,
+    "protocol": "cli_stream",
+    "quirks": [],
+    "test_depths": [],
+    "transport": "subprocess"
+  },
+  {
+    "aliases": [],
+    "auth": "none",
+    "catalog": "none",
+    "cli": "codex",
+    "default_endpoint": null,
+    "endpoint_editable": false,
+    "extra_headers": [],
+    "free_text_models": false,
+    "group": "cli",
+    "key_placeholder": null,
+    "kind": "codex",
+    "label": "Codex",
+    "local_runtime": null,
+    "needs_key": false,
+    "protocol": "cli_stream",
+    "quirks": [],
+    "test_depths": [],
+    "transport": "subprocess"
+  }
+]

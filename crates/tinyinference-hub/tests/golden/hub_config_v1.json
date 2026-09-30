@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "providers": [
+    {"id": "prv_0123456789abcdef0123456789abcdef", "slug": "tinyhumans", "label": "TinyHumans", "kind": "tinyhumans", "base_url": "", "enabled": true, "synthetic": false, "origin": "indexed"},
+    {"id": "prv_fedcba9876543210fedcba9876543210", "slug": "openai", "label": "OpenAI", "kind": "openai", "base_url": "https://api.openai.com/v1", "model": "gpt-5", "enabled": true, "synthetic": false, "origin": "indexed"},
+    {"id": "prv_00000000000000000000000000000001", "slug": "home-gpu", "label": "Home GPU", "kind": "custom", "base_url": "http://10.0.0.5:8000/v1", "enabled": false, "auth_override": {"custom": "x-home-key"}, "synthetic": false, "origin": "imported", "tiers": {"chat-v1": "llama-3.3-70b"}}
+  ],
+  "default": {"mode": "full", "provider": "openai", "model": "gpt-5"},
+  "agent_pins": {"agent:researcher": {"provider": "home-gpu", "model": "llama-3.3-70b"}},
+  "future_field": {"kept": true}
+}

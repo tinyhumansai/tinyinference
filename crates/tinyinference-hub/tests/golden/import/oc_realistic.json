@@ -1,0 +1,19 @@
+{
+  "providers": [
+    {"id": "prv_0123456789abcdef0123456789abcdef", "slug": "openrouter", "label": "OpenRouter",
+     "kind": "openrouter", "base_url": "https://openrouter.ai/api/v1",
+     "models": {"chat-v1": "openai/gpt-5", "reasoning-v1": "openai/gpt-5"}, "enabled": true},
+    {"id": "prv_1111111111111111111111111111111a", "slug": "acme-llm", "label": "Acme LLM",
+     "kind": "openai_compatible", "base_url": "https://llm.acme.test/v1",
+     "models": {"chat-v1": "acme-1", "reasoning-v1": "acme-2"}},
+    {"id": "prv_2222222222222222222222222222222b", "slug": "ollama", "label": "Ollama",
+     "kind": "ollama", "base_url": "", "enabled": false},
+    {"id": "prv_3333333333333333333333333333333c", "slug": "claude-code", "label": "Claude Code",
+     "kind": "claude-code"}
+  ],
+  "default": "{\"provider\":\"openrouter\",\"model\":\"openai/gpt-5\",\"future\":true}",
+  "routes": {"chat-v1": "acme-llm:acme-1", "reasoning-v1": "default", "cheap-v1": "local", "code-v1": "claude-code:sonnet", "gone-v1": "removed:model"},
+  "entry_zero": {"provider": "managed", "models": {"chat-v1": "chat-v1"}},
+  "managed_enabled": "false",
+  "health": "{\"openrouter\":{\"state\":\"ok\",\"at\":\"2026-01-01T00:00:00Z\"},\"acme-llm\":{\"state\":\"auth\",\"at\":\"2026-01-01T00:00:00Z\"}}"
+}

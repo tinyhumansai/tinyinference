@@ -1,0 +1,240 @@
+{
+  "config": {
+    "agent_pins": {},
+    "default": {
+      "mode": "full",
+      "model": "gpt-5",
+      "provider": "openai"
+    },
+    "providers": [
+      {
+        "base_url": "https://api.openai.com/v1",
+        "enabled": true,
+        "id": "p_openai_a1b2c",
+        "kind": "openai",
+        "label": "OpenAI",
+        "model": "gpt-5",
+        "origin": "imported",
+        "slug": "openai",
+        "synthetic": false
+      },
+      {
+        "base_url": "https://api.deepseek.com/v1",
+        "enabled": true,
+        "id": "p_deepseek_d3e4f",
+        "kind": "deepseek",
+        "label": "DeepSeek",
+        "origin": "imported",
+        "slug": "deepseek",
+        "synthetic": false
+      },
+      {
+        "auth_override": "session_jwt",
+        "base_url": "https://llm.acme.test/v1",
+        "enabled": true,
+        "id": "p_acme_g5h6i",
+        "kind": "custom",
+        "label": "Acme",
+        "origin": "imported",
+        "slug": "acme",
+        "synthetic": false
+      },
+      {
+        "base_url": "https://byok.acme.test/v1",
+        "enabled": true,
+        "id": "byok-inference",
+        "kind": "custom",
+        "label": "BYOK inference",
+        "model": "b1",
+        "origin": "imported",
+        "slug": "byok-inference",
+        "synthetic": true
+      },
+      {
+        "base_url": "http://localhost:1234/v1",
+        "enabled": true,
+        "id": "local_lmstudio",
+        "kind": "lmstudio",
+        "label": "LM Studio",
+        "model": "qwen",
+        "origin": "imported",
+        "slug": "lmstudio",
+        "synthetic": false
+      }
+    ],
+    "schema_version": 1,
+    "workload_routes": {
+      "agentic": {
+        "model": "gpt-5",
+        "target": {
+          "kind": "provider",
+          "value": "openai"
+        }
+      },
+      "chat": {
+        "target": {
+          "kind": "managed"
+        }
+      },
+      "coding": {
+        "model": "sonnet",
+        "target": {
+          "kind": "cli",
+          "value": "claude_code"
+        }
+      },
+      "heartbeat": {
+        "target": {
+          "kind": "local",
+          "value": "vllm"
+        }
+      },
+      "learning": {
+        "target": {
+          "kind": "provider",
+          "value": "acme"
+        }
+      },
+      "memory": {
+        "model": "llama3",
+        "target": {
+          "kind": "local",
+          "value": "lm_studio"
+        }
+      },
+      "reasoning": {
+        "model": "o3",
+        "target": {
+          "kind": "provider",
+          "value": "openai"
+        },
+        "temperature": 0.20000000298023224
+      }
+    }
+  },
+  "credentials": [
+    "byok-inference",
+    "lmstudio"
+  ],
+  "health": {},
+  "loss": {
+    "entries": [
+      {
+        "detail": "the legacy per-row default_model moved onto the record's model",
+        "kind": "normalised",
+        "source_key": "cloud_providers/openai"
+      },
+      {
+        "detail": "the stored endpoint is OpenHuman's old preset; the hub's preset is https://api.deepseek.com. The stored value was kept",
+        "kind": "normalised",
+        "source_key": "cloud_providers/deepseek"
+      },
+      {
+        "detail": "the legacy row `type` has no home in the hub",
+        "kind": "dropped",
+        "source_key": "cloud_providers/deepseek"
+      },
+      {
+        "detail": "the managed row is always listed by the hub and is not stored as a record",
+        "kind": "normalised",
+        "source_key": "cloud_providers/openhuman"
+      },
+      {
+        "detail": "the Claude Code row is a UI marker with a fake endpoint; a CLI login is a route target",
+        "kind": "dropped",
+        "source_key": "cloud_providers/claude-code"
+      },
+      {
+        "detail": "the persisted BYOK route became a synthetic custom record",
+        "kind": "synthesised",
+        "source_key": "byok-inference"
+      },
+      {
+        "detail": "OpenHuman shares one base URL between local runtimes; only the configured runtime got a record, the others use their descriptor defaults when added",
+        "kind": "normalised",
+        "source_key": "local_ai"
+      },
+      {
+        "detail": "a route to the primary cloud is the absence of a route",
+        "kind": "normalised",
+        "source_key": "routes/agentic"
+      },
+      {
+        "detail": "rewritten into the canonical spelling",
+        "kind": "normalised",
+        "source_key": "routes/embeddings"
+      },
+      {
+        "detail": "a route to the primary cloud is the absence of a route",
+        "kind": "normalised",
+        "source_key": "routes/embeddings"
+      },
+      {
+        "detail": "an abstract hint model has no default model to stand in for it",
+        "kind": "fail_closed",
+        "source_key": "routes/learning"
+      },
+      {
+        "detail": "`ollama:` is what OpenHuman's UI writes for any local runtime; read as the configured local_ai runtime",
+        "kind": "ambiguous",
+        "source_key": "routes/memory"
+      },
+      {
+        "detail": "an unfinished BYOK setup names no provider",
+        "kind": "fail_closed",
+        "source_key": "routes/subconscious"
+      },
+      {
+        "detail": "a bare string that names no local runtime cannot be resolved",
+        "kind": "fail_closed",
+        "source_key": "routes/vision"
+      },
+      {
+        "detail": "a role alias was mapped to its role",
+        "kind": "normalised",
+        "source_key": "routes/agentic"
+      },
+      {
+        "detail": "a role alias was ignored because the role itself is set",
+        "kind": "dropped",
+        "source_key": "routes/memory"
+      },
+      {
+        "detail": "registry rows were scoped to a provider; overrides apply to the model id everywhere",
+        "kind": "normalised",
+        "source_key": "model_registry"
+      },
+      {
+        "detail": "a registry row with an invalid model id was skipped",
+        "kind": "dropped",
+        "source_key": "model_registry"
+      },
+      {
+        "detail": "an entry that is not a valid model id was skipped",
+        "kind": "dropped",
+        "source_key": "temperature_unsupported_models"
+      },
+      {
+        "detail": "the Codex login is an OpenAI OAuth profile; there is no codex record, and the origin is not carried over",
+        "kind": "normalised",
+        "source_key": "auth-profiles"
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "context_window": 400000,
+      "input_per_1m": 1.25,
+      "model": "gpt-5",
+      "output_per_1m": 10.0,
+      "temperature": null
+    },
+    {
+      "context_window": null,
+      "input_per_1m": null,
+      "model": "o3",
+      "output_per_1m": null,
+      "temperature": "No"
+    }
+  ]
+}

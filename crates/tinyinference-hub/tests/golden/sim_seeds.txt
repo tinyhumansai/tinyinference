@@ -1,0 +1,20 @@
+# Seeds that once broke an invariant, one per line as `seed[ flaky]`. Every line
+# is replayed by `sim_random_regressions` for the rest of the crate's life.
+# A found seed is added here in the same commit as the fix and a note in the
+# test log. Blank lines and `#` comments are ignored.
+#
+# A seed replays the same trace only under the action mix it was found under
+# (`random_action`). Mix 2 (run 4) added origin moves, kept models and edit
+# races; seeds below were recorded under mix 2. When the mix changes again, add
+# a new mix header and keep the old seeds only as extra coverage.
+
+# Found by run 4: the seeded mix with origin moves and kept models reached a keyless
+# 401 whose older list the cache serves stale by design; the runner had wrongly
+# expected an error there (an oracle bug, fixed in invariant 4).
+1592594454 flaky
+
+# Found by run 4 (round 1 fix): a race edit that lost its key write to a credential
+# outage and could not empty the slot either left the OLD key beside the NEW
+# origin on a disabled record, which `test` still sends. Fixed by deleting the old
+# key first (edit_move.rs).
+1592594484 flaky

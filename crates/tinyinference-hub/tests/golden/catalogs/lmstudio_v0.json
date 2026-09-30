@@ -1,0 +1,5 @@
+{"object":"list","data":[
+ {"id":"qwen2.5-coder-7b-instruct","object":"model","type":"llm","publisher":"lmstudio-community","state":"loaded","max_context_length":32768,"capabilities":["tool_use"]},
+ {"id":"llava-1.5-7b","object":"model","type":"vlm","state":"not-loaded","max_context_length":4096},
+ {"id":"text-embedding-nomic-embed-text-v1.5","object":"model","type":"embeddings","state":"not-loaded","max_context_length":2048}
+]}

@@ -4,6 +4,23 @@
 
 ### Added
 
+- `tinyinference-hub`: a new leaf crate that gives every host one provider hub.
+  A `Hub` facade over four ports (credential store, compare-and-swap config
+  store, `Http`, `Clock`) offers connect (with rollback on a rejected key), add,
+  edit, remove, enable, key set and clear, draft and stored probes at three
+  depths, cached single-flight model lists, folded health fed by probes and real
+  turns, defaults, per-agent pins, per-workload routes, turn resolution and a
+  `ChatModel` that resolves its credential on every call. It also ships one
+  taxonomy and catalogue (managed, 26 cloud, 5 local, 2 CLI kinds), a typed
+  `HubError` with stable reason codes and a vendor-body classifier that
+  separates spend caps from rate limits, redacting `Secret` and validated
+  identifiers, the endpoint SSRF policy, an ordered credential chain,
+  scope-partitioned model caches, pure readers for OpenCompany's and OpenHuman's
+  stored shapes with loss reports, local and environment detection, CLI-login
+  readiness (`cli`), OAuth types (`oauth`), a reference `ReqwestHttp`
+  (`http-reqwest`), and a no-socket `testing` kit with a seeded scenario runner.
+  Nothing else in the workspace depends on it and no existing public item
+  changed.
 - `tinyinference-image`: the `ImageGenerator` trait, `OpenRouterImageGenerator`
   (`POST /images`), `MockImageGenerator`, media-reference standards
   (URL, `data:` URL, bytes, local path → OpenRouter content parts), aspect-ratio,

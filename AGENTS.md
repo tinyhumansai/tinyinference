@@ -9,10 +9,14 @@ policy belong in consuming runtimes such as TinyAgents.
 
 ## Structure
 
-The public crates are `crates/tinyinference-core` and
-`crates/tinyinference-local`. Core owns provider-neutral inference and hosted
-transports; local depends on core and owns hardware, process, filesystem, and
-local-runtime integrations. Keep feature areas in module directories with
+The workspace crates live under `crates/`, one directory per package
+(`tinyinference-core`, `-llm`, `-embeddings`, `-local`, `-providers`, `-voice`,
+`-image`, `-video`, `-decisions`, `-hub`). Core owns provider-neutral inference
+and hosted transports; local depends on core and owns hardware, process,
+filesystem, and local-runtime integrations; hub is a leaf crate that owns the
+provider taxonomy, catalogue, typed errors, endpoint policy, provider
+operations, health, routes, and the chat-model factory, and nothing else in
+the workspace depends on it. Keep feature areas in module directories with
 `mod.rs`, `types.rs`, and `test.rs` where the area is large. Centralize
 deliberate exports in each `src/lib.rs`. Keep provider wire types private unless
 callers must construct them.

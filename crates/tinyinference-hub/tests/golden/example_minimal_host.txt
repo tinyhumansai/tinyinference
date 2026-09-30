@@ -1,0 +1,6 @@
+connect: Saved (OpenAI is connected.)
+models: ["gpt-x", "gpt-y"]
+turn: ResolvedTurn { slug: Slug("openai"), kind: KindId("openai"), base_url: "https://api.openai.com/v1", model: Some(ModelId("gpt-y")), protocol: OpenAiChat, via: Default, origin: Some(ProviderKey), .. }
+test: auth (retry Never)
+health: Down(Auth)
+connect with a rejected key: auth (0 providers kept)

@@ -1,0 +1,9 @@
+{
+  "health": {"state": "degraded", "reason": "timeout"},
+  "changed_at_ms": 1767225660000,
+  "last_ok_ms": 1767225600000,
+  "last_failure": {"reason": "timeout", "status": null, "at_ms": 1767225660000},
+  "consecutive_failures": 1,
+  "probes": {"catalog": {"ok": true, "reason": null, "at_ms": 1767225600000, "latency_ms": 120}},
+  "turn": {"ok": false, "reason": "timeout", "at_ms": 1767225660000}
+}

@@ -1,0 +1,4 @@
+{"models":[
+ {"name":"llama3.2:latest","model":"llama3.2:latest","size":2019393189,"details":{"family":"llama","parameter_size":"3.2B"}},
+ {"name":"qwen2.5-coder:7b","model":"qwen2.5-coder:7b","size":4683087332,"details":{"family":"qwen2"}}
+]}

@@ -1,0 +1,137 @@
+{
+  "config": {
+    "agent_pins": {},
+    "default": {
+      "mode": "full",
+      "model": "openai/gpt-5",
+      "provider": "openrouter"
+    },
+    "providers": [
+      {
+        "base_url": "",
+        "enabled": false,
+        "id": "managed",
+        "kind": "tinyhumans",
+        "label": "TinyHumans",
+        "origin": "imported",
+        "slug": "tinyhumans",
+        "synthetic": true
+      },
+      {
+        "base_url": "https://openrouter.ai/api/v1",
+        "enabled": true,
+        "id": "prv_0123456789abcdef0123456789abcdef",
+        "kind": "openrouter",
+        "label": "OpenRouter",
+        "model": "openai/gpt-5",
+        "origin": "imported",
+        "slug": "openrouter",
+        "synthetic": false
+      },
+      {
+        "base_url": "https://llm.acme.test/v1",
+        "enabled": true,
+        "id": "prv_1111111111111111111111111111111a",
+        "kind": "custom",
+        "label": "Acme LLM",
+        "origin": "imported",
+        "slug": "acme-llm",
+        "synthetic": false,
+        "tier_models": {
+          "chat-v1": "acme-1",
+          "reasoning-v1": "acme-2"
+        }
+      },
+      {
+        "base_url": "http://localhost:11434",
+        "enabled": false,
+        "id": "prv_2222222222222222222222222222222b",
+        "kind": "ollama",
+        "label": "Ollama",
+        "origin": "imported",
+        "slug": "ollama",
+        "synthetic": false
+      }
+    ],
+    "schema_version": 1,
+    "workload_routes": {
+      "chat-v1": {
+        "model": "acme-1",
+        "target": {
+          "kind": "provider",
+          "value": "acme-llm"
+        }
+      },
+      "cheap-v1": {
+        "target": {
+          "kind": "local",
+          "value": null
+        }
+      },
+      "code-v1": {
+        "model": "sonnet",
+        "target": {
+          "kind": "cli",
+          "value": "claude_code"
+        }
+      },
+      "gone-v1": {
+        "model": "model",
+        "target": {
+          "kind": "provider",
+          "value": "removed"
+        }
+      }
+    }
+  },
+  "credentials": [],
+  "health": {
+    "acme-llm": {
+      "reason": "auth",
+      "state": "down"
+    },
+    "openrouter": {
+      "state": "ok"
+    }
+  },
+  "loss": {
+    "entries": [
+      {
+        "detail": "a legacy kind spelling was mapped to its catalogue kind",
+        "kind": "normalised",
+        "source_key": "inference/providers/acme-llm"
+      },
+      {
+        "detail": "the row names different models per tier; none was chosen and the map is kept under legacy.tier_models",
+        "kind": "ambiguous",
+        "source_key": "inference/providers/acme-llm"
+      },
+      {
+        "detail": "a CLI login is a route target, not a provider record",
+        "kind": "dropped",
+        "source_key": "inference/providers/claude-code"
+      },
+      {
+        "detail": "entry zero is the managed provider, which the hub always lists; no separate record was made",
+        "kind": "synthesised",
+        "source_key": "inference/config"
+      },
+      {
+        "detail": "the route names a provider that is not configured; the turn will fail closed",
+        "kind": "fail_closed",
+        "source_key": "inference/routes/gone-v1"
+      },
+      {
+        "detail": "a route to the default is the absence of a route",
+        "kind": "dropped",
+        "source_key": "inference/routes/reasoning-v1"
+      },
+      {
+        "detail": "health timestamps are not carried over; only the states are",
+        "kind": "dropped",
+        "source_key": "inference/health"
+      }
+    ]
+  },
+  "overrides": []
+}

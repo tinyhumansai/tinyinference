@@ -1,0 +1,112 @@
+[package]
+name = "tinyinference-hub"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "One provider hub for TinyInference hosts: taxonomy, catalogue, typed errors, endpoint policy, operations, health, routes and a chat-model factory."
+documentation = "https://docs.rs/tinyinference-hub"
+readme = "README.md"
+keywords = ["llm", "inference", "providers", "catalogue"]
+categories = ["api-bindings", "asynchronous"]
+
+[dependencies]
+# Port traits (`Http`, `CredentialStore`, `KindDriver`, ...) are async and
+# object-safe.
+async-trait = { workspace = true }
+# The library uses only `tokio::sync` (the catalog cache's single-flight lock
+# and the health tracker's per-provider lock). The workspace enables tokio's
+# `macros`, `process`, `rt-multi-thread`, `sync` and `time`, and Cargo cannot
+# narrow an inherited dependency, so the others are enabled but unused by this
+# crate; its tests use the runtime macros.
+tokio = { workspace = true }
+# Structured, redacted diagnostics.
+tracing = { workspace = true }
+# HTTP-date `Retry-After` values, resolved against a supplied instant.
+httpdate = { workspace = true }
+# `HubError` maps llm's error in, and the taxonomy bridges its provider kinds.
+tinyinference-llm = { version = "0.3.0", path = "../tinyinference-llm" }
+# Serialisable taxonomy, descriptors, and (later) the persisted hub config.
+serde = { workspace = true }
+serde_json = { workspace = true }
+# The hub's own typed error enum.
+thiserror = { workspace = true }
+# Endpoint parsing for the SSRF policy and credential scrubbing.
+url = { workspace = true }
+# The reference `Http` (feature `http-reqwest`): pinned connections, no
+# automatic redirects.
+reqwest = { workspace = true, optional = true }
+# Bridges `LocalRuntime` to the other crates' local-runtime enums
+# (feature `local-bridge`).
+tinyinference-local = { version = "0.3.0", path = "../tinyinference-local", optional = true }
+
+[dev-dependencies]
+# Concurrent-callers cases (`join_all`) in the cache and simulation tests.
+futures = { workspace = true }
+# The compat guard matches embeddings' frozen error exhaustively.
+tinyinference-embeddings = { version = "0.3.0", path = "../tinyinference-embeddings" }
+# Builds canned `reqwest::Response` values for the `http-reqwest` tests, which
+# use no socket.
+http = "1"
+# Property tests for parsers, classifiers, and redaction (the workspace has no
+# proptest entry, so this dev-dependency is declared here).
+proptest = { version = "1", default-features = false, features = ["std"] }
+
+[features]
+default = []
+# The `ProcessSpawner` port for CLI-login readiness (the readiness check itself
+# arrives with `Hub`); off by default.
+cli = []
+# Types only. No OAuth flow is ever enabled by this feature.
+oauth = []
+# The no-socket simulation kit: `FakeClock`, `ScriptedHttp`, the contract suite.
+testing = []
+# `From`/`TryFrom` bridges to `tinyinference-local`'s enums.
+local-bridge = ["dep:tinyinference-local"]
+# Reference `Http` implementation over reqwest (`ReqwestHttp`).
+http-reqwest = ["dep:reqwest"]
+
+[lints]
+workspace = true
+
+# The contract suite drives the public testkit, so it only builds with it.
+[[test]]
+name = "contract_kinds"
+required-features = ["testing"]
+
+[[test]]
+name = "sim_engine"
+required-features = ["testing"]
+
+[[test]]
+name = "sim_random"
+required-features = ["testing"]
+
+[[test]]
+name = "sim_hub"
+required-features = ["testing"]
+
+[[test]]
+name = "contract_hub"
+required-features = ["testing"]
+
+[[test]]
+name = "example_minimal_host"
+required-features = ["testing"]
+
+[[example]]
+name = "minimal_host"
+required-features = ["testing"]
+
+[[test]]
+name = "scenario_catalogue"
+required-features = ["testing"]
+
+[[test]]
+name = "guards_engine"
+required-features = ["testing"]
+
+[[test]]
+name = "use_cases"
+required-features = ["testing"]
