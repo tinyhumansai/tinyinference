@@ -41,6 +41,7 @@ mod types;
 // OpenAI-compatible endpoint. Providers with a different wire protocol would be
 // added behind their own Cargo feature.
 pub mod anthropic;
+pub mod omission;
 pub mod openai;
 // #[cfg(feature = "ollama")]    pub mod ollama;
 

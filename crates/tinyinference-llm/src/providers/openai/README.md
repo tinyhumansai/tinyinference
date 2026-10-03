@@ -44,6 +44,14 @@ of the rest of TinyInference.
   Anthropic API), `groq`, `xai`, `openrouter`, `together`, `mistral`, `ollama`.
   Override the preset's default model with `.with_model(..)`.
 
+**Rotating credentials.** `.with_bearer_source(Arc<dyn providers::BearerSource>)`
+replaces the constructor's static key with a value read on **every** request
+(a projected platform token, a session JWT), so a rotation never needs a
+rebuild and the connection pool and learned state survive it. The value is sent
+per the configured `AuthStyle` exactly as the static key would be, `with_header`
+headers are still attached, a source yielding `None` sends no credential header,
+and a 401 calls `BearerSource::invalidate` so the next request re-reads.
+
 Accessors: `.model()`, `.provider()`, `.base_url()`.
 
 ## Model discovery
@@ -110,6 +118,33 @@ unary and streaming paths, and never loops — at most one degraded retry per
 call, and only for the shape the request actually used. This means unmodified
 `from_env()` / preset instances "just work" against LM Studio and friends
 without any per-provider configuration.
+
+## Adaptive parameter omission
+
+Static knowledge of which model takes which parameter
+(`with_temperature_unsupported_models`, the o-series/`gpt-5`
+`max_completion_tokens` rename) goes stale as vendors change models. When a
+Chat Completions call fails with an HTTP 400 whose error **message** names one
+of the optional fields that request actually sent — `temperature`, `top_p`,
+`seed`, `max_tokens`, `max_completion_tokens`, `reasoning_effort` — next to a
+rejection phrase (`unsupported`, `not supported`, `unknown parameter`, ...):
+
+1. that one field is dropped and the request is retried **once** (unary and
+   streaming paths alike; at most one retry per call, shared with the
+   request-shape degradation above, which takes precedence);
+2. the omission is remembered process-wide for that endpoint and model, so every
+   later request there leaves the field off up front — across `OpenAiModel`
+   instances.
+
+Messages, tools, `stop` and `response_format` are never dropped, a
+context-overflow 400 is never read as a rejection (those routinely name
+`max_tokens`), and a field injected by the host's `on_payload` hook is never
+stripped. The learning key is the endpoint's scheme, host, port and base path
+(operation suffixes such as `/chat/completions` removed) plus the model id, so
+two gateways serving the same id do not share what one of them rejected. The
+evidence rule and the store live in `providers::omission`
+(`parameter_blamed_by`, `remember_omit`, `is_omitted`) for hosts that build
+their own wire bodies.
 
 ## Inline reasoning-tag extraction
 

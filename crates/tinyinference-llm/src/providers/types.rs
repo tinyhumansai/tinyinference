@@ -76,6 +76,42 @@ impl std::fmt::Debug for ProviderRequestOptions {
 }
 
 // ---------------------------------------------------------------------------
+// Per-request credentials
+// ---------------------------------------------------------------------------
+
+/// A credential read on **every** request instead of baked into an adapter at
+/// construction time.
+///
+/// A platform token that rotates in place (a projected service-account file, a
+/// session JWT, an OAuth access token) changes value while the identity behind
+/// it does not. Holding it as a `String` forces a host to rebuild the adapter —
+/// and lose its connection pool and learned state — on every rotation. An
+/// adapter given a source instead (see `OpenAiModel::with_bearer_source`) asks
+/// it for the current value immediately before each call and places that
+/// value exactly where its static key would go, honouring the adapter's
+/// configured auth style (`Authorization: Bearer`, `x-api-key`, a custom
+/// header).
+///
+/// Implementations should cache cheaply-reused values themselves; the adapter
+/// calls [`Self::current`] once per HTTP request.
+#[async_trait::async_trait]
+pub trait BearerSource: Send + Sync {
+    /// The credential to present on the next request, or `None` to send no
+    /// credential header at all (for example a keyless local endpoint).
+    ///
+    /// # Errors
+    ///
+    /// Any error fails the call before a request is sent; the adapter surfaces
+    /// it unchanged.
+    async fn current(&self) -> crate::Result<Option<String>>;
+
+    /// Told that the endpoint rejected the last credential with HTTP 401, so a
+    /// cached value can be dropped and the next [`Self::current`] re-reads it
+    /// rather than re-presenting what was just refused. A no-op by default.
+    fn invalidate(&self) {}
+}
+
+// ---------------------------------------------------------------------------
 // Provider selection types
 // ---------------------------------------------------------------------------
 

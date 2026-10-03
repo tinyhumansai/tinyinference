@@ -125,37 +125,43 @@ fn explicit_reasoning_provider_option_wins_over_the_budget_on_openrouter() {
     assert_eq!(body["reasoning"], json!({ "effort": "low" }), "body={body}");
 }
 
+/// Reads one HTTP/1.1 request (head plus a `content-length` body) off `sock`.
+fn read_request(sock: &mut std::net::TcpStream) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let mut tmp = [0u8; 4096];
+    loop {
+        let n = sock.read(&mut tmp).unwrap();
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&tmp[..n]);
+        let Some(split) = buf.windows(4).position(|w| w == b"\r\n\r\n") else {
+            continue;
+        };
+        let head = String::from_utf8_lossy(&buf[..split]).to_ascii_lowercase();
+        let len = head
+            .lines()
+            .find_map(|l| {
+                l.strip_prefix("content-length:")?
+                    .trim()
+                    .parse::<usize>()
+                    .ok()
+            })
+            .unwrap_or(0);
+        if buf.len() >= split + 4 + len {
+            break;
+        }
+    }
+    buf
+}
+
 /// Serves one canned chat completion and returns the raw request it received.
 fn serve_once() -> (String, std::thread::JoinHandle<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}/v1", listener.local_addr().unwrap());
     let handle = std::thread::spawn(move || {
         let (mut sock, _) = listener.accept().unwrap();
-        let mut buf = Vec::new();
-        let mut tmp = [0u8; 4096];
-        loop {
-            let n = sock.read(&mut tmp).unwrap();
-            if n == 0 {
-                break;
-            }
-            buf.extend_from_slice(&tmp[..n]);
-            let Some(split) = buf.windows(4).position(|w| w == b"\r\n\r\n") else {
-                continue;
-            };
-            let head = String::from_utf8_lossy(&buf[..split]).to_ascii_lowercase();
-            let len = head
-                .lines()
-                .find_map(|l| {
-                    l.strip_prefix("content-length:")?
-                        .trim()
-                        .parse::<usize>()
-                        .ok()
-                })
-                .unwrap_or(0);
-            if buf.len() >= split + 4 + len {
-                break;
-            }
-        }
+        let buf = read_request(&mut sock);
         let payload = json!({
             "id": "chatcmpl-test",
             "object": "chat.completion",
@@ -329,31 +335,7 @@ fn serve_error_once(status: u16, body: &'static str) -> String {
     let base = format!("http://{}/v1", listener.local_addr().unwrap());
     std::thread::spawn(move || {
         let (mut sock, _) = listener.accept().unwrap();
-        let mut buf = Vec::new();
-        let mut tmp = [0u8; 4096];
-        loop {
-            let n = sock.read(&mut tmp).unwrap();
-            if n == 0 {
-                break;
-            }
-            buf.extend_from_slice(&tmp[..n]);
-            let Some(split) = buf.windows(4).position(|w| w == b"\r\n\r\n") else {
-                continue;
-            };
-            let head = String::from_utf8_lossy(&buf[..split]).to_ascii_lowercase();
-            let len = head
-                .lines()
-                .find_map(|l| {
-                    l.strip_prefix("content-length:")?
-                        .trim()
-                        .parse::<usize>()
-                        .ok()
-                })
-                .unwrap_or(0);
-            if buf.len() >= split + 4 + len {
-                break;
-            }
-        }
+        read_request(&mut sock);
         let response = format!(
             "HTTP/1.1 {status} Error\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
             body.len()
@@ -430,4 +412,354 @@ async fn overflow_without_stamped_code_still_records_the_window() {
     let learned = crate::model::discover::cached_model_limits(&base, "vllm-unstamped-model")
         .expect("window learned from the message itself");
     assert_eq!(learned.context_window, Some(32_768));
+}
+
+// ---------------------------------------------------------------------------
+// Adaptive parameter omission (a 400 that names a parameter we sent)
+// ---------------------------------------------------------------------------
+
+/// A canned chat completion body, shared by the multi-response server tests.
+fn completion_body() -> String {
+    json!({
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "model": "m",
+        "choices": [{
+            "index": 0,
+            "message": { "role": "assistant", "content": "Hello!" },
+            "finish_reason": "stop"
+        }]
+    })
+    .to_string()
+}
+
+/// Serves `responses` in order, one connection each, and returns the raw
+/// requests received. The listener closes after the last one, so an extra
+/// attempt surfaces as a transport error rather than a canned answer.
+fn serve_sequence(responses: Vec<(u16, String)>) -> (String, std::thread::JoinHandle<Vec<String>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}/v1", listener.local_addr().unwrap());
+    let handle = std::thread::spawn(move || {
+        let mut received = Vec::new();
+        for (status, body) in responses {
+            let (mut sock, _) = listener.accept().unwrap();
+            received.push(String::from_utf8_lossy(&read_request(&mut sock)).into_owned());
+            let response = format!(
+                "HTTP/1.1 {status} Canned\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = sock.write_all(response.as_bytes());
+        }
+        received
+    });
+    (base, handle)
+}
+
+fn request_body(raw: &str) -> Value {
+    serde_json::from_str(raw.split("\r\n\r\n").nth(1).unwrap()).unwrap()
+}
+
+fn unsupported(parameter: &str) -> String {
+    json!({
+        "error": {
+            "message": format!("Unsupported parameter: '{parameter}' is not supported with this model."),
+            "type": "invalid_request_error",
+            "param": parameter,
+            "code": "unsupported_parameter"
+        }
+    })
+    .to_string()
+}
+
+#[tokio::test]
+async fn a_rejected_parameter_is_dropped_and_the_request_retried_once() {
+    let (base, server) = serve_sequence(vec![
+        (400, unsupported("temperature")),
+        (200, completion_body()),
+    ]);
+    let model = OpenAiModel::new("k").with_base_url(&base);
+
+    let response = model
+        .invoke(&(), request("omission-retry-model", 0.7))
+        .await
+        .unwrap();
+    assert_eq!(response.text(), "Hello!");
+
+    let raw = server.join().unwrap();
+    assert_eq!(raw.len(), 2, "one rejection, one retry");
+    let first = request_body(&raw[0]);
+    let retry = request_body(&raw[1]);
+    assert_eq!(first["temperature"], json!(0.7));
+    assert!(retry.get("temperature").is_none(), "retry={retry}");
+    // Only the blamed parameter goes: the question asked is unchanged.
+    assert_eq!(retry["model"], first["model"]);
+    assert_eq!(retry["messages"], first["messages"]);
+    assert!(super::super::omission::is_omitted(
+        &base,
+        "omission-retry-model",
+        "temperature"
+    ));
+}
+
+#[tokio::test]
+async fn a_learned_omission_is_applied_up_front_on_the_next_request() {
+    let (base, server) = serve_sequence(vec![
+        (400, unsupported("max_tokens")),
+        (200, completion_body()),
+        (200, completion_body()),
+    ]);
+    let request = || request("omission-learned-model", 0.5).with_max_tokens(64);
+
+    let first = OpenAiModel::new("k").with_base_url(&base);
+    first.invoke(&(), request()).await.unwrap();
+    // A separate instance: what was learnt belongs to the endpoint and model,
+    // not to one adapter value.
+    let second = OpenAiModel::new("k").with_base_url(&base);
+    second.invoke(&(), request()).await.unwrap();
+
+    let raw = server.join().unwrap();
+    assert_eq!(raw.len(), 3, "no round-trip is spent re-learning");
+    let later = request_body(&raw[2]);
+    assert!(later.get("max_tokens").is_none(), "later={later}");
+    assert_eq!(later["temperature"], json!(0.5), "nothing else is dropped");
+}
+
+#[tokio::test]
+async fn only_one_omission_retry_is_spent() {
+    let (base, server) = serve_sequence(vec![
+        (400, unsupported("temperature")),
+        (400, unsupported("seed")),
+    ]);
+    let model = OpenAiModel::new("k").with_base_url(&base);
+    let error = model
+        .invoke(
+            &(),
+            request("omission-single-retry-model", 0.3).with_seed(7),
+        )
+        .await
+        .unwrap_err();
+
+    // The second rejection is what surfaces: had a third attempt been made it
+    // would have failed on the closed listener instead.
+    match error {
+        Error::Provider(error) => {
+            assert_eq!(error.status, Some(400));
+            assert!(error.message.contains("'seed'"), "{}", error.message);
+        }
+        other => panic!("expected a provider error, got {other:?}"),
+    }
+    assert_eq!(server.join().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn a_rejection_naming_nothing_we_sent_is_not_retried() {
+    let (base, server) = serve_sequence(vec![(400, unsupported("logit_bias"))]);
+    let model = OpenAiModel::new("k").with_base_url(&base);
+    assert!(
+        model
+            .invoke(&(), request("omission-unrelated-model", 0.3))
+            .await
+            .is_err()
+    );
+    assert_eq!(server.join().unwrap().len(), 1);
+    assert!(!super::super::omission::is_omitted(
+        &base,
+        "omission-unrelated-model",
+        "temperature"
+    ));
+}
+
+#[tokio::test]
+async fn a_context_overflow_never_drops_the_output_cap() {
+    // Overflow messages routinely name `max_tokens`; dropping (and
+    // remembering) the cap over one would uncap every later request.
+    let overflow = json!({
+        "error": {
+            "message": "This model's maximum context length is 4096 tokens. 'max_tokens' is unsupported at 9000.",
+            "type": "invalid_request_error"
+        }
+    })
+    .to_string();
+    let (base, server) = serve_sequence(vec![(400, overflow)]);
+    let model = OpenAiModel::new("k").with_base_url(&base);
+    assert!(
+        model
+            .invoke(
+                &(),
+                request("omission-overflow-model", 0.3).with_max_tokens(9000)
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(server.join().unwrap().len(), 1);
+    assert!(!super::super::omission::is_omitted(
+        &base,
+        "omission-overflow-model",
+        "max_tokens"
+    ));
+}
+
+#[tokio::test]
+async fn the_streaming_path_retries_a_rejected_parameter_too() {
+    let (base, server) =
+        serve_sequence(vec![(400, unsupported("top_p")), (200, completion_body())]);
+    let model = OpenAiModel::new("k").with_base_url(&base);
+    let mut stream = model
+        .stream(&(), request("omission-stream-model", 0.3).with_top_p(0.9))
+        .await
+        .unwrap();
+    let mut completed = None;
+    while let Some(item) = stream.next().await {
+        if let crate::model::ModelStreamItem::Completed(response) = item {
+            completed = Some(response);
+        }
+    }
+    assert_eq!(completed.unwrap().text(), "Hello!");
+
+    let raw = server.join().unwrap();
+    assert_eq!(raw.len(), 2);
+    assert!(request_body(&raw[1]).get("top_p").is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Per-request credentials (BearerSource)
+// ---------------------------------------------------------------------------
+
+/// A rotating credential: yields `token-1`, `token-2`, ... and counts how
+/// often it was told its value was rejected.
+#[derive(Default)]
+struct RotatingToken {
+    reads: std::sync::atomic::AtomicUsize,
+    invalidations: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl crate::providers::BearerSource for RotatingToken {
+    async fn current(&self) -> crate::Result<Option<String>> {
+        let n = self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        Ok(Some(format!("token-{n}")))
+    }
+
+    fn invalidate(&self) {
+        self.invalidations
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// A source that has nothing to present (a keyless endpoint).
+struct NoToken;
+
+#[async_trait::async_trait]
+impl crate::providers::BearerSource for NoToken {
+    async fn current(&self) -> crate::Result<Option<String>> {
+        Ok(None)
+    }
+}
+
+/// A source that cannot produce a credential at all.
+struct BrokenToken;
+
+#[async_trait::async_trait]
+impl crate::providers::BearerSource for BrokenToken {
+    async fn current(&self) -> crate::Result<Option<String>> {
+        Err(Error::Model("token file unreadable".to_string()))
+    }
+}
+
+#[tokio::test]
+async fn a_bearer_source_is_read_on_every_request() {
+    let (base, server) = serve_sequence(vec![(200, completion_body()), (200, completion_body())]);
+    let model = OpenAiModel::new("static-key")
+        .with_base_url(&base)
+        .with_bearer_source(std::sync::Arc::new(RotatingToken::default()));
+
+    model.invoke(&(), request("gpt-4o", 0.2)).await.unwrap();
+    model.invoke(&(), request("gpt-4o", 0.2)).await.unwrap();
+
+    let raw = server.join().unwrap();
+    assert_eq!(
+        header_value(&raw[0], "authorization").as_deref(),
+        Some("Bearer token-1")
+    );
+    assert_eq!(
+        header_value(&raw[1], "authorization").as_deref(),
+        Some("Bearer token-2"),
+        "a rotated credential is picked up without rebuilding the model"
+    );
+}
+
+#[tokio::test]
+async fn a_bearer_source_is_sent_in_the_configured_auth_style() {
+    let (base, server) = serve_sequence(vec![(200, completion_body())]);
+    let model = OpenAiModel::new("static-key")
+        .with_base_url(&base)
+        .with_auth_style(AuthStyle::XApiKey)
+        .with_header("x-extra", "kept")
+        .with_bearer_source(std::sync::Arc::new(RotatingToken::default()));
+
+    model.invoke(&(), request("gpt-4o", 0.2)).await.unwrap();
+
+    let raw = server.join().unwrap();
+    assert_eq!(
+        header_value(&raw[0], "x-api-key").as_deref(),
+        Some("token-1")
+    );
+    assert_eq!(header_value(&raw[0], "authorization"), None);
+    assert_eq!(header_value(&raw[0], "x-extra").as_deref(), Some("kept"));
+}
+
+#[tokio::test]
+async fn a_bearer_source_with_nothing_to_present_sends_no_credentials() {
+    let (base, server) = serve_sequence(vec![(200, completion_body())]);
+    let model = OpenAiModel::new("static-key")
+        .with_base_url(&base)
+        .with_bearer_source(std::sync::Arc::new(NoToken));
+
+    model.invoke(&(), request("llama3", 0.2)).await.unwrap();
+
+    let raw = server.join().unwrap();
+    assert_eq!(header_value(&raw[0], "authorization"), None, "{}", raw[0]);
+}
+
+#[tokio::test]
+async fn a_rejected_bearer_is_invalidated_at_its_source() {
+    let (base, server) = serve_sequence(vec![(
+        401,
+        r#"{"error":{"message":"invalid token"}}"#.to_string(),
+    )]);
+    let source = std::sync::Arc::new(RotatingToken::default());
+    let model = OpenAiModel::new("")
+        .with_base_url(&base)
+        .with_bearer_source(source.clone());
+
+    assert!(model.invoke(&(), request("gpt-4o", 0.2)).await.is_err());
+    server.join().unwrap();
+    assert_eq!(
+        source
+            .invalidations
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the next request must re-read rather than re-present a refused token"
+    );
+}
+
+#[tokio::test]
+async fn a_failing_bearer_source_fails_the_call() {
+    let model = OpenAiModel::new("static-key")
+        .with_base_url("http://127.0.0.1:9/v1")
+        .with_bearer_source(std::sync::Arc::new(BrokenToken));
+    let error = model.invoke(&(), request("gpt-4o", 0.2)).await.unwrap_err();
+    assert!(
+        error.to_string().contains("token file unreadable"),
+        "{error}"
+    );
+}
+
+#[test]
+fn debug_output_reports_a_bearer_source_without_reading_it() {
+    let model = OpenAiModel::new("static-key")
+        .with_bearer_source(std::sync::Arc::new(RotatingToken::default()));
+    let debug = format!("{model:?}");
+    assert!(debug.contains("bearer_source: true"), "{debug}");
+    assert!(!debug.contains("static-key"), "{debug}");
 }

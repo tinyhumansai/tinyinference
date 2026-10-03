@@ -19,6 +19,15 @@
   `reasoning_effort` is omitted, since OpenRouter takes one or the other).
   Other OpenAI-compatible endpoints still drop the budget, and an explicit
   `reasoning` provider option still wins.
+- OpenAI-compatible chat: adaptive parameter omission. A 400 whose message
+  names an optional field the request sent (`temperature`, `top_p`, `seed`,
+  `max_tokens`, `max_completion_tokens`, `reasoning_effort`) drops that field,
+  retries once, and remembers the omission for that endpoint and model. The
+  evidence rule and the process-wide store are public as
+  `providers::omission::{parameter_blamed_by, remember_omit, is_omitted}`.
+- `providers::BearerSource` and `OpenAiModel::with_bearer_source`: a credential
+  read per request (honouring `AuthStyle`, invalidated on 401) so a rotating
+  token no longer forces rebuilding the model.
 - Anthropic: a request carrying both a reasoning `effort` and `budget_tokens`
   now keeps adaptive thinking with that effort, byte-identical to the
   effort-only request. Fixed-budget thinking is used only when no effort is
