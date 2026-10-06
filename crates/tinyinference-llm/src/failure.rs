@@ -371,6 +371,40 @@ fn indicates_terminal_request(lower: &str) -> bool {
             .any(|hint| lower.contains(hint)))
 }
 
+/// Whether the provider itself said the condition is transient and named a
+/// retry.
+///
+/// Provider-neutral on purpose: it keys on the retry instruction, not on who
+/// sent it or why. A 4xx is normally a permanent caller error, which is why the
+/// blanket `400..500` arm below classifies one as [`ProviderFailureClass::NonRetryable`],
+/// but a provider that returns a 4xx *and* tells the caller to retry is
+/// describing a momentary condition on its own side — a concurrency or
+/// reservation window — and the body is the only place that distinction is
+/// carried.
+///
+/// Observed as a `402` whose body read "This request would exceed your
+/// available credits given your current in-flight requests. Retry after
+/// in-flight requests settle, or add credits." It is a credit *reservation*
+/// held against requests still outstanding, not an empty account; the next call
+/// succeeds. Classified non-retryable it discarded a 34-minute, 96-call agent
+/// run on its 97th call with the account at $13.76 of $40.
+///
+/// Gated on the absence of a terminal indicator, so "invalid api key — fix it
+/// and try again" stays permanent: an instruction to retry *after changing
+/// something* is not an instruction to retry the same request.
+fn indicates_provider_requested_retry(lower: &str) -> bool {
+    [
+        "retry after",
+        "please retry",
+        "retry the request",
+        "retry in",
+        "try again in",
+    ]
+    .iter()
+    .any(|hint| lower.contains(hint))
+        && !indicates_terminal_request(lower)
+}
+
 /// Classifies a provider failure from status, code, and message detail.
 pub fn classify_provider_failure(
     status: Option<u16>,
@@ -406,6 +440,12 @@ pub fn classify_provider_failure(
         || (!has_structured_status && !has_structured_code && indicates_upstream_failure(&lower))
     {
         return ProviderFailureClass::UpstreamUnhealthy;
+    }
+
+    // Before the blanket 4xx arm: a provider that asks for a retry is
+    // describing its own momentary state, which the status code cannot express.
+    if indicates_provider_requested_retry(&lower) {
+        return ProviderFailureClass::RateLimited;
     }
 
     if status.is_some_and(|value| (400..500).contains(&value))

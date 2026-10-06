@@ -532,3 +532,55 @@ fn context_window_matches_dashscope_input_length_range() {
                 \"message\":\"Range of input length should be [1, 98304]\"}}";
     assert!(is_context_window_exceeded_message(body));
 }
+
+#[test]
+fn a_provider_that_asks_for_a_retry_is_retryable_despite_a_4xx() {
+    // The observed body: a credit *reservation* held against requests still in
+    // flight, not an empty account. Classified non-retryable by the blanket 4xx
+    // arm it discarded a 34-minute, 96-call agent run on its 97th call with the
+    // account at $13.76 of $40.
+    assert_eq!(
+        classify_provider_failure(
+            Some(402),
+            None,
+            "This request would exceed your available credits given your current in-flight \
+             requests. Retry after in-flight requests settle, or add credits."
+        ),
+        ProviderFailureClass::RateLimited
+    );
+    assert!(
+        classify_provider_failure(Some(402), None, "Retry after in-flight requests settle")
+            .is_retryable()
+    );
+}
+
+#[test]
+fn an_empty_account_stays_terminal_when_no_retry_is_offered() {
+    for body in [
+        "Insufficient Balance",
+        "402 Payment Required",
+        "your account requires more credits to run this request",
+    ] {
+        assert!(
+            !classify_provider_failure(Some(402), None, body).is_retryable(),
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn a_retry_that_requires_fixing_something_first_stays_terminal() {
+    // "retry" after a terminal cause is not an instruction to retry the SAME
+    // request, so the terminal indicator wins.
+    for body in [
+        "invalid api key — correct it and please retry",
+        "unauthorized; retry after re-authenticating",
+        "model not found, try again in a supported region",
+    ] {
+        assert_eq!(
+            classify_provider_failure(Some(401), None, body),
+            ProviderFailureClass::NonRetryable,
+            "{body}"
+        );
+    }
+}
