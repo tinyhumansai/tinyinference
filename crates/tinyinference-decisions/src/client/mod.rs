@@ -22,8 +22,10 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::InvalidConfig`] for an empty key, invalid base URL,
-    /// zero timeout, or invalid retry policy.
+    /// Returns [`Error::InvalidConfig`] for an empty key (except for
+    /// [`Provider::SelfHosted`]), invalid base or endpoint URL, a self-hosted
+    /// configuration without an endpoint URL, zero timeout, or invalid retry
+    /// policy.
     pub fn new(config: ClientConfig) -> Result<Self> {
         config.validate()?;
         let http = reqwest::Client::builder()
@@ -140,11 +142,11 @@ impl Client {
                 self.config.system_one_path
             )
         });
-        let mut builder = self
-            .http
-            .post(&url)
-            .bearer_auth(self.config.api_key.expose())
-            .json(request);
+        let mut builder = self.http.post(&url).json(request);
+        let api_key = self.config.api_key.expose();
+        if !(self.config.provider == Provider::SelfHosted && api_key.trim().is_empty()) {
+            builder = builder.bearer_auth(api_key);
+        }
         if let Some(name) = self.config.sdk_name.as_deref()
             && is_tinyhumans_proxy_endpoint(&url)
         {
@@ -159,7 +161,9 @@ impl Client {
         request: &EvaluationRequest,
     ) -> Result<()> {
         match self.config.provider {
-            Provider::TypeSafe | Provider::OpenJev => response.validate_for(request),
+            Provider::TypeSafe | Provider::OpenJev | Provider::SelfHosted => {
+                response.validate_for(request)
+            }
             Provider::OpenRouter => response.validate_for_openrouter(request),
         }
     }
@@ -268,9 +272,14 @@ fn is_tinyhumans_proxy_endpoint(raw: &str) -> bool {
 
 impl ClientConfig {
     fn validate(&self) -> Result<()> {
-        if self.api_key.expose().trim().is_empty() {
+        if self.provider != Provider::SelfHosted && self.api_key.expose().trim().is_empty() {
             return Err(Error::InvalidConfig {
                 reason: "api key must not be empty".to_owned(),
+            });
+        }
+        if self.provider == Provider::SelfHosted && self.endpoint_url.is_none() {
+            return Err(Error::InvalidConfig {
+                reason: "self-hosted provider requires an endpoint URL".to_owned(),
             });
         }
         validate_url(&self.base_url, "base URL")?;

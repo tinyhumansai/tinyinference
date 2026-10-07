@@ -18,6 +18,14 @@ pub enum Provider {
     OpenRouter,
     /// OpenJEV's public System One API.
     OpenJev,
+    /// An operator-declared, Jev-compatible System One endpoint, such as a
+    /// self-hosted open decision model.
+    ///
+    /// It has no conventional route, so an exact endpoint URL is required. The
+    /// response must echo the requested model id, as with `TypeSafe`. The API
+    /// key may be empty for an unauthenticated local server, in which case no
+    /// `Authorization` header is sent.
+    SelfHosted,
 }
 
 /// Async `TypeSafe` System One client.
@@ -96,6 +104,31 @@ impl ClientConfig {
             system_one_path: DEFAULT_SYSTEM_ONE_PATH,
             endpoint_url: None,
             provider: Provider::OpenJev,
+            timeout: Duration::from_secs(30),
+            retry: RetryPolicy::default(),
+            sdk_name: None,
+        }
+    }
+
+    /// Create configuration for a self-hosted, Jev-compatible System One
+    /// endpoint.
+    ///
+    /// `endpoint_url` is the exact evaluation URL; no provider path is
+    /// appended. It must be HTTPS, or plain HTTP on a literal loopback
+    /// address. `api_key` is sent as a bearer token only to that endpoint and
+    /// may be empty when the server needs no authentication. Self-hosted
+    /// models have no default model id, so set
+    /// [`EvaluationRequest::model`](crate::EvaluationRequest::model) to the
+    /// model the server answers as.
+    #[must_use]
+    pub fn self_hosted(endpoint_url: impl Into<String>, api_key: impl Into<String>) -> Self {
+        let endpoint_url = endpoint_url.into();
+        Self {
+            api_key: ApiKey(api_key.into()),
+            base_url: endpoint_url.clone(),
+            system_one_path: DEFAULT_SYSTEM_ONE_PATH,
+            endpoint_url: Some(endpoint_url),
+            provider: Provider::SelfHosted,
             timeout: Duration::from_secs(30),
             retry: RetryPolicy::default(),
             sdk_name: None,
