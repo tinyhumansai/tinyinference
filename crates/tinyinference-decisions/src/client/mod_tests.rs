@@ -681,7 +681,12 @@ async fn self_hosted_without_a_key_sends_no_authorization_header() {
 
     client.evaluate(&request()).await.unwrap();
 
-    assert!(requests.lock().await[0].headers.get("authorization").is_none());
+    assert!(
+        requests.lock().await[0]
+            .headers
+            .get("authorization")
+            .is_none()
+    );
 }
 
 #[test]

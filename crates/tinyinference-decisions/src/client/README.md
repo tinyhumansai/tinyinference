@@ -20,3 +20,10 @@ at `https://api.tinyhumans.ai/agent-integrations/openrouter/systemone`.
 `ClientConfig::with_sdk_name` sanitizes product attribution and sends
 `x-sdk-name` only to this exact HTTPS endpoint. OpenRouter, TypeSafe, and
 other endpoint overrides do not receive it.
+
+`ClientConfig::self_hosted(endpoint_url, api_key)` targets an operator-declared,
+Jev-compatible System One endpoint such as a self-hosted open decision model.
+The endpoint is used exactly as given and must pass the same URL checks. There
+is no default model, so callers set `EvaluationRequest::model`; the response
+must echo that model id. An empty key is allowed for unauthenticated local
+servers and then no `Authorization` header is sent.
