@@ -383,6 +383,7 @@ impl AnthropicModel {
             crate::failure::classify_provider_failure(status, code.as_deref(), &message)
                 .is_retryable();
         ProviderError {
+            partial_response: None,
             provider: PROVIDER.to_string(),
             model: Some(self.request_model(request).to_string()),
             status,

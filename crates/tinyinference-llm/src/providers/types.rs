@@ -123,6 +123,8 @@ pub trait BearerSource: Send + Sync {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderKind {
+    /// Native Perplexity Agent API, including model and preset selection.
+    Perplexity,
     /// Hosted OpenAI API.
     OpenAi,
     /// Anthropic via its OpenAI-compatible Chat Completions endpoint.
@@ -159,6 +161,7 @@ impl ProviderKind {
     /// Stable provider identifier used in profiles, errors, and registry names.
     pub fn as_str(&self) -> &'static str {
         match self {
+            ProviderKind::Perplexity => "perplexity",
             ProviderKind::OpenAi => "openai",
             ProviderKind::Anthropic => "anthropic",
             ProviderKind::Ollama => "ollama",
@@ -187,6 +190,7 @@ impl ProviderKind {
         if let Some((prefix, _)) = lower.split_once(':') {
             return match prefix {
                 "openai" => Some(ProviderKind::OpenAi),
+                "perplexity" => Some(ProviderKind::Perplexity),
                 "anthropic" => Some(ProviderKind::Anthropic),
                 "ollama" => Some(ProviderKind::Ollama),
                 "lmstudio" | "lm_studio" | "lm-studio" => Some(ProviderKind::LmStudio),
@@ -232,7 +236,8 @@ pub struct ProviderSpec {
     pub kind: ProviderKind,
     /// Provider id written to profiles and normalized errors.
     pub provider: String,
-    /// Default provider model id.
+    /// Default provider model id. Empty for Perplexity, whose native adapter
+    /// requires an explicit model, fallback chain, or preset selection.
     pub model: String,
     /// API base URL without a trailing slash.
     pub base_url: String,
@@ -248,6 +253,13 @@ impl ProviderSpec {
     /// Returns the default provider spec for a known provider.
     pub fn for_kind(kind: ProviderKind) -> Self {
         match kind {
+            ProviderKind::Perplexity => Self::new(
+                kind,
+                "",
+                "https://api.perplexity.ai/v1",
+                Some("PERPLEXITY_API_KEY"),
+                true,
+            ),
             ProviderKind::OpenAi => Self::new(
                 kind,
                 "gpt-4.1-mini",
@@ -474,19 +486,17 @@ pub(crate) struct MockInner {
 /// # Placement of real providers
 ///
 /// Real network-backed providers live in sub-modules alongside this one. The
-/// OpenAI (and OpenAI-compatible) adapter is always compiled; providers with a
-/// different wire protocol would be gated behind their own Cargo feature:
+/// OpenAI-compatible, native Anthropic, and native Perplexity adapters are
+/// compiled using the workspace's existing dependencies:
 ///
 /// ```text
 /// pub mod openai;                          // always compiled
-/// // #[cfg(feature = "anthropic")] pub mod anthropic;
-/// // #[cfg(feature = "ollama")]   pub mod ollama;
+/// pub mod anthropic;
+/// pub mod perplexity;
 /// ```
 ///
-/// Add the feature flag to `Cargo.toml` and implement
-/// [`ChatModel`][crate::model::ChatModel] in the corresponding module.
-/// No changes to `mod.rs` or `harness/mod.rs` are needed beyond enabling the
-/// `pub mod` declaration.
+/// Each adapter implements [`ChatModel`][crate::model::ChatModel] and owns its
+/// protocol translation, while the caller owns provider-selection policy.
 pub struct MockModel {
     pub(crate) behavior: MockBehavior,
     pub(crate) inner: Mutex<MockInner>,

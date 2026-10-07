@@ -228,6 +228,7 @@ impl<State: Send + Sync> ChatModel<State> for MockModel {
 
             MockBehavior::ToolCall { name, arguments } => {
                 let tool_call = ToolCall {
+                    replay: None,
                     id: format!("mock-tool-{call_id}"),
                     name: name.clone(),
                     arguments: arguments.clone(),
@@ -242,6 +243,8 @@ impl<State: Send + Sync> ChatModel<State> for MockModel {
                     origin: None,
                 };
                 ModelResponse {
+                    output: Vec::new(),
+                    execution: None,
                     message,
                     usage: Some(usage),
                     finish_reason: Some("tool_calls".to_string()),
@@ -350,6 +353,8 @@ impl MockModel {
         let s = text.into();
         let output_tokens = estimate_output_tokens(&s);
         ModelResponse {
+            output: Vec::new(),
+            execution: None,
             message: AssistantMessage {
                 id: None,
                 content: vec![ContentBlock::Text(s)],

@@ -1325,6 +1325,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "futures",
+ "http",
  "reqwest",
  "serde",
  "serde_json",

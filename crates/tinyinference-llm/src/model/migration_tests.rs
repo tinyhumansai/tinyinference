@@ -327,6 +327,7 @@ async fn every_terminal_stream_item_disarms_its_abort_guard() {
         ModelStreamItem::Completed(ModelResponse::assistant("done")),
         ModelStreamItem::Failed("failed".to_string()),
         ModelStreamItem::ProviderFailed(ProviderError {
+            partial_response: None,
             provider: "mock".to_string(),
             message: "provider failed".to_string(),
             ..ProviderError::default()
@@ -359,6 +360,8 @@ async fn observer_reports_each_terminal_outcome_once() {
 
     let cached = ObservingModel::new(
         Arc::new(RecordingModel::new(ModelResponse {
+            output: Vec::new(),
+            execution: None,
             served_from_cache: true,
             ..ModelResponse::assistant("cached")
         })),
@@ -449,6 +452,8 @@ async fn observer_streams_report_one_terminal_outcome_with_stream_metadata() {
     let cached = ObservingModel::new(
         Arc::new(ScriptedStreamModel::new(
             vec![ModelStreamItem::Completed(ModelResponse {
+                output: Vec::new(),
+                execution: None,
                 served_from_cache: true,
                 ..ModelResponse::assistant("cached")
             })],
@@ -466,6 +471,7 @@ async fn observer_streams_report_one_terminal_outcome_with_stream_metadata() {
     let provider_failed = ObservingModel::new(
         Arc::new(ScriptedStreamModel::new(
             vec![ModelStreamItem::ProviderFailed(ProviderError {
+                partial_response: None,
                 provider: "mock".to_string(),
                 message: "provider failed".to_string(),
                 ..ProviderError::default()

@@ -74,6 +74,8 @@ pub(crate) fn parse_response(body: Value) -> Result<ModelResponse> {
         }
     }
     Ok(ModelResponse {
+        output: Vec::new(),
+        execution: None,
         message: AssistantMessage {
             id: Some(id),
             content,

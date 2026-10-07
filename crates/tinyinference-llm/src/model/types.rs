@@ -813,8 +813,14 @@ pub struct ModelRequest {
 }
 
 /// A provider-neutral chat model response.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ModelResponse {
+    /// Complete ordered provider output. Empty for legacy providers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub output: Vec<super::ModelOutputItem>,
+    /// Execution identity, status and detailed provider usage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<super::ModelExecution>,
     /// The assistant message produced by the model.
     pub message: AssistantMessage,
     /// Token usage, when reported.
@@ -883,6 +889,9 @@ pub struct ModelDelta {
 /// in [`ProviderError::raw`].
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ProviderError {
+    /// Full partial response, including hosted output and recovery identifiers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partial_response: Option<Box<ModelResponse>>,
     /// Provider family identifier, for example `openai` or `ollama`.
     pub provider: String,
     /// Provider model id, when known.
@@ -986,6 +995,8 @@ pub enum BlockDelta {
     reason = "the serialized stream contract keeps Completed inline; boxing it would be a needless allocation on every terminal response"
 )]
 pub enum ModelStreamItem {
+    /// Rich execution, hosted-tool, citation or source output update.
+    OutputEvent(super::ModelOutputEvent),
     /// The stream has opened; no content has arrived yet.
     Started,
     /// An incremental message fragment (text and/or a tool-call fragment).
@@ -1082,6 +1093,14 @@ impl DeferredHandle {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "status")]
 pub enum DeferredStatus {
+    /// A structured terminal provider failure, retaining partial output.
+    ProviderFailed(Box<ProviderError>),
+    /// Confirmed cancellation, with the final snapshot if available.
+    Cancelled {
+        /// Final response snapshot, when the provider supplies one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        response: Option<Box<ModelResponse>>,
+    },
     /// Still queued or in progress; not yet ready.
     Pending,
     /// Finished successfully.

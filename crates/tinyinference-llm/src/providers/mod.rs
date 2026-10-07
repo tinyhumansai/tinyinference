@@ -15,6 +15,7 @@
 //! | [`MockModel`] | Implemented — deterministic, no network |
 //! | [`openai`] (and OpenAI-compatible endpoints) | Implemented |
 //! | [`anthropic`] (Messages API, including prompt caching) | Implemented |
+//! | [`perplexity`] (Agent API with model/preset selection) | Implemented |
 //!
 //! [`MockModel`] is always compiled and needs no network, keeping the default
 //! build offline and deterministic. The [`openai`] module is always compiled
@@ -25,8 +26,8 @@
 //! adapter only touches the network when invoked, and the live tests
 //! early-return without `OPENAI_API_KEY`.
 //!
-//! To add a provider with a different wire protocol, gate it behind a new
-//! Cargo feature and add the corresponding module declaration:
+//! Native providers using existing dependencies are compiled alongside the
+//! compatible transport. Construction performs no network calls:
 //!
 //! ```text
 //! pub mod openai;                          // always compiled
@@ -39,11 +40,11 @@ mod types;
 
 // --- real provider integrations ---
 // The OpenAI Chat Completions adapter is always compiled; it also serves every
-// OpenAI-compatible endpoint. Providers with a different wire protocol would be
-// added behind their own Cargo feature.
+// OpenAI-compatible endpoint. Native providers own their protocol translation.
 pub mod anthropic;
 pub mod omission;
 pub mod openai;
+pub mod perplexity;
 // #[cfg(feature = "ollama")]    pub mod ollama;
 
 pub use types::*;

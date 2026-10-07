@@ -219,6 +219,7 @@ fn translates_assistant_tool_calls_to_stringified_arguments() {
             id: Some("msg-1".to_string()),
             content: Vec::new(),
             tool_calls: vec![ToolCall {
+                replay: None,
                 id: "call-1".to_string(),
                 name: "get_weather".to_string(),
                 arguments: json!({ "city": "Paris" }),
@@ -258,6 +259,7 @@ fn translates_assistant_tool_calls_to_stringified_arguments() {
 #[test]
 fn translates_structured_tool_result_content() {
     let request = ModelRequest::new(vec![Message::Tool(crate::message::ToolMessage {
+        call_context: None,
         tool_call_id: "call-1".into(),
         content: vec![ContentBlock::Json(json!({"temperature": 21}))],
         trusted_verbatim: false,
@@ -721,6 +723,7 @@ fn provider_failed_stream_item_finishes_as_provider_error() {
     // stringified it into `Model` and always retried it as transient.
     let mut accumulator = StreamAccumulator::new();
     accumulator.push(&ModelStreamItem::ProviderFailed(ProviderError {
+        partial_response: None,
         provider: "groq".to_string(),
         model: Some("llama-3.3-70b-versatile".to_string()),
         status: Some(429),
@@ -3166,6 +3169,8 @@ fn stamp_origin_records_provider_api_and_effective_model() {
     let model = OpenAiModel::new("key").with_model("gpt-4.1");
     let request = ModelRequest::default();
     let mut response = ModelResponse {
+        output: Vec::new(),
+        execution: None,
         message: crate::message::AssistantMessage {
             id: None,
             content: Vec::new(),
@@ -3197,6 +3202,8 @@ fn stamp_origin_prefers_a_per_request_model_override() {
         ..Default::default()
     };
     let mut response = ModelResponse {
+        output: Vec::new(),
+        execution: None,
         message: crate::message::AssistantMessage {
             id: None,
             content: Vec::new(),

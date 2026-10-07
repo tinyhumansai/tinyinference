@@ -15,6 +15,7 @@
 
 mod decorators;
 pub mod discover;
+mod output;
 mod types;
 
 #[cfg(test)]
@@ -29,6 +30,7 @@ use crate::tool::{ToolCall, ToolSchema};
 use crate::usage::Usage;
 
 pub use decorators::*;
+pub use output::*;
 pub use types::*;
 
 /// How a context-window pattern is matched against a model id.
@@ -584,6 +586,8 @@ impl ModelResponse {
     /// Creates a response wrapping a plain assistant text message.
     pub fn assistant(content: impl Into<String>) -> Self {
         Self {
+            output: Vec::new(),
+            execution: None,
             message: AssistantMessage {
                 id: None,
                 content: vec![ContentBlock::Text(content.into())],
@@ -680,6 +684,9 @@ impl ModelResponse {
 /// usage.
 #[derive(Clone, Debug, Default)]
 pub struct StreamAccumulator {
+    output: std::collections::BTreeMap<usize, ModelOutputItem>,
+    execution: Option<ModelExecution>,
+    progress: Vec<ModelProgress>,
     /// Concatenated text fragments.
     text: String,
     /// Accumulated reasoning/thinking fragments (side channel; not merged into
@@ -714,6 +721,16 @@ impl StreamAccumulator {
     /// Folds one stream item into the running state.
     pub fn push(&mut self, item: &ModelStreamItem) {
         match item {
+            ModelStreamItem::OutputEvent(event) => match event {
+                ModelOutputEvent::Execution(execution) => {
+                    self.execution = Some((**execution).clone())
+                }
+                ModelOutputEvent::Item(item) => {
+                    self.output.insert(item.index, (**item).clone());
+                }
+                ModelOutputEvent::Progress(progress) => self.progress.push(progress.clone()),
+                _ => {}
+            },
             ModelStreamItem::Started => {}
             ModelStreamItem::MessageDelta(delta) => {
                 self.text.push_str(&delta.text);
@@ -824,6 +841,17 @@ impl StreamAccumulator {
         }
 
         if let Some(mut response) = self.completed {
+            if response.execution.is_none() {
+                response.execution = self.execution;
+            }
+            if let Some(execution) = &mut response.execution
+                && execution.progress.is_empty()
+            {
+                execution.progress = self.progress;
+            }
+            if response.output.is_empty() {
+                response.output = self.output.into_values().collect();
+            }
             // Reconcile the response and message usage with any streamed
             // `UsageDelta`, preferring an already-present value and never
             // overwriting a known usage with `None` (which previously clobbered a
@@ -870,6 +898,13 @@ impl StreamAccumulator {
             origin: None,
         };
         Ok(ModelResponse {
+            output: self.output.into_values().collect(),
+            execution: self.execution.map(|mut execution| {
+                if execution.progress.is_empty() {
+                    execution.progress = self.progress;
+                }
+                execution
+            }),
             message,
             usage: self.usage,
             finish_reason: None,

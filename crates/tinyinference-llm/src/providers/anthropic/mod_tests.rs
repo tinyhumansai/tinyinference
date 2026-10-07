@@ -196,6 +196,7 @@ fn assistant_tool_calls_become_tool_use_blocks() {
 #[test]
 fn tool_results_use_anthropic_tool_result_blocks() {
     let request = ModelRequest::new(vec![Message::Tool(ToolMessage {
+        call_context: None,
         tool_call_id: "tool_1".into(),
         content: vec![ContentBlock::Text("42".into())],
         trusted_verbatim: false,
@@ -235,6 +236,7 @@ fn custom_messages_are_never_sent_to_the_provider() {
 fn consecutive_tool_results_merge_into_one_user_message() {
     let tool = |id: &str| {
         Message::Tool(ToolMessage {
+            call_context: None,
             tool_call_id: id.into(),
             content: vec![ContentBlock::Text("ok".into())],
             trusted_verbatim: false,
@@ -261,6 +263,7 @@ fn consecutive_tool_results_merge_into_one_user_message() {
 fn empty_tool_result_sends_an_empty_string() {
     let body = request_body(
         &ModelRequest::new(vec![Message::Tool(ToolMessage {
+            call_context: None,
             tool_call_id: "t".into(),
             content: vec![],
             trusted_verbatim: false,

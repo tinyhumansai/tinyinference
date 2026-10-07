@@ -347,6 +347,7 @@ impl AnthropicStreamAcc {
                     crate::failure::classify_provider_failure(None, code.as_deref(), &message)
                         .is_retryable();
                 return Err(Error::Provider(Box::new(ProviderError {
+                    partial_response: None,
                     provider: PROVIDER.to_string(),
                     code,
                     message,
@@ -424,6 +425,8 @@ impl AnthropicStreamAcc {
         });
         let usage = self.usage;
         ModelResponse {
+            output: Vec::new(),
+            execution: None,
             message: AssistantMessage {
                 id: self.id,
                 content,
@@ -486,6 +489,7 @@ impl SseState {
                 let retryable =
                     crate::failure::classify_provider_failure(None, None, &message).is_retryable();
                 ProviderError {
+                    partial_response: None,
                     provider: PROVIDER.to_string(),
                     message,
                     retryable,

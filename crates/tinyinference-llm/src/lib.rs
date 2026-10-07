@@ -26,10 +26,22 @@ pub use failure::{
 };
 pub use message::{AssistantMessage, ContentBlock, Message, MessageDelta};
 pub use model::{
+    AnnotatedContent, ExecutionStatus, FetchedContent, FinanceResult, HostedToolUsage,
+    ImageSearchResult, ModelExecution, ModelFile, ModelFileContent, ModelOutputEvent,
+    ModelOutputItem, ModelOutputKind, ModelProgress, OutputAnnotation, RemoteToolDefinition,
+    RemoteToolNamespace, ReportedCost, SearchSource,
+};
+pub use model::{
     ChatModel, InputModality, InputSource, ModelRequest, ModelResponse, ModelStream,
     ModelStreamItem, context_window_for_model_id, model_id_supports_vision,
 };
 pub use network_guard::{allow_network_models, deny_network_models, network_models_denied};
+pub use providers::perplexity::{
+    PerplexityConfig, PerplexityImageFilters, PerplexityLocation, PerplexityModel,
+    PerplexityOptions, PerplexityRemoteCredentials, PerplexitySearchFilters, PerplexitySelection,
+    PerplexityTool, PerplexityToolChoice, PerplexityWebSearch, build_perplexity_model,
+};
 pub use providers::{MockModel, ProviderKind, ProviderSpec};
 pub use tool::{ToolCall, ToolDelta, ToolFormat, ToolSchema};
+pub use tool::{ToolCallReplay, ToolResultContext};
 pub use usage::{Usage, UsageTotals};

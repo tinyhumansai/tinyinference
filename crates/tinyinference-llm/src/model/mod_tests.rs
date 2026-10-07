@@ -400,6 +400,7 @@ fn finish_preserves_provider_error_classification_from_provider_failed() {
     let mut acc = StreamAccumulator::new();
     acc.push(&ModelStreamItem::Started);
     acc.push(&ModelStreamItem::ProviderFailed(ProviderError {
+        partial_response: None,
         provider: "openai".into(),
         status: Some(401),
         code: Some("invalid_api_key".into()),
@@ -535,11 +536,13 @@ fn model_stream_item_roundtrips_every_variant() {
     // The scalar-carrying variant an internally tagged enum could not encode.
     roundtrip_stream_item(ModelStreamItem::Failed("boom".to_string()));
     roundtrip_stream_item(ModelStreamItem::ProviderFailed(ProviderError {
+        partial_response: None,
         provider: "openai".into(),
         message: "nope".into(),
         ..ProviderError::default()
     }));
     roundtrip_stream_item(ModelStreamItem::ProviderFailed(ProviderError {
+        partial_response: None,
         provider: "anthropic".into(),
         message: "overloaded".into(),
         stop_reason: Some("pause_turn".into()),

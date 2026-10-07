@@ -441,6 +441,8 @@ pub(super) fn parse_chat_response(
     };
 
     Ok(ModelResponse {
+        output: Vec::new(),
+        execution: None,
         message,
         usage,
         finish_reason: choice.finish_reason,
@@ -496,6 +498,7 @@ pub(super) fn tool_call_from_wire(
     let call_id = tool_call_id(slot, id);
     match parse_tool_arguments(raw) {
         Ok(arguments) => ToolCall {
+            replay: None,
             id: call_id,
             name: name.to_string(),
             arguments,

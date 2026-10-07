@@ -636,6 +636,8 @@ pub(super) fn parse_responses_response(value: Value) -> ModelResponse {
         _ => Some("stop".to_string()),
     };
     ModelResponse {
+        output: Vec::new(),
+        execution: None,
         message: AssistantMessage {
             id: None,
             content,

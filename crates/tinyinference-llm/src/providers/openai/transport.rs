@@ -733,6 +733,11 @@ impl OpenAiModel {
     /// Builds an OpenAI-compatible model from a provider spec and explicit API
     /// key.
     pub fn from_spec(spec: ProviderSpec, api_key: impl Into<String>) -> Result<Self> {
+        if spec.kind == crate::providers::ProviderKind::Perplexity {
+            return Err(Error::Unsupported(
+                "use PerplexityModel for the native Agent API".into(),
+            ));
+        }
         if spec.model.trim().is_empty() {
             return Err(Error::Validation(
                 "provider spec model must not be empty".to_string(),
@@ -1870,6 +1875,7 @@ impl OpenAiModel {
             crate::failure::classify_provider_failure(status, code.as_deref(), &message)
                 .is_retryable();
         ProviderError {
+            partial_response: None,
             provider: self.provider.clone(),
             model: Some(self.model.clone()),
             status,

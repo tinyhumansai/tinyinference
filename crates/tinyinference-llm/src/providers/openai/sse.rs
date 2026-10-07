@@ -502,6 +502,8 @@ impl OpenAiStreamAcc {
             origin: None,
         };
         ModelResponse {
+            output: Vec::new(),
+            execution: None,
             message,
             usage: self.usage,
             finish_reason: self.finish_reason,
@@ -617,6 +619,7 @@ impl SseState {
         let Ok(value) = serde_json::from_str::<Value>(payload) else {
             if payload.starts_with('{') || payload.starts_with('[') {
                 let item = self.provider_failure(ProviderError {
+                    partial_response: None,
                     message: "provider returned malformed SSE JSON".into(),
                     retryable: false,
                     raw: Some(Value::String(payload.into())),
@@ -675,6 +678,7 @@ impl SseState {
             crate::failure::classify_provider_failure(status, code.as_deref(), &message)
                 .is_retryable();
         ProviderError {
+            partial_response: None,
             provider: self.provider.clone(),
             model: Some(self.model.clone()),
             status,
@@ -740,6 +744,7 @@ pub(super) async fn sse_next(mut state: SseState) -> Option<(ModelStreamItem, Ss
             }
             Some(Err(error)) => {
                 let item = state.provider_failure(ProviderError {
+                    partial_response: None,
                     message: error.to_string(),
                     retryable: true,
                     ..ProviderError::default()
@@ -754,6 +759,7 @@ pub(super) async fn sse_next(mut state: SseState) -> Option<(ModelStreamItem, Ss
                     state.finished = true;
                 } else {
                     let item = state.provider_failure(ProviderError {
+                        partial_response: None,
                         message: "provider stream ended before a completion signal".into(),
                         retryable: true,
                         ..ProviderError::default()

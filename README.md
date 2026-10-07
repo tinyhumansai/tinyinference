@@ -12,6 +12,9 @@ The workspace provides:
 - OpenAI Chat Completions, OpenAI Responses, and OpenAI-compatible provider
   adapters for Anthropic, Ollama, DeepSeek, Groq, xAI, OpenRouter, Together,
   and Mistral;
+- native Perplexity Agent API model/preset selection, cited and hosted-tool
+  output, incremental streaming, signed function continuation, background
+  recovery, and generated-file retrieval;
 - OpenAI, Cohere, Ollama, Voyage, cloud, no-op, and deterministic mock
   embeddings;
 - standalone document reranking through Voyage, with original-position results,
@@ -63,6 +66,43 @@ standards and OpenRouter media transport,
 `tinyinference-video` for asynchronous video generation (submit, poll,
 download, resume), `tinyinference-decisions` for typed Jev and Sage decisions,
 and `tinyinference-core` only for shared infrastructure.
+
+### Perplexity Agent API
+
+Use one Perplexity key with an explicit model or server-managed preset:
+
+```rust,no_run
+use tinyinference_llm::{ChatModel, Message, ModelRequest, PerplexityModel, PerplexitySelection};
+
+# async fn example(key: String) -> tinyinference_llm::Result<()> {
+let model = PerplexityModel::new(key, PerplexitySelection::preset("low"))?;
+let response = model.invoke(&(), ModelRequest::new(vec![
+    Message::user("Explain the latest battery research with sources."),
+])).await?;
+println!("{}", response.text());
+// response.output contains typed citations, hosted results and file notices.
+# Ok(())
+# }
+```
+
+`PerplexitySelection::Model("provider/model".into())` selects a specific model;
+`Models` configures a provider-managed fallback list. Presets retain server
+defaults unless you explicitly override them. Tool settings merge with preset
+tools on the provider. Explicit Anthropic models require an output-token cap.
+
+`ModelResponse.output` preserves ordered rich output; `message` is the familiar
+text/reasoning/local-function projection. Hosted MCP, search and sandbox activity
+is never dispatched as a local function call. Stream-only progress survives in
+`execution.progress`; incomplete and cancelled states remain explicit.
+
+Use `submit_background`, `retrieve_response`, `resume_background`, and
+`cancel_background` for long jobs. List and explicitly download generated files
+by response/file ID; filenames are metadata, not local paths. A disconnect never
+silently starts a replacement run. Remote MCP credentials are bound to their
+configured HTTPS server and kept out of serializable model requests.
+
+See [Perplexity contracts and migration](docs/migrations/perplexity-agent.md)
+for configuration, replay, storage semantics, limits, and public Rust type changes.
 
 ### Voyage reranking
 
