@@ -13,6 +13,7 @@
 //! [`StreamAccumulator`] that folds a real
 //! [`ModelStream`] back into a single [`ModelResponse`].
 
+pub mod budget;
 mod decorators;
 pub mod discover;
 mod types;

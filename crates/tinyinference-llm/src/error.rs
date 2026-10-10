@@ -10,6 +10,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// A normalized inference failure.
 #[derive(Debug, Error)]
 pub enum Error {
+    /// Shared token or cost budget refused this physical call.
+    #[error(transparent)]
+    BudgetExceeded(#[from] crate::model::budget::BudgetExceeded),
     /// A model transport or response failed without structured provider detail.
     #[error("model error: {0}")]
     Model(String),

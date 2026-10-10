@@ -1657,6 +1657,7 @@ impl OpenAiModel {
         what: &str,
         url: &str,
     ) -> Result<reqwest::Response> {
+        crate::model::budget::before_physical_attempt()?;
         let response = builder.send().await.map_err(|e| {
             let error = self.provider_error(
                 format!("{what} to {url} failed: {e}"),
