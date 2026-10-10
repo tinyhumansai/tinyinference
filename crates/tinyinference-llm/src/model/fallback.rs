@@ -1,13 +1,14 @@
 //! Ordered model failover before an attempt produces any content.
 
-use std::sync::Arc;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use futures::StreamExt;
 
 use super::{
-    ChatModel, InputModality, InputSource, ModelProfile, ModelRequest, ModelResponse, ModelStream,
-    ModelStreamItem,
+    ChatModel, DeferredHandle, DeferredStatus, InputModality, InputSource, ModelProfile,
+    ModelRequest, ModelResponse, ModelStream, ModelStreamItem,
 };
 use crate::{Error, Result};
 
@@ -28,6 +29,22 @@ use crate::{Error, Result};
 pub struct FallbackModel<State: Send + Sync> {
     models: Vec<Arc<dyn ChatModel<State>>>,
     profile: ModelProfile,
+    deferred: DeferredRoutes,
+}
+
+type DeferredRoutes = Arc<Mutex<BTreeMap<String, BTreeSet<usize>>>>;
+
+fn remember_deferred(routes: &DeferredRoutes, item: &ModelStreamItem, adapter: usize) {
+    if let ModelStreamItem::Deferred(handle) = item {
+        // DeferredHandle contains only JSON values, so serialization is infallible.
+        let key = serde_json::to_string(handle).expect("deferred handle is JSON");
+        routes
+            .lock()
+            .expect("deferred routes poisoned")
+            .entry(key)
+            .or_default()
+            .insert(adapter);
+    }
 }
 
 impl<State: Send + Sync> std::fmt::Debug for FallbackModel<State> {
@@ -83,7 +100,11 @@ impl<State: Send + Sync> FallbackModel<State> {
             // Hoisting is a restriction, not an optional capability.
             profile.hoists_system_messages = profiles.iter().any(|p| p.hoists_system_messages);
         }
-        Self { models, profile }
+        Self {
+            models,
+            profile,
+            deferred: Arc::default(),
+        }
     }
 }
 
@@ -91,6 +112,8 @@ fn can_fallback(error: &Error) -> bool {
     match error {
         Error::Model(_) => true,
         Error::Provider(error) => {
+            // retryable governs retrying this adapter/account. Authentication and
+            // quota failures can still be served by an independent fallback.
             !matches!(error.status, Some(400 | 413 | 415 | 422))
                 && !matches!(
                     error.code.as_deref(),
@@ -131,22 +154,34 @@ fn terminal(item: &ModelStreamItem) -> bool {
 }
 
 /// Keep the original stream inside the wrapper, including its abort guard.
-fn selected_stream(prefix: Vec<ModelStreamItem>, stream: ModelStream) -> ModelStream {
+fn selected_stream(
+    prefix: Vec<ModelStreamItem>,
+    stream: ModelStream,
+    routes: DeferredRoutes,
+    adapter: usize,
+) -> ModelStream {
+    for item in &prefix {
+        remember_deferred(&routes, item, adapter);
+    }
     let metadata = stream.metadata().clone();
     let ended = prefix.last().is_some_and(terminal);
-    let tail = futures::stream::unfold((stream, ended), |(mut stream, ended)| async move {
-        if ended {
-            return None;
-        }
-        match stream.next().await {
-            Some(item) => {
-                let ended = terminal(&item);
-                Some((item, (stream, ended)))
+    let tail = futures::stream::unfold((stream, ended), move |(mut stream, ended)| {
+        let routes = routes.clone();
+        async move {
+            if ended {
+                return None;
             }
-            None => Some((
-                ModelStreamItem::Failed("provider stream ended without a terminal item".into()),
-                (stream, true),
-            )),
+            match stream.next().await {
+                Some(item) => {
+                    remember_deferred(&routes, &item, adapter);
+                    let ended = terminal(&item);
+                    Some((item, (stream, ended)))
+                }
+                None => Some((
+                    ModelStreamItem::Failed("provider stream ended without a terminal item".into()),
+                    (stream, true),
+                )),
+            }
         }
     });
     ModelStream::new(Box::pin(futures::stream::iter(prefix).chain(tail))).with_metadata(metadata)
@@ -189,7 +224,7 @@ impl<State: Send + Sync> ChatModel<State> for FallbackModel<State> {
     /// terminal success. After content is exposed, failures remain stream items.
     async fn stream(&self, state: &State, request: ModelRequest) -> Result<ModelStream> {
         let mut last = Error::Model("model chain is empty".into());
-        for model in &self.models {
+        for (adapter, model) in self.models.iter().enumerate() {
             let mut stream = match model.stream(state, request.clone()).await {
                 Ok(stream) => stream,
                 Err(error) if can_fallback(&error) => {
@@ -216,7 +251,12 @@ impl<State: Send + Sync> ChatModel<State> for FallbackModel<State> {
                         let selected = visible(&item) || terminal(&item);
                         prefix.push(item);
                         if selected {
-                            return Ok(selected_stream(prefix, stream));
+                            return Ok(selected_stream(
+                                prefix,
+                                stream,
+                                self.deferred.clone(),
+                                adapter,
+                            ));
                         }
                         None
                     }
@@ -231,5 +271,34 @@ impl<State: Send + Sync> ChatModel<State> for FallbackModel<State> {
             }
         }
         Err(last)
+    }
+
+    /// Polls the adapter that accepted this handle, without failing over the job.
+    ///
+    /// Pending handles remain associated with this decorator instance. Terminal
+    /// polling removes the association. Unknown handles and collisions between
+    /// distinct adapters are rejected rather than polling the wrong provider.
+    async fn fetch_deferred(&self, handle: &DeferredHandle) -> Result<DeferredStatus> {
+        let key = serde_json::to_string(handle)?;
+        let adapter = {
+            let routes = self.deferred.lock().expect("deferred routes poisoned");
+            let adapters = routes.get(&key).ok_or_else(|| {
+                Error::Unsupported("deferred handle was not accepted by this fallback model".into())
+            })?;
+            if adapters.len() != 1 {
+                return Err(Error::Validation(
+                    "deferred handle is ambiguous between adapters".into(),
+                ));
+            }
+            *adapters.first().expect("registered adapter")
+        };
+        let status = self.models[adapter].fetch_deferred(handle).await?;
+        if !matches!(status, DeferredStatus::Pending) {
+            self.deferred
+                .lock()
+                .expect("deferred routes poisoned")
+                .remove(&key);
+        }
+        Ok(status)
     }
 }

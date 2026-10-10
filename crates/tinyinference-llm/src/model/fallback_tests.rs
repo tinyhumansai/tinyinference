@@ -153,7 +153,7 @@ async fn failure_after_visible_content_never_calls_a_fallback() {
 
 #[tokio::test]
 async fn provider_failure_after_started_falls_back_but_bad_input_does_not() {
-    for status in [503, 400] {
+    for status in [503, 401, 429, 400] {
         let spare = reply(false);
         let failure = ProviderError {
             status: Some(status),
@@ -170,7 +170,7 @@ async fn provider_failure_after_started_falls_back_but_bad_input_does_not() {
             vec![spare.clone()],
         );
         let result = chain.stream(&(), ModelRequest::new(Vec::new())).await;
-        if status == 503 {
+        if status != 400 {
             assert_eq!(
                 collect_model_stream(result.unwrap()).await.unwrap().text(),
                 "answer"
@@ -392,6 +392,7 @@ impl ChatModel<()> for Profiled {
 fn mixed_profiles_never_claim_one_providers_tool_or_schema_dialect() {
     let mut first = ModelProfile {
         provider: Some("first".into()),
+        hoists_system_messages: true,
         tool_calling: true,
         json_schema: true,
         max_input_tokens: Some(100),
@@ -419,6 +420,10 @@ fn mixed_profiles_never_claim_one_providers_tool_or_schema_dialect() {
         })],
     );
     let profile = mixed.profile().unwrap();
+    assert!(
+        profile.hoists_system_messages,
+        "any hoisting adapter restricts prompt placement"
+    );
     assert!(!profile.tool_calling);
     assert!(!profile.json_schema);
     assert!(!profile.modalities.image_in);
@@ -525,4 +530,162 @@ async fn exhausting_stream_attempts_preserves_the_last_structured_failure() {
     assert!(
         matches!(chain.stream(&(), ModelRequest::new(Vec::new())).await, Err(crate::Error::Provider(error)) if *error == last)
     );
+}
+
+struct Deferring {
+    fails: bool,
+    visible: bool,
+    polls: AtomicUsize,
+}
+#[async_trait::async_trait]
+impl ChatModel<()> for Deferring {
+    async fn invoke(&self, _: &(), _: ModelRequest) -> crate::Result<ModelResponse> {
+        unreachable!()
+    }
+    async fn stream(&self, _: &(), _: ModelRequest) -> crate::Result<ModelStream> {
+        if self.fails {
+            return Err(crate::Error::Model("opening failed".into()));
+        }
+        let mut items = Vec::new();
+        if self.visible {
+            items.push(ModelStreamItem::MessageDelta(
+                crate::message::MessageDelta::text("accepted"),
+            ));
+        }
+        items.push(ModelStreamItem::Deferred(DeferredHandle::new(
+            "same-family",
+            "accepted-job",
+        )));
+        Ok(ModelStream::new(Box::pin(futures::stream::iter(items))))
+    }
+    async fn fetch_deferred(&self, handle: &DeferredHandle) -> crate::Result<DeferredStatus> {
+        assert_eq!(handle.id, "accepted-job");
+        assert!(!self.fails, "never poll the rejected adapter");
+        let count = self.polls.fetch_add(1, Ordering::SeqCst);
+        Ok(if count == 0 {
+            DeferredStatus::Pending
+        } else {
+            DeferredStatus::Completed(Box::new(ModelResponse::assistant("finished job")))
+        })
+    }
+}
+
+#[tokio::test]
+async fn deferred_handles_are_polled_on_the_adapter_that_accepted_them() {
+    for visible in [false, true] {
+        let primary = Arc::new(Deferring {
+            fails: true,
+            visible,
+            polls: AtomicUsize::new(0),
+        });
+        let secondary = Arc::new(Deferring {
+            fails: false,
+            visible,
+            polls: AtomicUsize::new(0),
+        });
+        let chain = FallbackModel::new(primary.clone(), vec![secondary.clone()]);
+        let mut stream = chain
+            .stream(&(), ModelRequest::new(Vec::new()))
+            .await
+            .unwrap();
+        if visible {
+            assert!(matches!(
+                stream.next().await,
+                Some(ModelStreamItem::MessageDelta(_))
+            ));
+        }
+        let Some(ModelStreamItem::Deferred(handle)) = stream.next().await else {
+            panic!("expected deferral");
+        };
+        assert!(matches!(
+            chain.fetch_deferred(&handle).await.unwrap(),
+            DeferredStatus::Pending
+        ));
+        assert!(
+            matches!(chain.fetch_deferred(&handle).await.unwrap(), DeferredStatus::Completed(response) if response.text() == "finished job")
+        );
+        assert_eq!(primary.polls.load(Ordering::SeqCst), 0);
+        assert_eq!(secondary.polls.load(Ordering::SeqCst), 2);
+        assert!(matches!(
+            chain.fetch_deferred(&handle).await,
+            Err(crate::Error::Unsupported(_))
+        ));
+    }
+}
+
+#[tokio::test]
+async fn unknown_deferred_handles_never_reach_an_adapter() {
+    let model = Arc::new(Deferring {
+        fails: false,
+        visible: false,
+        polls: AtomicUsize::new(0),
+    });
+    let chain = FallbackModel::new(model.clone(), Vec::new());
+    assert!(matches!(
+        chain
+            .fetch_deferred(&DeferredHandle::new("same-family", "accepted-job"))
+            .await,
+        Err(crate::Error::Unsupported(_))
+    ));
+    assert_eq!(model.polls.load(Ordering::SeqCst), 0);
+}
+
+struct FailSecondStream {
+    model: Arc<Deferring>,
+    starts: AtomicUsize,
+}
+#[async_trait::async_trait]
+impl ChatModel<()> for FailSecondStream {
+    async fn invoke(&self, _: &(), _: ModelRequest) -> crate::Result<ModelResponse> {
+        unreachable!()
+    }
+    async fn stream(&self, state: &(), request: ModelRequest) -> crate::Result<ModelStream> {
+        if self.starts.fetch_add(1, Ordering::SeqCst) > 0 {
+            Err(crate::Error::Model("opening failed".into()))
+        } else {
+            self.model.stream(state, request).await
+        }
+    }
+    async fn fetch_deferred(&self, handle: &DeferredHandle) -> crate::Result<DeferredStatus> {
+        self.model.fetch_deferred(handle).await
+    }
+}
+
+#[tokio::test]
+async fn colliding_deferred_handles_are_rejected_instead_of_polling_the_wrong_adapter() {
+    let primary = Arc::new(Deferring {
+        fails: false,
+        visible: false,
+        polls: AtomicUsize::new(0),
+    });
+    let secondary = Arc::new(Deferring {
+        fails: false,
+        visible: false,
+        polls: AtomicUsize::new(0),
+    });
+    let chain = FallbackModel::new(
+        Arc::new(FailSecondStream {
+            model: primary.clone(),
+            starts: AtomicUsize::new(0),
+        }),
+        vec![secondary.clone()],
+    );
+    for _ in 0..2 {
+        let mut stream = chain
+            .stream(&(), ModelRequest::new(Vec::new()))
+            .await
+            .unwrap();
+        assert!(matches!(
+            stream.next().await,
+            Some(ModelStreamItem::Deferred(_))
+        ));
+    }
+    assert!(matches!(
+        chain
+            .fetch_deferred(&DeferredHandle::new("same-family", "accepted-job"))
+            .await,
+        Err(crate::Error::Validation(_))
+    ));
+    assert_eq!(primary.polls.load(Ordering::SeqCst), 0);
+    assert_eq!(secondary.polls.load(Ordering::SeqCst), 0);
 }
