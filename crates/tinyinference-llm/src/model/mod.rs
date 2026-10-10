@@ -15,6 +15,7 @@
 
 mod decorators;
 pub mod discover;
+mod fallback;
 mod types;
 
 #[cfg(test)]
@@ -29,6 +30,7 @@ use crate::tool::{ToolCall, ToolSchema};
 use crate::usage::Usage;
 
 pub use decorators::*;
+pub use fallback::FallbackModel;
 pub use types::*;
 
 /// How a context-window pattern is matched against a model id.
@@ -902,3 +904,7 @@ pub async fn collect_model_stream(mut stream: ModelStream) -> Result<ModelRespon
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod test;
+
+#[cfg(test)]
+#[path = "fallback_tests.rs"]
+mod fallback_tests;
