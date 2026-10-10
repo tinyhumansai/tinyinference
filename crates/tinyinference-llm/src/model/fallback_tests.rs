@@ -1,4 +1,5 @@
 use super::*;
+const DEFERRED_ROUTE_KEY: &str = "_tinyinference_fallback_route";
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -500,10 +501,12 @@ async fn empty_success_and_deferral_stop_the_chain_without_more_attempts() {
             .unwrap()
             .collect()
             .await;
-        assert_eq!(
-            serde_json::to_value(items.last().unwrap()).unwrap(),
-            expected
-        );
+        let mut terminal = items.last().unwrap().clone();
+        if let ModelStreamItem::Deferred(handle) = &mut terminal {
+            let route = handle.metadata.remove(DEFERRED_ROUTE_KEY).unwrap();
+            *handle = serde_json::from_value(route["original"].clone()).unwrap();
+        }
+        assert_eq!(serde_json::to_value(terminal).unwrap(), expected);
         assert_eq!(spare.calls.load(Ordering::SeqCst), 0);
     }
 }
@@ -552,15 +555,29 @@ impl ChatModel<()> for Deferring {
                 crate::message::MessageDelta::text("accepted"),
             ));
         }
-        items.push(ModelStreamItem::Deferred(DeferredHandle::new(
-            "same-family",
-            "accepted-job",
-        )));
+        let mut handle = DeferredHandle::new("same-family", "accepted-job");
+        handle
+            .metadata
+            .insert("opaque".into(), serde_json::json!({"key":"unchanged"}));
+        handle.metadata.insert(
+            DEFERRED_ROUTE_KEY.into(),
+            serde_json::json!("provider-owned"),
+        );
+        items.push(ModelStreamItem::Deferred(handle));
         Ok(ModelStream::new(Box::pin(futures::stream::iter(items))))
     }
     async fn fetch_deferred(&self, handle: &DeferredHandle) -> crate::Result<DeferredStatus> {
         assert_eq!(handle.id, "accepted-job");
         assert!(!self.fails, "never poll the rejected adapter");
+        assert_eq!(
+            handle.metadata.get("opaque"),
+            Some(&serde_json::json!({"key":"unchanged"}))
+        );
+        assert_eq!(
+            handle.metadata.get(DEFERRED_ROUTE_KEY),
+            Some(&serde_json::json!("provider-owned"))
+        );
+        assert_eq!(handle.metadata.len(), 2);
         let count = self.polls.fetch_add(1, Ordering::SeqCst);
         Ok(if count == 0 {
             DeferredStatus::Pending
@@ -607,8 +624,8 @@ async fn deferred_handles_are_polled_on_the_adapter_that_accepted_them() {
         assert_eq!(primary.polls.load(Ordering::SeqCst), 0);
         assert_eq!(secondary.polls.load(Ordering::SeqCst), 2);
         assert!(matches!(
-            chain.fetch_deferred(&handle).await,
-            Err(crate::Error::Unsupported(_))
+            chain.fetch_deferred(&handle).await.unwrap(),
+            DeferredStatus::Completed(_)
         ));
     }
 }
@@ -652,7 +669,7 @@ impl ChatModel<()> for FailSecondStream {
 }
 
 #[tokio::test]
-async fn colliding_deferred_handles_are_rejected_instead_of_polling_the_wrong_adapter() {
+async fn colliding_provider_handles_keep_independent_adapter_routes() {
     let primary = Arc::new(Deferring {
         fails: false,
         visible: false,
@@ -670,22 +687,82 @@ async fn colliding_deferred_handles_are_rejected_instead_of_polling_the_wrong_ad
         }),
         vec![secondary.clone()],
     );
+    let mut handles = Vec::new();
     for _ in 0..2 {
         let mut stream = chain
             .stream(&(), ModelRequest::new(Vec::new()))
             .await
             .unwrap();
+        let Some(ModelStreamItem::Deferred(handle)) = stream.next().await else {
+            panic!("expected deferral");
+        };
+        handles.push(handle);
+    }
+    assert_eq!(handles[0].provider, handles[1].provider);
+    assert_eq!(handles[0].id, handles[1].id);
+    for handle in &handles {
         assert!(matches!(
-            stream.next().await,
-            Some(ModelStreamItem::Deferred(_))
+            chain.fetch_deferred(handle).await.unwrap(),
+            DeferredStatus::Pending
         ));
     }
+    assert_eq!(primary.polls.load(Ordering::SeqCst), 1);
+    assert_eq!(secondary.polls.load(Ordering::SeqCst), 1);
+    for field in ["version", "adapter", "identity"] {
+        let mut invalid = handles[0].clone();
+        invalid.metadata.get_mut(DEFERRED_ROUTE_KEY).unwrap()[field] =
+            serde_json::json!(if field == "version" { 2 } else { 999 });
+        assert!(matches!(
+            chain.fetch_deferred(&invalid).await,
+            Err(crate::Error::Validation(_))
+        ));
+    }
+}
+
+#[tokio::test]
+async fn persisted_deferred_handles_resume_with_a_reconstructed_fallback_chain() {
+    let original = FallbackModel::new(
+        Arc::new(Deferring {
+            fails: true,
+            visible: false,
+            polls: AtomicUsize::new(0),
+        }),
+        vec![Arc::new(Deferring {
+            fails: false,
+            visible: false,
+            polls: AtomicUsize::new(0),
+        })],
+    );
+    let mut stream = original
+        .stream(&(), ModelRequest::new(Vec::new()))
+        .await
+        .unwrap();
+    let Some(ModelStreamItem::Deferred(handle)) = stream.next().await else {
+        panic!("expected deferral");
+    };
+    let persisted = serde_json::to_vec(&handle).unwrap();
+    drop(stream);
+    drop(original);
+    let handle: DeferredHandle = serde_json::from_slice(&persisted).unwrap();
+    let resumed = Arc::new(Deferring {
+        fails: false,
+        visible: false,
+        polls: AtomicUsize::new(0),
+    });
+    let reconstructed = FallbackModel::new(
+        Arc::new(Deferring {
+            fails: true,
+            visible: false,
+            polls: AtomicUsize::new(0),
+        }),
+        vec![resumed.clone()],
+    );
     assert!(matches!(
-        chain
-            .fetch_deferred(&DeferredHandle::new("same-family", "accepted-job"))
-            .await,
-        Err(crate::Error::Validation(_))
+        reconstructed.fetch_deferred(&handle).await.unwrap(),
+        DeferredStatus::Pending
     ));
-    assert_eq!(primary.polls.load(Ordering::SeqCst), 0);
-    assert_eq!(secondary.polls.load(Ordering::SeqCst), 0);
+    assert!(
+        matches!(reconstructed.fetch_deferred(&handle).await.unwrap(), DeferredStatus::Completed(response) if response.text() == "finished job")
+    );
+    assert_eq!(resumed.polls.load(Ordering::SeqCst), 2);
 }

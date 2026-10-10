@@ -1,7 +1,6 @@
 //! Ordered model failover before an attempt produces any content.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -29,21 +28,36 @@ use crate::{Error, Result};
 pub struct FallbackModel<State: Send + Sync> {
     models: Vec<Arc<dyn ChatModel<State>>>,
     profile: ModelProfile,
-    deferred: DeferredRoutes,
 }
 
-type DeferredRoutes = Arc<Mutex<BTreeMap<String, BTreeSet<usize>>>>;
+const DEFERRED_ROUTE_KEY: &str = "_tinyinference_fallback_route";
 
-fn remember_deferred(routes: &DeferredRoutes, item: &ModelStreamItem, adapter: usize) {
+#[derive(serde::Serialize, serde::Deserialize)]
+struct DeferredRoute {
+    version: u8,
+    adapter: usize,
+    identity: serde_json::Value,
+    original: DeferredHandle,
+}
+
+fn adapter_identity<State: Send + Sync>(model: &dyn ChatModel<State>) -> serde_json::Value {
+    serde_json::json!({ "profile": model.profile(), "cache_identity": model.cache_identity() })
+}
+
+fn route_deferred(item: &mut ModelStreamItem, adapter: usize, identity: &serde_json::Value) {
     if let ModelStreamItem::Deferred(handle) = item {
-        // DeferredHandle contains only JSON values, so serialization is infallible.
-        let key = serde_json::to_string(handle).expect("deferred handle is JSON");
-        routes
-            .lock()
-            .expect("deferred routes poisoned")
-            .entry(key)
-            .or_default()
-            .insert(adapter);
+        let route = DeferredRoute {
+            version: 1,
+            adapter,
+            identity: identity.clone(),
+            original: handle.clone(),
+        };
+        // Retain the original handle, including a provider's use of this metadata
+        // key. Nested fallback chains can therefore unwrap one decorator at a time.
+        handle.metadata.insert(
+            DEFERRED_ROUTE_KEY.into(),
+            serde_json::to_value(route).expect("deferred route is JSON"),
+        );
     }
 }
 
@@ -100,11 +114,7 @@ impl<State: Send + Sync> FallbackModel<State> {
             // Hoisting is a restriction, not an optional capability.
             profile.hoists_system_messages = profiles.iter().any(|p| p.hoists_system_messages);
         }
-        Self {
-            models,
-            profile,
-            deferred: Arc::default(),
-        }
+        Self { models, profile }
     }
 }
 
@@ -155,25 +165,25 @@ fn terminal(item: &ModelStreamItem) -> bool {
 
 /// Keep the original stream inside the wrapper, including its abort guard.
 fn selected_stream(
-    prefix: Vec<ModelStreamItem>,
+    mut prefix: Vec<ModelStreamItem>,
     stream: ModelStream,
-    routes: DeferredRoutes,
+    identity: serde_json::Value,
     adapter: usize,
 ) -> ModelStream {
-    for item in &prefix {
-        remember_deferred(&routes, item, adapter);
+    for item in &mut prefix {
+        route_deferred(item, adapter, &identity);
     }
     let metadata = stream.metadata().clone();
     let ended = prefix.last().is_some_and(terminal);
     let tail = futures::stream::unfold((stream, ended), move |(mut stream, ended)| {
-        let routes = routes.clone();
+        let identity = identity.clone();
         async move {
             if ended {
                 return None;
             }
             match stream.next().await {
-                Some(item) => {
-                    remember_deferred(&routes, &item, adapter);
+                Some(mut item) => {
+                    route_deferred(&mut item, adapter, &identity);
                     let ended = terminal(&item);
                     Some((item, (stream, ended)))
                 }
@@ -254,7 +264,7 @@ impl<State: Send + Sync> ChatModel<State> for FallbackModel<State> {
                             return Ok(selected_stream(
                                 prefix,
                                 stream,
-                                self.deferred.clone(),
+                                adapter_identity(model.as_ref()),
                                 adapter,
                             ));
                         }
@@ -275,30 +285,24 @@ impl<State: Send + Sync> ChatModel<State> for FallbackModel<State> {
 
     /// Polls the adapter that accepted this handle, without failing over the job.
     ///
-    /// Pending handles remain associated with this decorator instance. Terminal
-    /// polling removes the association. Unknown handles and collisions between
-    /// distinct adapters are rejected rather than polling the wrong provider.
+    /// Routing is serialized in handle metadata, preserving every original
+    /// provider field for delegation. Persisted handles can be polled after
+    /// reconstruction with the same ordered adapters. Index and advertised
+    /// identity must match; adapters without identity require the host to restore
+    /// the same configuration. Unknown handles are rejected.
     async fn fetch_deferred(&self, handle: &DeferredHandle) -> Result<DeferredStatus> {
-        let key = serde_json::to_string(handle)?;
-        let adapter = {
-            let routes = self.deferred.lock().expect("deferred routes poisoned");
-            let adapters = routes.get(&key).ok_or_else(|| {
-                Error::Unsupported("deferred handle was not accepted by this fallback model".into())
-            })?;
-            if adapters.len() != 1 {
-                return Err(Error::Validation(
-                    "deferred handle is ambiguous between adapters".into(),
-                ));
-            }
-            *adapters.first().expect("registered adapter")
-        };
-        let status = self.models[adapter].fetch_deferred(handle).await?;
-        if !matches!(status, DeferredStatus::Pending) {
-            self.deferred
-                .lock()
-                .expect("deferred routes poisoned")
-                .remove(&key);
+        let encoded = handle.metadata.get(DEFERRED_ROUTE_KEY).ok_or_else(|| {
+            Error::Unsupported("deferred handle has no fallback routing metadata".into())
+        })?;
+        let route: DeferredRoute = serde_json::from_value(encoded.clone())?;
+        let model = self.models.get(route.adapter).ok_or_else(|| {
+            Error::Validation("deferred adapter is absent from this fallback chain".into())
+        })?;
+        if route.version != 1 || route.identity != adapter_identity(model.as_ref()) {
+            return Err(Error::Validation(
+                "deferred adapter identity or route version does not match".into(),
+            ));
         }
-        Ok(status)
+        model.fetch_deferred(&route.original).await
     }
 }
