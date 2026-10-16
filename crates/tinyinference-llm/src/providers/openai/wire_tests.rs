@@ -374,6 +374,19 @@ fn hoisting_model_drops_system_messages_that_render_no_text() {
 }
 
 #[test]
+fn claude_on_a_relay_drops_system_messages_that_render_no_text() {
+    // The relay joins every system message into Anthropic's one `system`, so
+    // even an empty one would rewrite the cached prefix.
+    let model = OpenAiModel::new("k").with_model("anthropic/claude-haiku-4.5");
+    let body = body_for(&model, &transcript_with_record_only_patch());
+    assert_eq!(
+        wire_roles(&body),
+        ["system", "user", "system"],
+        "body={body}"
+    );
+}
+
+#[test]
 fn non_hoisting_model_keeps_every_system_message_in_place() {
     let model = OpenAiModel::new("k").with_model("gpt-4.1-mini");
     let body = body_for(&model, &transcript_with_record_only_patch());

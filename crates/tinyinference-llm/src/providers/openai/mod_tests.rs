@@ -1797,6 +1797,24 @@ fn derive_profile_flags_deepseek_ids_as_hoisting_system_messages() {
 }
 
 #[test]
+fn derive_profile_flags_claude_ids_as_hoisting_system_messages() {
+    // A relay serving Claude over Chat Completions folds every system message
+    // into Anthropic's one top-level `system`, so a mid-turn note rewrites the
+    // cached prefix just as DeepSeek's template does.
+    for id in [
+        "anthropic/claude-haiku-4.5",
+        "openrouter/anthropic/claude-haiku-4.5",
+        "claude-sonnet-4-6",
+        "Anthropic/Claude-Opus-4.1",
+    ] {
+        assert!(
+            super::transport::derive_profile("openrouter", id).hoists_system_messages,
+            "{id} should hoist system messages"
+        );
+    }
+}
+
+#[test]
 fn responses_profile_advertises_system_hoisting_after_builder_overrides() {
     let model = OpenAiModel::new("k")
         .with_responses_api_primary()

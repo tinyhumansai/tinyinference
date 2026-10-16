@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- OpenAI-compatible provider: a Claude model id (`claude-...`, or one with an
+  `anthropic` path segment) now reports `hoists_system_messages`, as the native
+  Anthropic adapter does. A relay serving Claude over Chat Completions joins
+  every `role: "system"` message into Anthropic's one top-level `system`, so a
+  note a harness added mid-turn as a system message rewrote the cached prefix
+  twice: when it appeared and when it went. Callers that read the flag now put
+  such notes in the conversation tail, and the request builder drops system
+  messages that render no text. Seen on `anthropic/claude-haiku-4.5` through
+  OpenRouter: two budget notices in an 80-call turn wrote about 276k prompt
+  tokens to the cache again.
 - OpenAI-compatible provider: a streamed response now keeps the vendor fields
   of `usage` (OpenRouter's `cost`, `cost_details`, `is_byok`) on `raw`, under
   `usage`, where the non-streaming response already has them in its wire

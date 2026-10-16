@@ -354,7 +354,16 @@ pub(super) fn derive_profile(provider: &str, model: &str) -> ModelProfile {
         // DeepSeek's chat template hoists every system turn into the prompt
         // head, so new mid-turn system text rewrites the cached prefix
         // (#6962). Matches bare ids and routed ones (`deepseek/...`).
-        hoists_system_messages: lower.contains("deepseek"),
+        //
+        // A Claude model behind an OpenAI-compatible relay (OpenRouter,
+        // TinyHumans) does the same: the relay translates Chat Completions
+        // into Anthropic's Messages API, which has one top-level `system`, so
+        // every `role: "system"` message joins it. A mid-turn note (a budget
+        // notice, a contents list) then changes the prefix all the cached
+        // tools, system and history hang off, and the whole conversation is
+        // written to the cache again, once when the note appears and once
+        // when it goes. The native Anthropic adapter already says so.
+        hoists_system_messages: lower.contains("deepseek") || is_anthropic_model(model),
         ..ModelProfile::default()
     }
 }
