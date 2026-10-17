@@ -20,7 +20,7 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 # Storage ports only (the `SecretStore` holding the short-lived PKCE state);
 # the host decides which driver backs them.
-tinystoragedrivers-secrets = { version = "0.11.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v0.11.0" }
+tinystoragedrivers-secrets = { version = "1.0.0", git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v1.0.0" }
 tracing = { workspace = true }
 url = { workspace = true }
 zeroize = "1"
