@@ -75,6 +75,24 @@ impl std::fmt::Debug for ProviderRequestOptions {
     }
 }
 
+/// Signs a fully built outbound HTTP request in place, immediately before it
+/// is sent.
+///
+/// Some hosted providers authenticate with a signature over the method, URL,
+/// headers, and body (for example OCI's HTTP Signature) instead of a static
+/// credential header, so the signer needs to see the finished
+/// [`reqwest::Request`]. Implementations add or replace headers on `request`;
+/// they must never log credentials.
+pub trait RequestSigner: Send + Sync {
+    /// Adds authentication headers to `request`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the credential cannot be loaded or the signature
+    /// cannot be produced; the request is then not sent.
+    fn sign(&self, request: &mut reqwest::Request) -> crate::Result<()>;
+}
+
 // ---------------------------------------------------------------------------
 // Per-request credentials
 // ---------------------------------------------------------------------------
