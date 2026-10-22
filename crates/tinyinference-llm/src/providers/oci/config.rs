@@ -81,6 +81,10 @@ pub struct OciConfig {
     pub model: String,
     /// Static headers attached to every request.
     pub extra_headers: Vec<(String, String)>,
+    /// Sampling temperature that replaces the request's own, like
+    /// [`OpenAiConfig::temperature_override`](crate::providers::openai::OpenAiConfig::temperature_override).
+    /// OpenAI reasoning models still receive none.
+    pub temperature_override: Option<f64>,
 }
 
 impl OciConfig {
@@ -99,6 +103,7 @@ impl OciConfig {
             serving: OciServing::OnDemand,
             model: model.into(),
             extra_headers: Vec::new(),
+            temperature_override: None,
         }
     }
 
@@ -171,15 +176,18 @@ pub fn build_oci_model(config: OciConfig) -> Result<Arc<dyn ChatModel<()>>> {
                 .ok_or_else(|| {
                     Error::Validation("OCI native chat requires a compartment_id".into())
                 })?;
-            Ok(Arc::new(OciNativeModel::new(
-                endpoint,
-                resolved,
-                compartment_id,
-                config.serving,
-                api_format,
-                config.model,
-                config.extra_headers,
-            )))
+            Ok(Arc::new(
+                OciNativeModel::new(
+                    endpoint,
+                    resolved,
+                    compartment_id,
+                    config.serving,
+                    api_format,
+                    config.model,
+                    config.extra_headers,
+                )
+                .with_temperature_override(config.temperature_override),
+            ))
         }
     }
 }
@@ -212,6 +220,9 @@ fn openai_compat_model(
     // same as on the native API (see `request.rs`).
     if crate::providers::openai::is_reasoning_model(&config.model) {
         model = model.with_temperature_unsupported_models([model_id]);
+    }
+    if config.temperature_override.is_some() {
+        model = model.with_temperature_override(config.temperature_override);
     }
     if base == OciOpenAiBase::OpenAi
         && let Some(project) = config.project_id.as_deref().filter(|p| !p.is_empty())

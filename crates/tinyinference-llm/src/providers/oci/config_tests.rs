@@ -112,6 +112,45 @@ fn compat_path_drops_temperature_and_max_tokens_for_openai_reasoning_models() {
 }
 
 #[test]
+fn compat_path_applies_the_temperature_override_except_on_reasoning_models() {
+    for (model_id, expected) in [("openai.gpt-oss-120b", Some(0.2)), ("openai.gpt-5.5", None)] {
+        let mut cfg = config(api_key());
+        cfg.model = model_id.into();
+        cfg.temperature_override = Some(0.2);
+        let endpoint = cfg.service_endpoint().unwrap();
+        let model = openai_compat_model(
+            &cfg,
+            &endpoint,
+            OciOpenAiBase::OpenAi,
+            cfg.auth.resolve().unwrap(),
+        );
+        let mut request = ModelRequest::new(vec![Message::user("hi")]);
+        request.temperature = Some(0.7);
+        let body = serde_json::to_value(model.translate_request(&request).unwrap()).unwrap();
+        assert_eq!(
+            body.get("temperature").and_then(|t| t.as_f64()),
+            expected,
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn native_path_applies_the_temperature_override() {
+    let body = |model: &OciNativeModel| {
+        let mut request = ModelRequest::new(vec![Message::user("hi")]);
+        request.temperature = Some(0.7);
+        let request = model.prepare(&request, false).unwrap();
+        serde_json::from_slice::<serde_json::Value>(request.body().unwrap().as_bytes().unwrap())
+            .unwrap()
+    };
+    let plain = native(api_key(), OciApiFormat::Generic);
+    assert_eq!(body(&plain)["chatRequest"]["temperature"], 0.7);
+    let overridden = native(api_key(), OciApiFormat::Generic).with_temperature_override(Some(0.2));
+    assert_eq!(body(&overridden)["chatRequest"]["temperature"], 0.2);
+}
+
+#[test]
 fn actions_base_with_signature_auth_has_no_header_credential() {
     let mut cfg = config(signed());
     cfg.compartment_id = Some("ocid1.compartment.c".into());

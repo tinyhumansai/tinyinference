@@ -80,6 +80,7 @@ pub struct OciNativeModel {
     model: String,
     profile: ModelProfile,
     extra_headers: Vec<(String, String)>,
+    temperature_override: Option<f64>,
 }
 
 impl std::fmt::Debug for OciNativeModel {
@@ -138,7 +139,14 @@ impl OciNativeModel {
             model,
             profile,
             extra_headers,
+            temperature_override: None,
         }
+    }
+
+    /// Replaces each request's temperature with `temperature` when set.
+    pub(super) fn with_temperature_override(mut self, temperature: Option<f64>) -> Self {
+        self.temperature_override = temperature;
+        self
     }
 
     fn request_model<'a>(&'a self, request: &'a ModelRequest) -> &'a str {
@@ -173,6 +181,17 @@ impl OciNativeModel {
 
     /// Builds the fully authenticated (bearer or signed) HTTP request.
     fn prepare(&self, request: &ModelRequest, streaming: bool) -> Result<reqwest::Request> {
+        let overridden;
+        let request = match self.temperature_override {
+            Some(temperature) => {
+                overridden = ModelRequest {
+                    temperature: Some(temperature),
+                    ..request.clone()
+                };
+                &overridden
+            }
+            None => request,
+        };
         let body = request::chat_details(
             request,
             &self.model,
