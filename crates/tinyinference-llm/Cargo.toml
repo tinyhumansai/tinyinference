@@ -17,6 +17,9 @@ default = []
 # host `ChatBackend` (lives here, not in tinyinference-providers: this crate
 # already depends on providers, so the reverse edge would be a cycle).
 server-http = ["dep:axum", "dep:uuid"]
+# OCI instance-principal and OKE workload-identity auth. Needs OpenSSL for
+# RSA session-key generation and X.509 parsing, so it is off by default.
+oci-principals = ["dep:openssl"]
 
 [dependencies]
 axum = { workspace = true, optional = true }
@@ -25,7 +28,11 @@ base64 = "0.23"
 async-trait = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
+httpdate = { workspace = true }
+openssl = { version = "0.10", optional = true }
 reqwest = { workspace = true }
+ring = { workspace = true }
+sha2 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -41,6 +48,9 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 axum = { workspace = true }
+# Generates the throwaway RSA key and certificate the OCI tests sign with, so
+# no key material is committed.
+openssl = "0.10"
 uuid = { workspace = true }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"

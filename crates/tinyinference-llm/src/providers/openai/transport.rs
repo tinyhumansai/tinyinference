@@ -146,6 +146,10 @@ pub struct OpenAiModel {
     /// [`crate::providers::ProviderRequestOptions`]. Currently applied to the
     /// Chat Completions transport path only ([`Self::post_json`]).
     request_options: crate::providers::ProviderRequestOptions,
+    /// Signs each outbound request just before it is sent, for providers that
+    /// authenticate with a request signature rather than a header credential.
+    /// See [`Self::with_request_signer`].
+    request_signer: Option<std::sync::Arc<dyn crate::providers::RequestSigner>>,
 }
 
 impl std::fmt::Debug for OpenAiModel {
@@ -316,16 +320,21 @@ pub(super) fn is_anthropic_model(model: &str) -> bool {
     lower.starts_with("claude") || lower.split('/').any(|seg| seg == "anthropic")
 }
 
-/// Returns `true` for OpenAI o-series reasoning models (`o1`/`o3`/`o4`), which
-/// reject `max_tokens` and require `max_completion_tokens` instead.
-pub(super) fn is_reasoning_model(model: &str) -> bool {
+/// Returns `true` for OpenAI reasoning models (the `o1`/`o3`/`o4` o-series and
+/// the gpt-5 and gpt-6 families), which reject `max_tokens` and require
+/// `max_completion_tokens` instead. OCI Generative AI names them with an
+/// `openai.` vendor prefix (`openai.gpt-5.5`), which is stripped first.
+pub(crate) fn is_reasoning_model(model: &str) -> bool {
     let lower = model.to_ascii_lowercase();
+    let lower = lower.strip_prefix("openai.").unwrap_or(&lower);
     lower.starts_with("o1")
         || lower.starts_with("o3")
         || lower.starts_with("o4")
         || lower.starts_with("gpt-5")
         || lower.starts_with("gpt5")
         || lower.contains("/gpt-5")
+        || lower.starts_with("gpt-6")
+        || lower.contains("/gpt-6")
 }
 
 /// Whether `message` is a system message that renders no text on the Chat
@@ -456,7 +465,38 @@ impl OpenAiModel {
             native_tools_on_wire: AtomicBool::new(true),
             responses_requires_stream: AtomicBool::new(false),
             request_options: crate::providers::ProviderRequestOptions::default(),
+            request_signer: None,
         }
+    }
+
+    /// Static headers attached to every request (crate-internal, for tests).
+    #[cfg(test)]
+    pub(crate) fn extra_headers(&self) -> &[(String, String)] {
+        &self.extra_headers
+    }
+
+    /// Whether a request signer is installed (crate-internal, for tests).
+    #[cfg(test)]
+    pub(crate) fn has_request_signer(&self) -> bool {
+        self.request_signer.is_some()
+    }
+
+    /// The configured [`AuthStyle`] (crate-internal, for tests).
+    #[cfg(test)]
+    pub(crate) fn auth_style(&self) -> &AuthStyle {
+        &self.auth
+    }
+
+    /// Installs a [`crate::providers::RequestSigner`] applied to every request
+    /// after it is fully built (body included) and before it is sent. Pair with
+    /// [`AuthStyle::None`] when the signature replaces the credential header.
+    #[must_use]
+    pub fn with_request_signer(
+        mut self,
+        signer: std::sync::Arc<dyn crate::providers::RequestSigner>,
+    ) -> Self {
+        self.request_signer = Some(signer);
+        self
     }
 
     /// Sets host-supplied request hooks and an optional HTTP client override
@@ -1308,7 +1348,7 @@ impl OpenAiModel {
     /// Test-only: production paths go through [`Self::build_chat_body`] /
     /// [`Self::post_chat_with_degrade`], which thread an explicit [`Degrade`].
     #[cfg(test)]
-    pub(super) fn translate_request(
+    pub(crate) fn translate_request(
         &self,
         request: &ModelRequest,
     ) -> Result<ChatCompletionRequest> {
@@ -1757,7 +1797,19 @@ impl OpenAiModel {
         url: &str,
     ) -> Result<reqwest::Response> {
         crate::model::budget::before_physical_attempt()?;
-        let response = builder.send().await.map_err(|e| {
+        let sent = match &self.request_signer {
+            Some(signer) => {
+                let (client, request) = builder.build_split();
+                let signed = request.map_err(|e| {
+                    Error::Validation(format!("{what} to {url} could not be built: {e}"))
+                });
+                let mut request = signed?;
+                signer.sign(&mut request)?;
+                client.execute(request).await
+            }
+            None => builder.send().await,
+        };
+        let response = sent.map_err(|e| {
             let error = self.provider_error(
                 format!("{what} to {url} failed: {e}"),
                 None,

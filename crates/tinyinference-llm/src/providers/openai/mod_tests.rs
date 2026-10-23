@@ -1632,6 +1632,20 @@ fn routes_max_tokens_to_max_completion_tokens_for_o_series() {
 }
 
 #[test]
+fn oci_vendor_prefixed_reasoning_models_use_max_completion_tokens() {
+    // OCI Generative AI names OpenAI models `openai.<id>`.
+    assert!(is_reasoning_model("openai.gpt-5.5"));
+    assert!(is_reasoning_model("OpenAI.o4-mini"));
+    assert!(!is_reasoning_model("openai.gpt-4o"));
+    assert!(!is_reasoning_model("openai.gpt-oss-120b"));
+    let request = ModelRequest::new(vec![Message::user("hi")]).with_max_tokens(128);
+    let model = OpenAiModel::new("k").with_model("openai.gpt-5.5");
+    let value = serde_json::to_value(model.translate_request(&request).unwrap()).unwrap();
+    assert!(value.get("max_tokens").is_none());
+    assert_eq!(value["max_completion_tokens"], json!(128));
+}
+
+#[test]
 fn keeps_max_tokens_for_classic_models() {
     let request = ModelRequest::new(vec![Message::user("hi")]).with_max_tokens(128);
     let value = serde_json::to_value(model().translate_request(&request).unwrap()).unwrap();
