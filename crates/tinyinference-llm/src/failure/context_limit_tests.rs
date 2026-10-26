@@ -44,6 +44,16 @@ fn parses_mistral_trailing_limit() {
 }
 
 #[test]
+fn parses_trailing_limit_after_a_multibyte_character() {
+    // A no-break space or a CJK character right before the number used to
+    // panic: the start of the digits was taken as one byte past it.
+    let message = "too large for model with\u{a0}32768 maximum context length";
+    assert_eq!(parse_context_limit_from_error(message), Some(32_768));
+    let message = "输入过长，模型32768 maximum context length";
+    assert_eq!(parse_context_limit_from_error(message), Some(32_768));
+}
+
+#[test]
 fn parses_gemini_allowed_maximum() {
     let message = "The input token count (1200000) exceeds the maximum number of tokens \
                    allowed (1048576).";
