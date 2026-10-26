@@ -28,6 +28,12 @@ fn builtin_cloud_provider_defaults_cover_phase_one_presets() {
             BuiltinAuthStyle::Bearer,
         ),
         (
+            "oci",
+            "OCI Generative AI",
+            "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com",
+            BuiltinAuthStyle::Oci,
+        ),
+        (
             "modelscope",
             "ModelScope",
             "https://api-inference.modelscope.cn/v1",
