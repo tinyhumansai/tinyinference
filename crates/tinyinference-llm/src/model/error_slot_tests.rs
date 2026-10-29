@@ -14,6 +14,8 @@ struct ScriptedStreamModel(Mutex<Vec<ModelStreamItem>>);
 
 fn completed() -> ModelResponse {
     ModelResponse {
+        output: Vec::new(),
+        execution: None,
         message: AssistantMessage {
             id: None,
             content: vec![ContentBlock::Text("ok".to_string())],

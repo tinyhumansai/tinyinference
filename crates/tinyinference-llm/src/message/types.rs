@@ -343,6 +343,9 @@ pub struct MessageOrigin {
 /// A tool result message correlated to a prior tool call.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ToolMessage {
+    /// Name and signed-call context for stateful native function results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call_context: Option<crate::tool::ToolResultContext>,
     /// Id of the tool call this message answers.
     pub tool_call_id: String,
     /// Ordered content blocks.
@@ -353,6 +356,22 @@ pub struct ToolMessage {
     /// Host-side structured payload that is never sent to the provider.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact: Option<Value>,
+}
+
+impl ToolMessage {
+    /// Creates a native function result retaining the originating call context.
+    pub fn for_call(call: &ToolCall, content: Vec<ContentBlock>) -> Self {
+        Self {
+            call_context: Some(crate::tool::ToolResultContext {
+                name: call.name.clone(),
+                replay: call.replay.clone(),
+            }),
+            tool_call_id: call.id.clone(),
+            content,
+            trusted_verbatim: false,
+            artifact: None,
+        }
+    }
 }
 
 fn is_false(value: &bool) -> bool {

@@ -294,3 +294,98 @@ fn responses_pdf_url_uses_file_url() {
         json!({"type":"input_file","file_url":"https://example.com/a.pdf"})
     );
 }
+
+#[test]
+fn parse_preserves_ordered_output_and_execution_metadata() {
+    let resp = parse_responses_response(json!({
+        "id": "resp_42",
+        "model": "gpt-5",
+        "status": "completed",
+        "output": [
+            {
+                "id": "rs_1",
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "think"}],
+                "encrypted_content": "sig"
+            },
+            {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{
+                    "type": "output_text",
+                    "text": "answer",
+                    "annotations": [{
+                        "type": "url_citation",
+                        "url": "https://example.com",
+                        "title": "Example",
+                        "start_index": 0,
+                        "end_index": 6
+                    }]
+                }]
+            },
+            {
+                "id": "fc_1",
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "lookup",
+                "arguments": "{\"q\":1}"
+            },
+            {"id": "ws_1", "type": "web_search_call", "status": "completed"}
+        ]
+    }));
+
+    let execution = resp.execution.expect("execution metadata");
+    assert_eq!(execution.id, "resp_42");
+    assert_eq!(execution.model, "gpt-5");
+    assert_eq!(execution.status, ExecutionStatus::Completed);
+
+    let ids: Vec<_> = resp.output.iter().map(|item| item.id.as_deref()).collect();
+    assert_eq!(
+        ids,
+        [Some("rs_1"), Some("msg_1"), Some("fc_1"), Some("ws_1")]
+    );
+    assert!(matches!(
+        &resp.output[0].kind,
+        ModelOutputKind::Reasoning { content }
+            if content == &[ContentBlock::Thinking { text: "think".into(), signature: Some("sig".into()) }]
+    ));
+    let ModelOutputKind::Message { role, content } = &resp.output[1].kind else {
+        panic!("expected message item");
+    };
+    assert_eq!(role, "assistant");
+    assert_eq!(content[0].block, ContentBlock::Text("answer".into()));
+    assert!(matches!(
+        &content[0].annotations[0],
+        OutputAnnotation::UrlCitation { url, start: Some(0), end: Some(6), .. } if url == "https://example.com"
+    ));
+    let ModelOutputKind::FunctionCall { call } = &resp.output[2].kind else {
+        panic!("expected function call item");
+    };
+    assert_eq!(call.id, "call_1");
+    assert_eq!(call.arguments, json!({"q": 1}));
+    assert!(matches!(
+        &resp.output[3].kind,
+        ModelOutputKind::Extension { item_type, .. } if item_type == "web_search_call"
+    ));
+}
+
+#[test]
+fn parse_keeps_malformed_function_arguments_as_an_invalid_call() {
+    let resp = parse_responses_response(json!({
+        "output": [{"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{bad"}]
+    }));
+    let ModelOutputKind::FunctionCall { call } = &resp.output[0].kind else {
+        panic!("expected function call item");
+    };
+    assert!(call.invalid.is_some());
+    assert_eq!(call.arguments, json!("{bad"));
+}
+
+#[test]
+fn parse_omits_execution_without_a_response_id() {
+    let resp = parse_responses_response(json!({ "output_text": "hi" }));
+    assert!(resp.execution.is_none());
+    assert!(resp.output.is_empty());
+}

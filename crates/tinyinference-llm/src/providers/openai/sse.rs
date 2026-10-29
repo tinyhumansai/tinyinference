@@ -560,6 +560,8 @@ impl OpenAiStreamAcc {
             origin: None,
         };
         ModelResponse {
+            output: Vec::new(),
+            execution: None,
             message,
             usage: self.usage,
             finish_reason: self
@@ -677,6 +679,7 @@ impl SseState {
         let Ok(value) = serde_json::from_str::<Value>(payload) else {
             if payload.starts_with('{') || payload.starts_with('[') {
                 let item = self.provider_failure(ProviderError {
+                    partial_response: None,
                     message: "provider returned malformed SSE JSON".into(),
                     retryable: false,
                     raw: Some(Value::String(payload.into())),
@@ -769,6 +772,7 @@ impl SseState {
             crate::failure::classify_provider_failure(status, code.as_deref(), &message)
                 .is_retryable();
         ProviderError {
+            partial_response: None,
             provider: self.provider.clone(),
             model: Some(self.model.clone()),
             status,
@@ -797,9 +801,10 @@ impl SseState {
             .finish_reason
             .clone()
             .map(crate::model::canonical_finish_reason);
-        let partial = std::mem::take(&mut self.acc).into_response().message;
-        if !partial.content.is_empty() || !partial.tool_calls.is_empty() {
-            error.partial_message = Some(partial);
+        let partial = std::mem::take(&mut self.acc).into_response();
+        if !partial.message.content.is_empty() || !partial.message.tool_calls.is_empty() {
+            error.partial_message = Some(partial.message.clone());
+            error.partial_response = Some(Box::new(partial));
         }
         ModelStreamItem::ProviderFailed(error)
     }
@@ -838,6 +843,7 @@ pub(super) async fn sse_next(mut state: SseState) -> Option<(ModelStreamItem, Ss
             }
             Some(Err(error)) => {
                 let item = state.provider_failure(ProviderError {
+                    partial_response: None,
                     message: error.to_string(),
                     retryable: true,
                     ..ProviderError::default()
@@ -852,6 +858,7 @@ pub(super) async fn sse_next(mut state: SseState) -> Option<(ModelStreamItem, Ss
                     state.finished = true;
                 } else {
                     let item = state.provider_failure(ProviderError {
+                        partial_response: None,
                         message: "provider stream ended before a completion signal".into(),
                         retryable: true,
                         ..ProviderError::default()

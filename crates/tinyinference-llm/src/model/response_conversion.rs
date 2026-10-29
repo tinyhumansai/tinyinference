@@ -30,12 +30,7 @@ pub fn response_to_model_response(
                     _ => &call.arguments,
                 };
                 match serde_json::from_str(arguments) {
-                    Ok(arguments) => ToolCall {
-                        id: call.id.clone(),
-                        name: call.name.clone(),
-                        arguments,
-                        invalid: None,
-                    },
+                    Ok(arguments) => ToolCall::new(call.id.clone(), call.name.clone(), arguments),
                     Err(error) => ToolCall::invalid(
                         call.id.clone(),
                         call.name.clone(),
@@ -66,11 +61,12 @@ pub fn response_to_model_response(
             let calls = parsed
                 .into_iter()
                 .enumerate()
-                .map(|(index, call)| ToolCall {
-                    id: call.id.unwrap_or_else(|| format!("call_{index}")),
-                    name: call.name,
-                    arguments: call.arguments,
-                    invalid: None,
+                .map(|(index, call)| {
+                    ToolCall::new(
+                        call.id.unwrap_or_else(|| format!("call_{index}")),
+                        call.name,
+                        call.arguments,
+                    )
                 })
                 .collect();
             (prose, calls)
@@ -100,6 +96,8 @@ pub fn response_to_model_response(
         None => "tool_calls".to_owned(),
     };
     ModelResponse {
+        output: Vec::new(),
+        execution: None,
         message: AssistantMessage {
             id: None,
             content,

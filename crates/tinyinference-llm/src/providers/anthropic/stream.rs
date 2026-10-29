@@ -346,6 +346,7 @@ impl AnthropicStreamAcc {
                     crate::failure::classify_provider_failure(None, code.as_deref(), &message)
                         .is_retryable();
                 return Err(Error::Provider(Box::new(ProviderError {
+                    partial_response: None,
                     provider: PROVIDER.to_string(),
                     code,
                     message,
@@ -423,6 +424,8 @@ impl AnthropicStreamAcc {
         });
         let usage = self.usage;
         ModelResponse {
+            output: Vec::new(),
+            execution: None,
             message: AssistantMessage {
                 id: self.id,
                 content,
@@ -486,6 +489,7 @@ impl SseState {
                 let retryable =
                     crate::failure::classify_provider_failure(None, None, &message).is_retryable();
                 ProviderError {
+                    partial_response: None,
                     provider: PROVIDER.to_string(),
                     message,
                     retryable,
@@ -500,9 +504,10 @@ impl SseState {
             .stop_reason
             .clone()
             .map(crate::model::canonical_finish_reason);
-        let partial = std::mem::take(&mut self.acc).into_response().message;
-        if !partial.content.is_empty() || !partial.tool_calls.is_empty() {
-            provider_error.partial_message = Some(partial);
+        let partial = std::mem::take(&mut self.acc).into_response();
+        if !partial.message.content.is_empty() || !partial.message.tool_calls.is_empty() {
+            provider_error.partial_message = Some(partial.message.clone());
+            provider_error.partial_response = Some(Box::new(partial));
         }
         ModelStreamItem::ProviderFailed(provider_error)
     }

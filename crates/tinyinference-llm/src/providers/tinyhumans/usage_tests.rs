@@ -5,6 +5,8 @@ use crate::usage::{Usage, recover_usage};
 
 fn response(usage: Usage, raw: serde_json::Value) -> ModelResponse {
     ModelResponse {
+        output: Vec::new(),
+        execution: None,
         message: AssistantMessage {
             id: None,
             content: vec![],

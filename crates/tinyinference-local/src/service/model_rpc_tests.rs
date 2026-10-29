@@ -36,6 +36,8 @@ fn local_model_selects_configured_provider() {
 #[test]
 fn model_outcome_enforces_empty_and_normalizes_usage() {
     let response = |text: &str, usage: Usage| ModelResponse {
+        output: Vec::new(),
+        execution: None,
         message: AssistantMessage {
             id: None,
             content: vec![ContentBlock::Text(text.to_string())],
@@ -75,6 +77,8 @@ fn model_outcome_enforces_empty_and_normalizes_usage() {
     assert_eq!(populated.completion_tokens, Some(3));
 
     let reasoning_only = ModelResponse {
+        output: Vec::new(),
+        execution: None,
         message: AssistantMessage {
             id: None,
             content: vec![ContentBlock::Thinking {

@@ -1758,6 +1758,7 @@ dependencies = [
  "base64 0.23.1",
  "bytes",
  "futures",
+ "http",
  "http-body-util",
  "rcgen",
  "reqwest",

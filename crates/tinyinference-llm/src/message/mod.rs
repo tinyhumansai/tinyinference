@@ -133,6 +133,7 @@ impl Message {
     /// Creates a tool result message for the given tool call id.
     pub fn tool(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
         Message::Tool(ToolMessage {
+            call_context: None,
             tool_call_id: tool_call_id.into(),
             content: vec![ContentBlock::Text(content.into())],
             trusted_verbatim: false,

@@ -87,6 +87,9 @@ impl ToolSchema {
 /// A model request to invoke a tool.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ToolCall {
+    /// Opaque signed-call replay context, scoped to its originating provider/model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replay: Option<ToolCallReplay>,
     /// Provider-assigned call identifier.
     pub id: String,
     /// Tool name.
@@ -104,6 +107,7 @@ impl ToolCall {
     pub fn new(id: impl Into<String>, name: impl Into<String>, arguments: Value) -> Self {
         Self {
             id: id.into(),
+            replay: None,
             name: name.into(),
             arguments,
             invalid: None,
@@ -119,6 +123,7 @@ impl ToolCall {
     ) -> Self {
         Self {
             id: id.into(),
+            replay: None,
             name: name.into(),
             arguments: Value::String(raw.into()),
             invalid: Some(reason.into()),
@@ -129,6 +134,28 @@ impl ToolCall {
     pub fn is_invalid(&self) -> bool {
         self.invalid.is_some()
     }
+}
+
+/// Context required to replay a signed function call without changing its bytes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolCallReplay {
+    /// Origin of the signature and argument representation.
+    pub origin: crate::message::MessageOrigin,
+    /// Provider output item ID, distinct from the call ID.
+    pub item_id: Option<String>,
+    /// Original argument JSON text, retained even when parsing succeeds.
+    pub arguments: String,
+    /// Opaque provider signature; never reconstruct or modify it.
+    pub thought_signature: Option<String>,
+}
+
+/// Context for a native function result sent without replaying its preceding call.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolResultContext {
+    /// Function name associated with the result's call ID.
+    pub name: String,
+    /// Original provider/model scope and signature when needed.
+    pub replay: Option<ToolCallReplay>,
 }
 
 /// An incremental tool-call fragment emitted by a model stream.

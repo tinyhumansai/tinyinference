@@ -25,8 +25,9 @@
 //!
 //! # Remaining gaps
 //!
-//! Tool *declarations* are sent, but a model that calls one comes back as a
-//! `function_call` output item this port does not yet decode into
+//! Tool *declarations* are sent, and a model that calls one is surfaced as a
+//! [`ModelOutputKind::FunctionCall`] in the ordered
+//! [`ModelResponse::output`], but is not yet projected into the message's
 //! [`ToolCall`](crate::tool::ToolCall)s — and tool *results* are
 //! rendered as `user` turns carrying an explicit `[tool_result id=…]` prefix
 //! rather than native `function_call_output` items. That preserves the causal
@@ -37,8 +38,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::message::{AssistantMessage, ContentBlock, Message};
-use crate::model::ModelResponse;
+use crate::model::{
+    AnnotatedContent, ExecutionStatus, ModelExecution, ModelOutputItem, ModelOutputKind,
+    ModelResponse, OutputAnnotation,
+};
+use crate::tool::ToolCall;
 use crate::usage::Usage;
+
+const WIRE_PROVIDER: &str = "openai";
 
 /// The `/v1/responses` request body.
 ///
@@ -639,6 +646,8 @@ pub(super) fn parse_responses_response(value: Value) -> ModelResponse {
         _ => Some("stop".to_string()),
     };
     ModelResponse {
+        output: responses_output(&value),
+        execution: responses_execution(&value),
         message: AssistantMessage {
             id: None,
             content,
@@ -657,6 +666,122 @@ pub(super) fn parse_responses_response(value: Value) -> ModelResponse {
         correlation: None,
         resolved_route: None,
     }
+}
+
+fn str_field<'a>(value: &'a Value, field: &str) -> Option<&'a str> {
+    value.get(field).and_then(Value::as_str)
+}
+
+fn array_field<'a>(value: &'a Value, field: &str) -> &'a [Value] {
+    value
+        .get(field)
+        .and_then(Value::as_array)
+        .map_or(&[], Vec::as_slice)
+}
+
+fn responses_execution(value: &Value) -> Option<ModelExecution> {
+    let id = str_field(value, "id").filter(|id| !id.trim().is_empty())?;
+    Some(ModelExecution {
+        id: id.to_owned(),
+        model: str_field(value, "model").unwrap_or_default().to_owned(),
+        status: str_field(value, "status").map_or(ExecutionStatus::Completed, |status| {
+            status.to_owned().into()
+        }),
+        incomplete_reason: value
+            .get("incomplete_details")
+            .and_then(|details| str_field(details, "reason"))
+            .map(str::to_owned),
+        sequence_number: None,
+        cost: None,
+        tool_usage: Default::default(),
+        progress: Vec::new(),
+    })
+}
+
+fn responses_output(value: &Value) -> Vec<ModelOutputItem> {
+    array_field(value, "output")
+        .iter()
+        .enumerate()
+        .map(|(index, item)| ModelOutputItem {
+            index,
+            id: str_field(item, "id").map(str::to_owned),
+            status: str_field(item, "status").map(|status| status.to_owned().into()),
+            kind: responses_output_kind(item),
+        })
+        .collect()
+}
+
+fn responses_output_kind(item: &Value) -> ModelOutputKind {
+    match str_field(item, "type") {
+        Some("message") => ModelOutputKind::Message {
+            role: str_field(item, "role").unwrap_or("assistant").to_owned(),
+            content: array_field(item, "content")
+                .iter()
+                .map(responses_content_part)
+                .collect(),
+        },
+        Some("reasoning") => {
+            let text = array_field(item, "summary")
+                .iter()
+                .chain(array_field(item, "content"))
+                .filter_map(|part| str_field(part, "text"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let signature = str_field(item, "encrypted_content")
+                .filter(|signature| !signature.is_empty())
+                .map(str::to_owned);
+            let content = if text.is_empty() && signature.is_none() {
+                Vec::new()
+            } else {
+                vec![ContentBlock::Thinking { text, signature }]
+            };
+            ModelOutputKind::Reasoning { content }
+        }
+        Some("function_call") => {
+            let id = str_field(item, "call_id").unwrap_or_default();
+            let name = str_field(item, "name").unwrap_or_default();
+            let arguments = str_field(item, "arguments").unwrap_or("{}");
+            let call = match serde_json::from_str(arguments) {
+                Ok(parsed) => ToolCall::new(id, name, parsed),
+                Err(error) => ToolCall::invalid(id, name, arguments, error.to_string()),
+            };
+            ModelOutputKind::FunctionCall { call }
+        }
+        other => ModelOutputKind::Extension {
+            provider: WIRE_PROVIDER.into(),
+            item_type: other.unwrap_or_default().to_owned(),
+            data: item.clone(),
+        },
+    }
+}
+
+fn responses_content_part(part: &Value) -> AnnotatedContent {
+    let block = match (str_field(part, "type"), str_field(part, "text")) {
+        (Some("output_text"), Some(text)) => ContentBlock::Text(text.to_owned()),
+        (Some("refusal"), _) => {
+            ContentBlock::Text(str_field(part, "refusal").unwrap_or_default().to_owned())
+        }
+        _ => ContentBlock::Json(part.clone()),
+    };
+    let annotations = array_field(part, "annotations")
+        .iter()
+        .map(|annotation| match str_field(annotation, "type") {
+            Some("url_citation") if str_field(annotation, "url").is_some() => {
+                OutputAnnotation::UrlCitation {
+                    offset_unit: "provider_characters".into(),
+                    url: str_field(annotation, "url").unwrap_or_default().to_owned(),
+                    title: str_field(annotation, "title").map(str::to_owned),
+                    start: annotation.get("start_index").and_then(Value::as_u64),
+                    end: annotation.get("end_index").and_then(Value::as_u64),
+                }
+            }
+            _ => OutputAnnotation::Extension {
+                provider: WIRE_PROVIDER.into(),
+                data: annotation.clone(),
+            },
+        })
+        .collect();
+    AnnotatedContent { block, annotations }
 }
 
 #[cfg(test)]

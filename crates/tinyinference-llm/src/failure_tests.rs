@@ -91,6 +91,7 @@ fn structured_status_takes_precedence_over_message_heuristics() {
 #[test]
 fn structured_provider_error_uses_the_same_classifier() {
     let error = ProviderError {
+        partial_response: None,
         status: Some(429),
         code: Some("insufficient_quota".into()),
         message: "quota exhausted".into(),
@@ -118,6 +119,7 @@ fn per_minute_quota_rate_limits_remain_retryable() {
 #[test]
 fn normalized_provider_retryability_is_authoritative() {
     let error = ProviderError {
+        partial_response: None,
         message: "malformed streaming payload".into(),
         retryable: false,
         ..ProviderError::default()
