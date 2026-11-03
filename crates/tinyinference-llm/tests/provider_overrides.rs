@@ -380,3 +380,17 @@ fn registered_chat_entry_exposes_all_provider_model_metadata() {
     assert_eq!(request.metadata["caller"], "retained");
     assert_eq!(request.metadata["reasoning_disabled"], true);
 }
+
+#[test]
+fn catalog_limits_request_debug_redacts_the_host_context() {
+    let request = CatalogLimitsRequest {
+        model: "gpt-test".to_string(),
+        context: "sk-live-secret",
+    };
+
+    let printed = format!("{request:?}");
+
+    assert!(printed.contains("gpt-test"), "{printed}");
+    assert!(printed.contains("<host context>"), "{printed}");
+    assert!(!printed.contains("sk-live-secret"), "{printed}");
+}
