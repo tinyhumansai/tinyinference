@@ -2,9 +2,11 @@ use super::*;
 
 fn missing_bearer() -> BearerResolver {
     Arc::new(|| {
-        Err(Error::Validation(
-            "No backend session for cloud embeddings".into(),
-        ))
+        Box::pin(async {
+            Err(Error::Validation(
+                "No backend session for cloud embeddings".into(),
+            ))
+        })
     })
 }
 
@@ -49,7 +51,7 @@ async fn empty_and_blank_batches_skip_egress_guard_and_bearer_for_both_entrypoin
         8,
         Arc::new(move || {
             bearer_count.fetch_add(1, Ordering::SeqCst);
-            Ok("token".into())
+            Box::pin(async { Ok("token".into()) })
         }),
     )
     .with_egress_guard(Arc::new(move |_, _| {

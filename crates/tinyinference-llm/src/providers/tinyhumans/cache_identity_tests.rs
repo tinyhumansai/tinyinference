@@ -35,17 +35,17 @@ fn cache_namespace_is_trimmed_and_blank_input_keeps_the_current_value() {
 #[test]
 fn cache_identity_keeps_endpoint_and_default_model_dimensions() {
     let first = TinyHumansModel::new("https://one.example.test", "", "model-a", || {
-        Ok("credential-a".into())
+        Box::pin(async { Ok("credential-a".into()) })
     })
     .unwrap()
     .with_cache_namespace("openhuman");
     let other_endpoint = TinyHumansModel::new("https://two.example.test", "", "model-a", || {
-        Ok("credential-b".into())
+        Box::pin(async { Ok("credential-b".into()) })
     })
     .unwrap()
     .with_cache_namespace("openhuman");
     let other_model = TinyHumansModel::new("https://one.example.test", "", "model-b", || {
-        Ok("credential-c".into())
+        Box::pin(async { Ok("credential-c".into()) })
     })
     .unwrap()
     .with_cache_namespace("openhuman");
@@ -63,8 +63,11 @@ fn reading_cache_identity_never_resolves_or_includes_credentials() {
     let reads = Arc::new(AtomicUsize::new(0));
     let resolver_reads = Arc::clone(&reads);
     let model = TinyHumansModel::new("https://api.example.test", "", "default-model", move || {
-        resolver_reads.fetch_add(1, Ordering::SeqCst);
-        Ok("must-not-appear-in-cache-identity".into())
+        let resolver_reads = Arc::clone(&resolver_reads);
+        Box::pin(async move {
+            resolver_reads.fetch_add(1, Ordering::SeqCst);
+            Ok("must-not-appear-in-cache-identity".into())
+        })
     })
     .unwrap()
     .with_cache_namespace("openhuman");

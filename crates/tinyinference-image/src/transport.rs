@@ -18,6 +18,8 @@
 //! connection after a submit is surfaced as-is, because resubmitting could
 //! bill a second generation.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -40,7 +42,8 @@ pub const DEFAULT_MAX_MEDIA_BYTES: usize = 512 * 1024 * 1024;
 const MAX_ERROR_BODY_BYTES: usize = 16 * 1024;
 
 /// Resolves the current bearer token for each request.
-pub type BearerResolver = Arc<dyn Fn() -> Result<String> + Send + Sync>;
+pub type BearerResolver =
+    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<String>> + Send>> + Send + Sync>;
 
 /// How requests authenticate.
 #[derive(Clone)]
@@ -64,10 +67,10 @@ impl MediaAuth {
         }
     }
 
-    fn token(&self) -> Result<String> {
+    async fn token(&self) -> Result<String> {
         let token = match self {
             Self::ApiKey(key) => key.clone(),
-            Self::Bearer(resolve) => resolve()?,
+            Self::Bearer(resolve) => resolve().await?,
         };
         let token = token.trim().to_owned();
         if token.is_empty() {
@@ -197,7 +200,7 @@ impl MediaTransport {
         T: DeserializeOwned,
     {
         let body = serde_json::to_vec(body)?;
-        let response = self
+        let (response, _) = self
             .send(reqwest::Method::POST, path, Some(body), Billing::Billable)
             .await?;
         decode_json_with_limit(response, self.json_limit()).await
@@ -210,7 +213,7 @@ impl MediaTransport {
     /// [`Error::Auth`], [`Error::Http`], [`Error::Transport`] or
     /// [`Error::Decode`] after retries are exhausted.
     pub async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
-        let response = self
+        let (response, _) = self
             .send(reqwest::Method::GET, path, None, Billing::Idempotent)
             .await?;
         decode_json_with_limit(response, self.json_limit()).await
@@ -264,8 +267,7 @@ impl MediaTransport {
     }
 
     async fn get_bytes_once(&self, path: &str) -> Result<(Bytes, Option<String>)> {
-        let token = self.auth.token()?;
-        let mut response = self
+        let (mut response, token) = self
             .send(reqwest::Method::GET, path, None, Billing::Idempotent)
             .await?;
         let content_type = response
@@ -317,11 +319,11 @@ impl MediaTransport {
         path: &str,
         body: Option<Vec<u8>>,
         billing: Billing,
-    ) -> Result<reqwest::Response> {
+    ) -> Result<(reqwest::Response, String)> {
         let url = self.url(path);
         let mut attempt = 0u32;
         loop {
-            let token = self.auth.token()?;
+            let token = self.auth.token().await?;
             let mut request = self
                 .client
                 .request(method.clone(), &url)
@@ -340,7 +342,7 @@ impl MediaTransport {
             );
             let outcome = request.send().await;
             let (retry, retry_after, error) = match outcome {
-                Ok(response) if response.status().is_success() => return Ok(response),
+                Ok(response) if response.status().is_success() => return Ok((response, token)),
                 Ok(response) => {
                     let status = response.status().as_u16();
                     let retry_after = response

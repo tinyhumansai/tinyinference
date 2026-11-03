@@ -7,8 +7,9 @@ use tinyinference_embeddings::{EmbeddingModel, MockEmbeddingModel};
 use tinyinference_llm::model::ChatModel;
 use tinyinference_llm::providers::MockModel;
 use tinyinference_llm::providers::overrides::{
-    CatalogEntry, CatalogRequest, ChatModelEntry, ChatModelRequest, EmbeddingRequest,
-    ProviderModelMetadata, ProviderOverrides, ReadinessRequest,
+    CatalogEntry, CatalogLimitsFuture, CatalogLimitsRequest, CatalogRequest, ChatModelEntry,
+    ChatModelRequest, EmbeddingFactoryFuture, EmbeddingRequest, ProviderModelMetadata,
+    ProviderOverrides, ReadinessRequest,
 };
 
 struct HostContext<'a> {
@@ -17,11 +18,10 @@ struct HostContext<'a> {
     _ownership_marker: std::marker::PhantomData<&'a mut ()>,
 }
 
-#[test]
-fn synchronous_factories_accept_borrowed_non_clone_host_contexts() {
-    let config = String::from("borrowed-host-config");
+#[tokio::test]
+async fn asynchronous_factories_accept_owned_non_clone_host_contexts() {
     let context = HostContext {
-        borrowed_config: &config,
+        borrowed_config: "borrowed-host-config",
         _ownership_marker: std::marker::PhantomData,
     };
     let overrides = ProviderOverrides::new(
@@ -40,11 +40,18 @@ fn synchronous_factories_accept_borrowed_non_clone_host_contexts() {
         },
         |id| {
             (id == "hosted").then(|| {
-                Arc::new(|request: &EmbeddingRequest<'_, HostContext<'_>>| {
-                    assert_eq!(request.context.borrowed_config, "borrowed-host-config");
-                    Ok(Box::new(MockEmbeddingModel::new(request.dimensions))
-                        as Box<dyn EmbeddingModel>)
-                }) as _
+                Arc::new(
+                    |request: EmbeddingRequest<HostContext<'static>>| -> EmbeddingFactoryFuture {
+                        Box::pin(async move {
+                            assert_eq!(request.context.borrowed_config, "borrowed-host-config");
+                            Ok(Box::new(MockEmbeddingModel::new(request.dimensions))
+                                as Box<dyn EmbeddingModel>)
+                        })
+                    },
+                )
+                    as tinyinference_llm::providers::overrides::EmbeddingFactory<
+                        HostContext<'static>,
+                    >
             })
         },
         |_| None,
@@ -64,15 +71,17 @@ fn synchronous_factories_accept_borrowed_non_clone_host_contexts() {
     );
     assert_eq!(chat.unwrap().1, "borrowed-model");
 
-    let embedding = overrides.build_embedding(
-        "hosted",
-        &EmbeddingRequest {
-            model: "embed",
-            dimensions: 3,
-            context: &context,
-        },
-        |_| panic!("registered embedding factory should be used"),
-    );
+    let embedding = overrides
+        .build_embedding(
+            "hosted",
+            EmbeddingRequest {
+                model: "embed".into(),
+                dimensions: 3,
+                context,
+            },
+            |_| panic!("registered embedding factory should be used"),
+        )
+        .await;
     assert_eq!(embedding.unwrap().dimensions(), 3);
 }
 
@@ -118,11 +127,18 @@ async fn independent_live_family_lookups_override_only_their_builtin() {
         },
         |id| {
             (id == "shared").then(|| {
-                Arc::new(|request: &EmbeddingRequest<'_, HostContext<'_>>| {
-                    assert_eq!(request.context.borrowed_config, "scoped-config");
-                    Ok(Box::new(MockEmbeddingModel::new(request.dimensions))
-                        as Box<dyn EmbeddingModel>)
-                }) as _
+                Arc::new(
+                    |request: EmbeddingRequest<HostContext<'static>>| -> EmbeddingFactoryFuture {
+                        Box::pin(async move {
+                            assert_eq!(request.context.borrowed_config, "scoped-config");
+                            Ok(Box::new(MockEmbeddingModel::new(request.dimensions))
+                                as Box<dyn EmbeddingModel>)
+                        })
+                    },
+                )
+                    as tinyinference_llm::providers::overrides::EmbeddingFactory<
+                        HostContext<'static>,
+                    >
             })
         },
         |id| {
@@ -133,16 +149,20 @@ async fn independent_live_family_lookups_override_only_their_builtin() {
                         Ok(serde_json::json!({"models": []}))
                     })
                 }),
-                limits: Some(Arc::new(|model, context: &HostContext<'static>| {
-                    (model == "catalog-model" && context.borrowed_config == "catalog-config").then(
-                        || {
-                            tinyinference_llm::model::discover::DiscoveryRequest::new(
-                                "https://provider.invalid/v1",
-                                model,
-                            )
-                        },
-                    )
-                })),
+                limits: Some(Arc::new(
+                    |request: CatalogLimitsRequest<HostContext<'static>>| -> CatalogLimitsFuture {
+                        Box::pin(async move {
+                            (request.model == "catalog-model"
+                                && request.context.borrowed_config == "catalog-config")
+                                .then(|| {
+                                    tinyinference_llm::model::discover::DiscoveryRequest::new(
+                                        "https://provider.invalid/v1",
+                                        request.model,
+                                    )
+                                })
+                        })
+                    },
+                )),
             })
         },
     );
@@ -176,30 +196,38 @@ async fn independent_live_family_lookups_override_only_their_builtin() {
     );
     assert!(override_error.is_err());
 
-    let embedding = overrides.build_embedding(
-        "shared",
-        &EmbeddingRequest {
-            model: "embed-model",
-            dimensions: 8,
-            context: &scoped_context,
-        },
-        |_| panic!("embedding override must run before builtin"),
-    );
+    let embedding = overrides
+        .build_embedding(
+            "shared",
+            EmbeddingRequest {
+                model: "embed-model".into(),
+                dimensions: 8,
+                context: scoped_context,
+            },
+            |_| panic!("embedding override must run before builtin"),
+        )
+        .await;
     assert_eq!(embedding.unwrap().dimensions(), 8);
 
     let fallback_context = HostContext {
         borrowed_config: "fallback-config",
         _ownership_marker: std::marker::PhantomData,
     };
-    let fallback = overrides.build_embedding(
-        "unregistered",
-        &EmbeddingRequest {
-            model: "embed-model",
-            dimensions: 4,
-            context: &fallback_context,
-        },
-        |_| Ok(Box::new(MockEmbeddingModel::new(4)) as Box<dyn EmbeddingModel>),
-    );
+    let fallback = overrides
+        .build_embedding(
+            "unregistered",
+            EmbeddingRequest {
+                model: "embed-model".into(),
+                dimensions: 4,
+                context: fallback_context,
+            },
+            |_| {
+                Box::pin(async {
+                    Ok(Box::new(MockEmbeddingModel::new(4)) as Box<dyn EmbeddingModel>)
+                })
+            },
+        )
+        .await;
     assert_eq!(fallback.unwrap().dimensions(), 4);
 
     chat_enabled.store(false, Ordering::SeqCst);
@@ -211,7 +239,10 @@ async fn independent_live_family_lookups_override_only_their_builtin() {
             default_model: Some("builtin-model"),
             native_tool_calling: false,
             thread_id: None,
-            context: &fallback_context,
+            context: &HostContext {
+                borrowed_config: "fallback-config",
+                _ownership_marker: std::marker::PhantomData,
+            },
         },
         |_| {
             Ok((
@@ -241,12 +272,22 @@ async fn independent_live_family_lookups_override_only_their_builtin() {
         _ownership_marker: std::marker::PhantomData,
     };
     let limits = overrides.catalog_entry("shared").unwrap().limits.unwrap();
-    assert!(limits("catalog-model", &catalog_context).is_some());
+    assert!(
+        limits(CatalogLimitsRequest {
+            model: "catalog-model".into(),
+            context: catalog_context,
+        })
+        .await
+        .is_some()
+    );
     let listing = overrides
         .list_catalog(
             "shared",
             CatalogRequest {
-                context: catalog_context,
+                context: HostContext {
+                    borrowed_config: "catalog-config",
+                    _ownership_marker: std::marker::PhantomData,
+                },
             },
             |_| panic!("catalog override must run before builtin"),
         )

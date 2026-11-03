@@ -1,5 +1,7 @@
 //! Bearer-authenticated OpenAI-compatible cloud embedding model.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -13,7 +15,8 @@ pub const DEFAULT_CLOUD_MODEL: &str = "embedding-v1";
 pub const DEFAULT_CLOUD_DIMENSIONS: usize = 1024;
 
 /// Resolves the current bearer token for each request.
-pub type BearerResolver = Arc<dyn Fn() -> Result<String> + Send + Sync>;
+pub type BearerResolver =
+    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<String>> + Send>> + Send + Sync>;
 
 /// Host policy hook invoked immediately before an embedding batch may leave
 /// the process. This keeps privacy and audit policy in the host without
@@ -81,7 +84,7 @@ impl CloudEmbeddingModel {
     ///
     /// [`Error::Validation`] when an input is empty or whitespace, when the
     /// bearer resolver fails, or when it resolves to a blank token.
-    fn delegate(&self, texts: &[String]) -> Result<Option<OpenAiEmbeddingModel>> {
+    async fn delegate(&self, texts: &[String]) -> Result<Option<OpenAiEmbeddingModel>> {
         if texts.is_empty() {
             return Ok(None);
         }
@@ -95,7 +98,7 @@ impl CloudEmbeddingModel {
         if let Some(guard) = &self.egress_guard {
             guard(&self.model, texts.len())?;
         }
-        let bearer = (self.bearer)()?;
+        let bearer = (self.bearer)().await?;
         if bearer.trim().is_empty() {
             return Err(Error::Validation(
                 "No backend session for cloud embeddings".into(),
@@ -128,7 +131,7 @@ impl EmbeddingModel for CloudEmbeddingModel {
     }
 
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        let Some(delegate) = self.delegate(texts)? else {
+        let Some(delegate) = self.delegate(texts).await? else {
             return Ok(Vec::new());
         };
         delegate.embed(texts).await
@@ -140,7 +143,7 @@ impl EmbeddingModel for CloudEmbeddingModel {
         &self,
         texts: &[String],
     ) -> Result<(Vec<Vec<f32>>, Option<EmbeddingUsage>)> {
-        let Some(delegate) = self.delegate(texts)? else {
+        let Some(delegate) = self.delegate(texts).await? else {
             return Ok((Vec::new(), None));
         };
         delegate.embed_with_usage(texts).await

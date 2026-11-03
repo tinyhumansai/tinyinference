@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 struct Fixture {
     requests: Arc<std::sync::Mutex<Vec<(HeaderMap, Value)>>>,
     response: Arc<std::sync::Mutex<FixtureResponse>>,
+    rotate_token_before_response: Arc<std::sync::Mutex<Option<Arc<std::sync::Mutex<String>>>>>,
 }
 
 #[derive(Clone)]
@@ -49,6 +50,9 @@ fn completion_body() -> String {
 async fn chat(State(fixture): State<Fixture>, headers: HeaderMap, body: String) -> Response {
     let body: Value = serde_json::from_str(&body).expect("request JSON");
     fixture.requests.lock().unwrap().push((headers, body));
+    if let Some(token) = fixture.rotate_token_before_response.lock().unwrap().take() {
+        *token.lock().unwrap() = "new-session-token".to_owned();
+    }
     let response = fixture.response.lock().unwrap().clone();
     Response::builder()
         .status(response.status)
@@ -89,8 +93,10 @@ async fn serve(fixture: Fixture) -> String {
 }
 
 fn fixture_model(base: &str) -> TinyHumansModel {
-    TinyHumansModel::new(base, "", "default-model", || Ok("test-token".into()))
-        .expect("model construction")
+    TinyHumansModel::new(base, "", "default-model", || {
+        Box::pin(async { Ok("test-token".into()) })
+    })
+    .expect("model construction")
 }
 
 #[tokio::test]
@@ -100,10 +106,13 @@ async fn dynamic_bearer_is_resolved_again_for_invoke_and_stream() {
     let reads = Arc::new(AtomicUsize::new(0));
     let source = reads.clone();
     let model = TinyHumansModel::new(&base, "", "default-model", move || {
-        Ok(format!(
-            "token-{}",
-            source.fetch_add(1, Ordering::SeqCst) + 1
-        ))
+        let source = Arc::clone(&source);
+        Box::pin(async move {
+            Ok(format!(
+                "token-{}",
+                source.fetch_add(1, Ordering::SeqCst) + 1
+            ))
+        })
     })
     .unwrap();
     model
@@ -133,7 +142,7 @@ async fn constructor_model_is_default_and_nonblank_request_model_overrides_it() 
     let fixture = Fixture::default();
     let base = serve(fixture.clone()).await;
     let model = TinyHumansModel::new(&base, " constructor-model ", "fallback-model", || {
-        Ok("token".into())
+        Box::pin(async { Ok("token".into()) })
     })
     .unwrap();
     for requested_model in [None, Some("request-model"), Some("  ")] {
@@ -148,8 +157,10 @@ async fn constructor_model_is_default_and_nonblank_request_model_overrides_it() 
         assert_eq!(requests[2].1["model"], "constructor-model");
     }
 
-    let fallback_model =
-        TinyHumansModel::new(&base, "  ", "fallback-model", || Ok("token".into())).unwrap();
+    let fallback_model = TinyHumansModel::new(&base, "  ", "fallback-model", || {
+        Box::pin(async { Ok("token".into()) })
+    })
+    .unwrap();
     fallback_model
         .invoke(
             &(),
@@ -168,7 +179,7 @@ async fn resolver_failure_stops_before_transport() {
     let fixture = Fixture::default();
     let base = serve(fixture.clone()).await;
     let model = TinyHumansModel::new(&base, "m", "default-model", || {
-        Err(Error::Model("credential source failed".into()))
+        Box::pin(async { Err(Error::Model("credential source failed".into())) })
     })
     .unwrap();
     let error = model
@@ -473,7 +484,7 @@ async fn readiness_blocks_only_confirmed_missing_provider_configuration() {
 #[tokio::test]
 async fn readiness_fails_open_when_bearer_resolution_fails() {
     let model = TinyHumansModel::new("http://127.0.0.1:1", "m", "default-model", || {
-        Err(Error::Model("credential lookup unavailable".into()))
+        Box::pin(async { Err(Error::Model("credential lookup unavailable".into())) })
     })
     .unwrap();
     model
@@ -732,14 +743,17 @@ async fn managed_auth_failure_reports_the_credential_its_request_carried() {
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let seen_by_handler = seen.clone();
     let model = TinyHumansModel::new_with_credential(base, "", "default-model", move || {
-        let api_key = resolver_use_api_key.load(Ordering::SeqCst);
-        Ok(TinyHumansCredential {
-            bearer: if api_key { "key".into() } else { "jwt".into() },
-            kind: if api_key {
-                TinyHumansCredentialKind::ApiKey
-            } else {
-                TinyHumansCredentialKind::Session
-            },
+        let resolver_use_api_key = Arc::clone(&resolver_use_api_key);
+        Box::pin(async move {
+            let api_key = resolver_use_api_key.load(Ordering::SeqCst);
+            Ok(TinyHumansCredential {
+                bearer: if api_key { "key".into() } else { "jwt".into() },
+                kind: if api_key {
+                    TinyHumansCredentialKind::ApiKey
+                } else {
+                    TinyHumansCredentialKind::Session
+                },
+            })
         })
     })
     .expect("model construction")
@@ -773,6 +787,71 @@ async fn managed_auth_failure_reports_the_credential_its_request_carried() {
             ),
         ]
     );
+}
+
+#[tokio::test]
+async fn managed_auth_failure_carries_a_non_secret_request_credential_fingerprint() {
+    let fixture = Fixture::default();
+    let base = serve(fixture.clone()).await;
+    *fixture.response.lock().unwrap() = FixtureResponse {
+        status: StatusCode::UNAUTHORIZED,
+        content_type: "application/json",
+        body: json!({ "error": { "message": "Unauthorized" } }).to_string(),
+    };
+    let token = Arc::new(std::sync::Mutex::new("old-request-token".to_owned()));
+    *fixture.rotate_token_before_response.lock().unwrap() = Some(token.clone());
+    let token_for_resolver = token.clone();
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen_by_handler = seen.clone();
+    let model = TinyHumansModel::new_with_credential(base, "", "default-model", move || {
+        let token_for_resolver = Arc::clone(&token_for_resolver);
+        Box::pin(async move {
+            Ok(TinyHumansCredential {
+                bearer: token_for_resolver.lock().unwrap().clone(),
+                kind: TinyHumansCredentialKind::Session,
+            })
+        })
+    })
+    .unwrap()
+    .with_managed_auth_failure_handler(move |_, failure| {
+        seen_by_handler
+            .lock()
+            .unwrap()
+            .push(failure.credential_fingerprint());
+    });
+
+    let request = ModelRequest::new(vec![crate::message::Message::user("hi")]);
+    assert!(model.invoke(&(), request).await.is_err());
+    assert_eq!(*token.lock().unwrap(), "new-session-token");
+
+    let fingerprints = seen.lock().unwrap();
+    let fingerprint = fingerprints[0].expect("managed credential fingerprint");
+    assert!(fingerprint.matches_bearer("old-request-token"));
+    assert!(!fingerprint.matches_bearer("new-session-token"));
+    assert!(!format!("{fingerprint:?}").contains("old-request-token"));
+}
+
+#[test]
+fn credential_fingerprint_has_a_stable_opaque_hex_round_trip() {
+    let fingerprint = TinyHumansCredentialFingerprint::from_bearer("session-token");
+    let encoded = fingerprint.to_hex();
+
+    assert_eq!(encoded.len(), 64);
+    assert!(
+        encoded
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    );
+    assert_eq!(
+        TinyHumansCredentialFingerprint::from_hex(&encoded),
+        Some(fingerprint)
+    );
+    assert_eq!(
+        TinyHumansCredentialFingerprint::from_hex(&encoded.to_ascii_uppercase()),
+        None,
+        "the serialized form is canonical lower-case hex"
+    );
+    assert_eq!(TinyHumansCredentialFingerprint::from_hex("xyz"), None);
 }
 
 #[tokio::test]

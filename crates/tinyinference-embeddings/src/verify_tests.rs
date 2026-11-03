@@ -122,8 +122,11 @@ async fn connection_test_uses_host_managed_factory_and_returns_actual_width() {
         ollama_base_url: "http://localhost:11434".into(),
     };
     let credentials: CredentialResolver = std::sync::Arc::new(|_| String::new());
-    let managed: ManagedModelFactory =
-        std::sync::Arc::new(|_, dims| Ok(Box::new(crate::MockEmbeddingModel::new(dims))));
+    let managed: ManagedModelFactory = std::sync::Arc::new(|_, dims| {
+        Box::pin(async move {
+            Ok(Box::new(crate::MockEmbeddingModel::new(dims)) as Box<dyn crate::EmbeddingModel>)
+        })
+    });
     let result = test_embedding_connection(&settings, &credentials, &managed, None)
         .await
         .unwrap();
@@ -139,7 +142,8 @@ async fn detailed_connection_test_identifies_model_build_failures() {
         ollama_base_url: "http://localhost:11434".into(),
     };
     let credentials: CredentialResolver = std::sync::Arc::new(|_| String::new());
-    let managed: ManagedModelFactory = std::sync::Arc::new(|_, _| unreachable!());
+    let managed: ManagedModelFactory =
+        std::sync::Arc::new(|_, _| Box::pin(async { unreachable!() }));
 
     assert!(matches!(
         test_embedding_connection_detailed(&settings, &credentials, &managed, None).await,
@@ -177,7 +181,9 @@ async fn detailed_connection_test_identifies_embedding_failures() {
         ollama_base_url: "http://localhost:11434".into(),
     };
     let credentials: CredentialResolver = std::sync::Arc::new(|_| String::new());
-    let managed: ManagedModelFactory = std::sync::Arc::new(|_, _| Ok(Box::new(FailingModel)));
+    let managed: ManagedModelFactory = std::sync::Arc::new(|_, _| {
+        Box::pin(async { Ok(Box::new(FailingModel) as Box<dyn crate::EmbeddingModel>) })
+    });
 
     assert!(matches!(
         test_embedding_connection_detailed(&settings, &credentials, &managed, None).await,
@@ -194,7 +200,8 @@ async fn connection_test_preserves_noop_provider_success() {
         ollama_base_url: String::new(),
     };
     let credentials: CredentialResolver = std::sync::Arc::new(|_| String::new());
-    let managed: ManagedModelFactory = std::sync::Arc::new(|_, _| unreachable!());
+    let managed: ManagedModelFactory =
+        std::sync::Arc::new(|_, _| Box::pin(async { unreachable!() }));
     let result = test_embedding_connection(&settings, &credentials, &managed, None)
         .await
         .unwrap();
@@ -331,7 +338,7 @@ async fn custom_connection_infers_stored_endpoint_and_resolves_custom_credential
         capture.lock().unwrap().push(slug.to_owned());
         "key".into()
     });
-    let managed: ManagedModelFactory = Arc::new(|_, _| unreachable!());
+    let managed: ManagedModelFactory = Arc::new(|_, _| Box::pin(async { unreachable!() }));
     let result = test_embedding_connection(&settings, &credentials, &managed, None)
         .await
         .unwrap();

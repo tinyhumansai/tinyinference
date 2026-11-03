@@ -257,15 +257,26 @@ fn enveloped_png_reply(_call: usize) -> Response {
 #[tokio::test]
 async fn proxied_backend_base_url_and_bearer_resolver() {
     let fixture = fixture("/agent-integrations/openrouter", enveloped_png_reply, None).await;
-    let resolver: crate::BearerResolver = Arc::new(|| Ok("session-jwt-abcdefgh".to_owned()));
+    let resolver_calls = Arc::new(AtomicUsize::new(0));
+    let resolver: crate::BearerResolver = {
+        let resolver_calls = Arc::clone(&resolver_calls);
+        Arc::new(move || {
+            let call = resolver_calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move { Ok(format!("session-jwt-{call}")) })
+        })
+    };
     let generator = OpenRouterImageGenerator::with_transport(
         MediaTransport::new(MediaAuth::Bearer(resolver)).with_base_url(&fixture.base_url),
-    );
+    )
+    .with_capability_check(false);
     let response = generator.generate(ImageRequest::new("x")).await.unwrap();
     assert_eq!(response.images.len(), 1);
     assert_eq!(response.cost_usd, Some(0.035));
-    let headers = fixture.captured.headers.lock().unwrap()[0].clone();
-    assert_eq!(headers["authorization"], "Bearer session-jwt-abcdefgh");
+    generator.generate(ImageRequest::new("y")).await.unwrap();
+    assert_eq!(resolver_calls.load(Ordering::SeqCst), 2);
+    let headers = fixture.captured.headers.lock().unwrap();
+    assert_eq!(headers[0]["authorization"], "Bearer session-jwt-0");
+    assert_eq!(headers[1]["authorization"], "Bearer session-jwt-1");
 }
 
 #[tokio::test]
@@ -288,7 +299,7 @@ async fn failed_envelope_is_an_error_even_with_a_2xx_status() {
 #[tokio::test]
 async fn blank_bearer_fails_without_a_request() {
     let fixture = fixture("/api/v1", png_reply, None).await;
-    let resolver: crate::BearerResolver = Arc::new(|| Ok("  ".to_owned()));
+    let resolver: crate::BearerResolver = Arc::new(|| Box::pin(async { Ok("  ".to_owned()) }));
     let generator = OpenRouterImageGenerator::with_transport(
         MediaTransport::new(MediaAuth::Bearer(resolver)).with_base_url(&fixture.base_url),
     )

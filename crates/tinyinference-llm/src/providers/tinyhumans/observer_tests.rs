@@ -215,8 +215,11 @@ async fn observer_classifies_readiness_and_non_provider_failures() {
     let errors = Arc::new(std::sync::Mutex::new(Vec::new()));
     let errors_seen = Arc::clone(&errors);
     let model = TinyHumansModel::new("http://127.0.0.1:9", "model", "default-model", move || {
-        calls.fetch_add(1, Ordering::SeqCst);
-        Err(Error::Model("resolver marker".into()))
+        let calls = Arc::clone(&calls);
+        Box::pin(async move {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Err(Error::Model("resolver marker".into()))
+        })
     })
     .unwrap()
     .with_error_observer(move |error, point| {
