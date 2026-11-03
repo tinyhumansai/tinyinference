@@ -1,5 +1,7 @@
 //! Provider construction and custom-endpoint validation.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::{
@@ -12,8 +14,11 @@ use crate::{
 pub type CredentialResolver = Arc<dyn Fn(&str) -> String + Send + Sync>;
 
 /// Constructs the host-authenticated managed embedding model.
-pub type ManagedModelFactory =
-    Arc<dyn Fn(&str, usize) -> Result<Box<dyn EmbeddingModel>> + Send + Sync>;
+pub type ManagedModelFactory = Arc<
+    dyn Fn(&str, usize) -> Pin<Box<dyn Future<Output = Result<Box<dyn EmbeddingModel>>> + Send>>
+        + Send
+        + Sync,
+>;
 
 /// Host-independent inputs for selecting an embedding provider.
 #[derive(Clone, Debug)]
@@ -30,7 +35,7 @@ pub struct EmbeddingFactorySettings {
 
 /// Builds a provider from persisted settings while keeping credential storage
 /// and managed authentication in host-supplied callbacks.
-pub fn create_configured_embedding_model(
+pub async fn create_configured_embedding_model(
     settings: &EmbeddingFactorySettings,
     credentials: &CredentialResolver,
     managed: &ManagedModelFactory,
@@ -42,7 +47,7 @@ pub fn create_configured_embedding_model(
         None => (provider, None),
     };
     if matches!(slug, "cloud" | "managed") {
-        return managed(&settings.model, settings.dimensions);
+        return managed(&settings.model, settings.dimensions).await;
     }
     let api_key = credentials(slug);
     create_embedding_model(
@@ -57,14 +62,14 @@ pub fn create_configured_embedding_model(
 
 /// Builds the configured provider, falling back to the managed model when the
 /// selection is blank, invalid, or missing a required credential.
-pub fn create_default_embedding_model(
+pub async fn create_default_embedding_model(
     settings: &EmbeddingFactorySettings,
     credentials: &CredentialResolver,
     managed: &ManagedModelFactory,
 ) -> Result<Box<dyn EmbeddingModel>> {
     let provider = settings.provider.trim();
     if provider.is_empty() || matches!(provider, "cloud" | "managed") {
-        return managed(DEFAULT_CLOUD_MODEL, DEFAULT_CLOUD_DIMENSIONS);
+        return managed(DEFAULT_CLOUD_MODEL, DEFAULT_CLOUD_DIMENSIONS).await;
     }
 
     let slug = if provider.starts_with("custom:") {
@@ -79,14 +84,14 @@ pub fn create_default_embedding_model(
             provider = slug,
             "configured embedding provider has no credential; falling back to managed"
         );
-        return managed(DEFAULT_CLOUD_MODEL, DEFAULT_CLOUD_DIMENSIONS);
+        return managed(DEFAULT_CLOUD_MODEL, DEFAULT_CLOUD_DIMENSIONS).await;
     }
 
-    match create_configured_embedding_model(settings, credentials, managed) {
+    match create_configured_embedding_model(settings, credentials, managed).await {
         Ok(model) => Ok(model),
         Err(error) => {
             tracing::warn!(provider = slug, %error, "configured embedding provider failed to build; falling back to managed");
-            managed(DEFAULT_CLOUD_MODEL, DEFAULT_CLOUD_DIMENSIONS)
+            managed(DEFAULT_CLOUD_MODEL, DEFAULT_CLOUD_DIMENSIONS).await
         }
     }
 }

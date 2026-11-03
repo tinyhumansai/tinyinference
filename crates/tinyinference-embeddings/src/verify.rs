@@ -200,6 +200,7 @@ pub async fn test_embedding_connection_detailed(
         });
     }
     let model = create_configured_embedding_model(settings, credentials, managed)
+        .await
         .map_err(ConnectionTestError::Build)?;
     let vectors = model
         .embed(&["connection test".to_owned()])

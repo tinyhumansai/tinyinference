@@ -177,16 +177,16 @@ impl<Ctx> Clone for ProviderModelMetadata<Ctx> {
 }
 
 /// Inputs a host embedding factory uses to construct an embedding model.
-pub struct EmbeddingRequest<'a, Ctx> {
+pub struct EmbeddingRequest<Ctx> {
     /// Embedding model id selected by the host.
-    pub model: &'a str,
+    pub model: String,
     /// Vector dimensionality selected by the host.
     pub dimensions: usize,
-    /// Borrowed host context such as configuration and credential scope.
-    pub context: &'a Ctx,
+    /// Owned host context such as configuration and credential scope.
+    pub context: Ctx,
 }
 
-impl<Ctx> std::fmt::Debug for EmbeddingRequest<'_, Ctx> {
+impl<Ctx> std::fmt::Debug for EmbeddingRequest<Ctx> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("EmbeddingRequest")
@@ -197,12 +197,12 @@ impl<Ctx> std::fmt::Debug for EmbeddingRequest<'_, Ctx> {
     }
 }
 
+/// A provider embedding factory's async result.
+pub type EmbeddingFactoryFuture = BoxFuture<EmbeddingResult<Box<dyn EmbeddingModel>>>;
+
 /// Builds a provider embedding model.
-pub type EmbeddingFactory<Ctx> = Arc<
-    dyn for<'a> Fn(&EmbeddingRequest<'a, Ctx>) -> EmbeddingResult<Box<dyn EmbeddingModel>>
-        + Send
-        + Sync,
->;
+pub type EmbeddingFactory<Ctx> =
+    Arc<dyn Fn(EmbeddingRequest<Ctx>) -> EmbeddingFactoryFuture + Send + Sync>;
 
 /// Owned host context passed to a catalog listing implementation.
 pub struct CatalogRequest<Ctx> {
@@ -223,8 +223,21 @@ impl<Ctx> std::fmt::Debug for CatalogRequest<Ctx> {
 pub type CatalogListing<Ctx> =
     Arc<dyn Fn(CatalogRequest<Ctx>) -> BoxFuture<std::result::Result<Value, String>> + Send + Sync>;
 
+/// Async result of a provider limit-discovery request.
+pub type CatalogLimitsFuture = BoxFuture<Option<DiscoveryRequest>>;
+
+/// Input to an async provider catalog limits resolver.
+#[derive(Debug)]
+pub struct CatalogLimitsRequest<Ctx> {
+    /// Model whose supported limits are being discovered.
+    pub model: String,
+    /// Owned host context such as configuration and credential sources.
+    pub context: Ctx,
+}
+
 /// Builds the provider limit discovery request for a model, if supported.
-pub type CatalogLimits<Ctx> = Arc<dyn Fn(&str, &Ctx) -> Option<DiscoveryRequest> + Send + Sync>;
+pub type CatalogLimits<Ctx> =
+    Arc<dyn Fn(CatalogLimitsRequest<Ctx>) -> CatalogLimitsFuture + Send + Sync>;
 
 /// A provider catalog listing and optional model-limit resolver.
 pub struct CatalogEntry<Ctx> {
@@ -338,18 +351,18 @@ impl<Ctx> ProviderOverrides<Ctx> {
     ///
     /// # Errors
     /// Returns the selected factory's construction error.
-    pub fn build_embedding<B>(
+    pub async fn build_embedding<B>(
         &self,
         provider_id: &str,
-        request: &EmbeddingRequest<'_, Ctx>,
+        request: EmbeddingRequest<Ctx>,
         builtin: B,
     ) -> EmbeddingResult<Box<dyn EmbeddingModel>>
     where
-        B: FnOnce(&EmbeddingRequest<'_, Ctx>) -> EmbeddingResult<Box<dyn EmbeddingModel>>,
+        B: FnOnce(EmbeddingRequest<Ctx>) -> EmbeddingFactoryFuture,
     {
         match self.embedding_factory(provider_id) {
-            Some(factory) => factory(request),
-            None => builtin(request),
+            Some(factory) => factory(request).await,
+            None => builtin(request).await,
         }
     }
 
