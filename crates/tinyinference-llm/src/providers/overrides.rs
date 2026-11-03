@@ -227,12 +227,21 @@ pub type CatalogListing<Ctx> =
 pub type CatalogLimitsFuture = BoxFuture<Option<DiscoveryRequest>>;
 
 /// Input to an async provider catalog limits resolver.
-#[derive(Debug)]
 pub struct CatalogLimitsRequest<Ctx> {
     /// Model whose supported limits are being discovered.
     pub model: String,
     /// Owned host context such as configuration and credential sources.
     pub context: Ctx,
+}
+
+impl<Ctx> std::fmt::Debug for CatalogLimitsRequest<Ctx> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CatalogLimitsRequest")
+            .field("model", &self.model)
+            .field("context", &"<host context>")
+            .finish()
+    }
 }
 
 /// Builds the provider limit discovery request for a model, if supported.
