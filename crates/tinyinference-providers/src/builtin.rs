@@ -10,6 +10,10 @@ pub enum BuiltinAuthStyle {
     Bearer,
     /// Anthropic x-api-key and version headers.
     Anthropic,
+    /// OCI Generative AI: a GenAI API key, OCI request signing, or a
+    /// principal, served by the `tinyinference-llm` OCI provider rather than
+    /// a plain OpenAI-compatible client.
+    Oci,
 }
 
 /// A known cloud-provider preset, independent of any saved host configuration.
@@ -184,6 +188,14 @@ pub const BUILTIN_CLOUD_PROVIDERS: &[BuiltinCloudProvider] = &[
         label: "SumoPod",
         endpoint: "https://ai.sumopod.com/v1",
         auth_style: BuiltinAuthStyle::Bearer,
+    },
+    BuiltinCloudProvider {
+        slug: "oci",
+        label: "OCI Generative AI",
+        // Display default only: hosts route OCI entries by region or an
+        // explicit endpoint through the OCI provider, not by this URL.
+        endpoint: "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com",
+        auth_style: BuiltinAuthStyle::Oci,
     },
     BuiltinCloudProvider {
         slug: "modelscope",
