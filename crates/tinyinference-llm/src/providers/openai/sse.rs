@@ -256,7 +256,7 @@ impl OpenAiStreamAcc {
                     tool_call: None,
                 }));
             }
-            if let Some(content) = choice.delta.content.filter(|c| !c.is_empty()) {
+            if !content.is_empty() {
                 // Retain the raw content so the terminal response can recompute
                 // an authoritative inline-tag split (see `into_response`).
                 self.text.push_str(&content);
