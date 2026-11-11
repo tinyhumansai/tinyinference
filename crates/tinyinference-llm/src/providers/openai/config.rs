@@ -135,10 +135,17 @@ pub(crate) fn build_openai_model_with(
     Arc::new(configure_openai_model(model, config, http))
 }
 
+/// Provider name of the generic OpenAI-compatible local runtime.
+const LOCAL_OPENAI_PROVIDER: &str = "local-openai";
+
 /// Builds a local OpenAI-compatible model from a completed config: no
 /// Anthropic cache markers, and every system message sent as one leading
 /// `system` message, because local chat templates commonly reject a `system`
 /// turn anywhere but first (tinyhumansai/openhuman#7440).
+///
+/// A `local-openai` model (any OpenAI-compatible endpoint, often a reseller or
+/// marketplace) fulfils `invoke` by streaming; see
+/// [`OpenAiModel::with_invoke_via_stream`].
 pub(crate) fn build_local_openai_model_with(
     config: OpenAiConfig<'_>,
     http: Option<reqwest::Client>,
@@ -151,7 +158,8 @@ pub(crate) fn build_local_openai_model_with(
     )
     .with_auth_style(config.auth_style.clone())
     .with_anthropic_cache_control(false)
-    .with_single_system_message();
+    .with_single_system_message()
+    .with_invoke_via_stream(config.provider_name == LOCAL_OPENAI_PROVIDER);
 
     Arc::new(configure_openai_model(model, config, http))
 }

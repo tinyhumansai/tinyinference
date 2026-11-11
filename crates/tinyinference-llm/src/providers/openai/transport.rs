@@ -94,6 +94,9 @@ pub struct OpenAiModel {
     /// When `true`, calls go to the OpenAI **Responses API** (`/v1/responses`)
     /// instead of Chat Completions. See [`Self::with_responses_api_primary`].
     responses_api_primary: bool,
+    /// When `true`, a Chat Completions `invoke` is fulfilled by streaming and
+    /// collecting the reply. See [`Self::with_invoke_via_stream`].
+    invoke_via_stream: bool,
     responses_document_input: bool,
     /// When `true` (Responses path only), omit `max_output_tokens` from the wire
     /// body — the OpenAI Codex OAuth backend rejects it. See
@@ -439,6 +442,7 @@ impl OpenAiModel {
             explicit_cache_control: false,
             anthropic_cache_control: true,
             responses_api_primary: false,
+            invoke_via_stream: false,
             responses_document_input: false,
             responses_omit_max_output_tokens: false,
             extra_query_params: Vec::new(),
@@ -478,6 +482,22 @@ impl OpenAiModel {
     pub fn with_responses_api_primary(mut self) -> Self {
         self.responses_api_primary = true;
         self.profile.hoists_system_messages = true;
+        self
+    }
+
+    /// Fulfils [`ChatModel::invoke`] on Chat Completions by streaming the
+    /// reply and collecting it, instead of one non-streaming request.
+    ///
+    /// Some OpenAI-compatible sellers clip a non-streaming reply (the opening
+    /// of the answer and every reasoning token are lost) while the same reply
+    /// streams whole. With this on, `invoke` returns what the stream carried:
+    /// the same text, reasoning, tool calls, usage and finish reason a
+    /// streaming caller collects. The unary request timeout still bounds the
+    /// whole call. A gateway that refuses `stream: true` (a 400, 404, 405,
+    /// 406, 415, 422 or 501 that is not a context overflow) is retried once
+    /// without streaming. The Responses API path is unaffected.
+    pub fn with_invoke_via_stream(mut self, enabled: bool) -> Self {
+        self.invoke_via_stream = enabled;
         self
     }
 
@@ -2135,6 +2155,15 @@ pub(super) fn degrade_for_400(
 /// falls back to [`DEFAULT_REQUEST_TIMEOUT_SECS`], while a streaming call gets no
 /// overall cap (a total-request timeout would truncate a legitimately
 /// long-running stream mid-flight).
+/// Whether a failed `stream: true` request reads as the gateway refusing to
+/// stream (so a non-streaming retry may succeed), rather than a failure the
+/// retry would only repeat: auth, rate limits, server errors, or a context
+/// overflow.
+fn streaming_refused(error: &ProviderError) -> bool {
+    matches!(error.status, Some(400 | 404 | 405 | 406 | 415 | 422 | 501))
+        && error.code.as_deref() != Some(CONTEXT_OVERFLOW_CODE)
+}
+
 pub(super) fn request_timeout(timeout_ms: Option<u64>, streaming: bool) -> Option<Duration> {
     match timeout_ms {
         Some(ms) => Some(Duration::from_millis(ms)),
@@ -2282,12 +2311,38 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
     /// Returns [`Error::Model`] on transport failure or a non-2xx
     /// status (the message includes the status code and response body), and
     /// [`Error::Serialization`] when the response cannot be decoded.
-    async fn invoke(&self, _state: &State, request: ModelRequest) -> Result<ModelResponse> {
+    async fn invoke(&self, state: &State, request: ModelRequest) -> Result<ModelResponse> {
         if self.responses_api_primary {
             return self
                 .invoke_responses(&request)
                 .await
                 .map(|response| response.inherit_correlation(request.correlation));
+        }
+        if self.invoke_via_stream {
+            // Keep the unary cap: an uncapped stream could otherwise hang a
+            // caller that asked for one bounded answer.
+            let mut streamed = request.clone();
+            streamed.timeout_ms = Some(
+                request
+                    .timeout_ms
+                    .unwrap_or(DEFAULT_REQUEST_TIMEOUT_SECS * 1000),
+            );
+            match self.stream(state, streamed).await {
+                Ok(stream) => {
+                    let mut response = crate::model::collect_model_stream(stream).await?;
+                    self.stamp_origin(&mut response, &request, CHAT_COMPLETIONS_API);
+                    return Ok(response.inherit_correlation(request.correlation));
+                }
+                Err(Error::Provider(error)) if streaming_refused(&error) => {
+                    tracing::warn!(
+                        provider = %self.provider,
+                        model = %self.model,
+                        status = ?error.status,
+                        "openai invoke: streaming refused; retrying without streaming"
+                    );
+                }
+                Err(error) => return Err(error),
+            }
         }
         let response = self
             .post_chat_with_degrade(&request, false, "request")
