@@ -633,6 +633,42 @@ fn unsupported(parameter: &str) -> String {
     .to_string()
 }
 
+/// Over the wire, a non-streaming completion whose `content` is a list of
+/// thinking and text parts (as a thinking model behind Surplus returns it)
+/// is read rather than failing the call: the answer is the text parts, the
+/// thinking parts are reasoning.
+#[tokio::test]
+async fn a_list_content_completion_is_read_as_reasoning_then_text() {
+    let body = json!({
+        "id": "chatcmpl-list",
+        "object": "chat.completion",
+        "model": "glm-5.3-flash",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": [
+                    { "type": "thinking", "thinking": [{ "type": "text", "text": "." }], "closed": true },
+                    { "type": "text", "text": "ALPHA BRAVO CHARLIE" }
+                ]
+            },
+            "finish_reason": "stop"
+        }]
+    })
+    .to_string();
+    let (base, server) = serve_sequence(vec![(200, body)]);
+    let model = OpenAiModel::new("k").with_base_url(&base);
+
+    let response = model
+        .invoke(&(), request("list-content-model", 0.2))
+        .await
+        .unwrap();
+    server.join().unwrap();
+
+    assert_eq!(response.text(), "ALPHA BRAVO CHARLIE");
+    assert_eq!(response.reasoning(), ".");
+}
+
 #[tokio::test]
 async fn a_rejected_parameter_is_dropped_and_the_request_retried_once() {
     let (base, server) = serve_sequence(vec![
