@@ -861,10 +861,16 @@ async fn local_openai_streamed_invoke_recovers_tool_calls_like_a_unary_invoke() 
     assert_eq!(calls[0].arguments, json!({ "q": "hi" }));
     // Recovered ids are minted from a process-wide sequence, so they differ
     // by design; everything else must match.
-    let without_id = |calls: Vec<crate::tool::ToolCall>| {
+    let without_id = |calls: &[crate::tool::ToolCall]| {
         calls
-            .into_iter()
-            .map(|call| (call.name, call.arguments, call.invalid))
+            .iter()
+            .map(|call| {
+                (
+                    call.name.clone(),
+                    call.arguments.clone(),
+                    call.invalid.clone(),
+                )
+            })
             .collect::<Vec<_>>()
     };
     assert!(calls[0].id.starts_with("text-"), "{}", calls[0].id);
