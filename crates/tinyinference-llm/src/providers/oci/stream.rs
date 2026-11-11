@@ -49,23 +49,25 @@ impl Acc {
     fn delta_tool(&mut self, id: &str, name: &str, args: &str, slot_hint: usize) -> usize {
         let existing = if id.is_empty() {
             // Continuation fragment: attach to the hinted slot, else the last.
-            slot_hint.min(self.calls.len().saturating_sub(1))
-        } else {
-            match self.calls.iter().position(|call| call.id == id) {
-                Some(position) => position,
-                None => {
-                    self.calls.push(CallAcc {
-                        id: id.to_string(),
-                        name: name.to_string(),
-                        arguments: String::new(),
-                    });
-                    self.calls.len() - 1
-                }
+            // A fragment that arrives before any id opens a placeholder slot.
+            if self.calls.is_empty() {
+                self.calls.push(CallAcc::default());
             }
+            slot_hint.min(self.calls.len() - 1)
+        } else if let Some(position) = self.calls.iter().position(|call| call.id == id) {
+            position
+        } else if let Some(position) = self.calls.iter().position(|call| call.id.is_empty()) {
+            // The id arrived after id-less fragments: adopt their slot.
+            self.calls[position].id = id.to_string();
+            position
+        } else {
+            self.calls.push(CallAcc {
+                id: id.to_string(),
+                name: name.to_string(),
+                arguments: String::new(),
+            });
+            self.calls.len() - 1
         };
-        if self.calls.is_empty() {
-            self.calls.push(CallAcc::default());
-        }
         let call = &mut self.calls[existing];
         if call.name.is_empty() {
             call.name = name.to_string();

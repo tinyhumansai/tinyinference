@@ -91,6 +91,24 @@ async fn generic_tool_call_fragments_accumulate() {
 }
 
 #[tokio::test]
+async fn tool_call_fragment_before_any_id_does_not_panic() {
+    let items = collect(vec![
+        "data: {\"message\":{\"toolCalls\":[{\"name\":\"get_weather\",\"arguments\":\"{\\\"ci\"}]}}\n",
+        "data: {\"message\":{\"toolCalls\":[{\"id\":\"c1\",\"arguments\":\"ty\\\":\\\"Rome\\\"}\"}]}}\n",
+        "data: {\"finishReason\":\"tool_calls\"}\n",
+    ])
+    .await;
+    let response = completed(&items);
+    assert_eq!(response.message.tool_calls.len(), 1);
+    assert_eq!(response.message.tool_calls[0].id, "c1");
+    assert_eq!(response.message.tool_calls[0].name, "get_weather");
+    assert_eq!(
+        response.message.tool_calls[0].arguments,
+        json!({"city": "Rome"})
+    );
+}
+
+#[tokio::test]
 async fn cohere_final_chunk_does_not_duplicate_text() {
     let items = collect(vec![
         "data: {\"apiFormat\":\"COHERE\",\"text\":\"Hi \"}\n",
