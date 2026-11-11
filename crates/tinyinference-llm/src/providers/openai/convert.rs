@@ -668,7 +668,10 @@ pub(super) fn assembled_completion_body(response: &ModelResponse) -> Value {
             "prompt_tokens": usage.input_tokens,
             "completion_tokens": usage.output_tokens,
             "total_tokens": usage.total_tokens,
-            "prompt_tokens_details": { "cached_tokens": usage.cache_read_tokens },
+            "prompt_tokens_details": {
+                "cached_tokens": usage.cache_read_tokens,
+                "cache_write_tokens": usage.cache_creation_tokens
+            },
             "completion_tokens_details": { "reasoning_tokens": usage.reasoning_tokens }
         });
     }

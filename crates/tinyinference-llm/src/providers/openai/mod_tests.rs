@@ -1211,6 +1211,32 @@ fn parse_chat_response_reads_list_content_parts() {
     ));
 }
 
+/// The body a response observer sees for a streamed invoke parses back to the
+/// same usage the collected stream reports, every counter included.
+#[tokio::test]
+async fn an_assembled_completion_body_keeps_the_streamed_usage() {
+    let raw: Vec<Vec<u8>> = vec![
+        b"data: {\"id\":\"c1\",\"choices\":[{\"delta\":{\"reasoning_content\":\"hm\"}}]}\n\n".to_vec(),
+        b"data: {\"id\":\"c1\",\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n".to_vec(),
+        b"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":40,\"completion_tokens\":9,\"total_tokens\":49,\"prompt_tokens_details\":{\"cached_tokens\":11,\"cache_write_tokens\":7},\"completion_tokens_details\":{\"reasoning_tokens\":3}}}\n\n".to_vec(),
+        b"data: [DONE]\n\n".to_vec(),
+    ];
+    let response = collect_sse(raw)
+        .await
+        .into_iter()
+        .find_map(|item| match item {
+            ModelStreamItem::Completed(response) => Some(response),
+            _ => None,
+        })
+        .expect("stream ends with Completed");
+    let usage = response.usage.expect("streamed usage");
+    assert_eq!(usage.cache_creation_tokens, 7);
+
+    let reparsed = parse_chat_response(assembled_completion_body(&response), None).unwrap();
+    assert_eq!(reparsed.usage, Some(usage));
+    assert_eq!(reparsed.message.content, response.message.content);
+}
+
 #[tokio::test]
 async fn sse_stream_reassembles_multibyte_char_split_across_chunks() {
     // A 4-byte emoji in the content payload, split down the middle across two
