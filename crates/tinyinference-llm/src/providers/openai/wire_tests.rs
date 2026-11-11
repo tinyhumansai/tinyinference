@@ -807,6 +807,58 @@ async fn local_openai_invoke_falls_back_when_streaming_is_refused() {
     assert_ne!(request_body(&raw[1])["stream"], json!(true));
 }
 
+/// A prompt-guided tool call split across streamed chunks.
+const TOOL_CALL_SSE: &str = concat!(
+    r#"data: {"id":"c3","choices":[{"index":0,"delta":{"content":"looking <tool_call>{\"name\":\"lookup\","}}]}"#,
+    "\n\n",
+    r#"data: {"id":"c3","choices":[{"index":0,"delta":{"content":"\"arguments\":{\"q\":\"hi\"}}</tool_call>"},"finish_reason":"stop"}]}"#,
+    "\n\n",
+    "data: [DONE]\n\n",
+);
+
+/// A `local-openai` invoke that streams recovers prompt-guided tool calls
+/// exactly as a non-streaming invoke recovers them from the same reply.
+#[tokio::test]
+async fn local_openai_streamed_invoke_recovers_tool_calls_like_a_unary_invoke() {
+    let request = || {
+        ModelRequest::new(vec![Message::user("look it up")]).with_tools(vec![
+            crate::tool::ToolSchema::new("lookup", "look something up", json!({"type": "object"})),
+        ])
+    };
+    let unary = json!({
+        "id": "c3",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": r#"looking <tool_call>{"name":"lookup","arguments":{"q":"hi"}}</tool_call>"#
+            },
+            "finish_reason": "stop"
+        }]
+    })
+    .to_string();
+
+    let (base, server) = serve_by_stream_flag(1, TOOL_CALL_SSE, unary.clone());
+    let streamed = local_runtime_model("local-openai", &base)
+        .invoke(&(), request())
+        .await
+        .unwrap();
+    server.join().unwrap();
+    let (base, server) = serve_by_stream_flag(1, TOOL_CALL_SSE, unary);
+    let plain = local_runtime_model("ollama", &base)
+        .invoke(&(), request())
+        .await
+        .unwrap();
+    server.join().unwrap();
+
+    let calls = streamed.tool_calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].name, "lookup");
+    assert_eq!(calls[0].arguments, json!({ "q": "hi" }));
+    assert_eq!(calls, plain.tool_calls());
+    assert_eq!(streamed.text(), plain.text());
+}
+
 /// Other local runtimes keep the plain non-streaming invoke.
 #[tokio::test]
 async fn other_local_runtimes_invoke_without_streaming() {
