@@ -1180,6 +1180,37 @@ fn parse_chat_response_without_config_leaves_inline_tags_in_text() {
     assert_eq!(response_reasoning(&response), "");
 }
 
+/// A thinking model behind an OpenAI-compatible gateway returns the message
+/// `content` as a list of typed parts. Text parts are the answer; thinking
+/// parts are reasoning, after any side-channel reasoning, and never visible.
+#[test]
+fn parse_chat_response_reads_list_content_parts() {
+    let body = json!({
+        "id": "chatcmpl-list",
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "reasoning_content": "side ",
+                "content": [
+                    { "type": "thinking", "thinking": [{ "type": "text", "text": "plan" }], "closed": true },
+                    { "type": "text", "text": "{\"reason\":" },
+                    { "type": "unknown_part", "data": 1 },
+                    { "type": "text", "text": "\"ok\"}" }
+                ]
+            },
+            "finish_reason": "stop"
+        }]
+    });
+
+    let response = parse_chat_response(body, None).unwrap();
+    assert_eq!(response.text(), "{\"reason\":\"ok\"}");
+    assert_eq!(response_reasoning(&response), "side plan");
+    assert!(matches!(
+        response.message.content.as_slice(),
+        [ContentBlock::Thinking { .. }, ContentBlock::Text(_)]
+    ));
+}
+
 #[tokio::test]
 async fn sse_stream_reassembles_multibyte_char_split_across_chunks() {
     // A 4-byte emoji in the content payload, split down the middle across two
@@ -3035,7 +3066,10 @@ fn a_null_tool_calls_delta_is_read_as_no_fragments() {
     }))
     .expect("a null tool_calls must not fail the chunk");
     assert!(chunk.choices[0].delta.tool_calls.is_empty());
-    assert_eq!(chunk.choices[0].delta.content.as_deref(), Some("Hi"));
+    assert_eq!(
+        chunk.choices[0].delta.content,
+        Some(ResponseContentWire::Text("Hi".into()))
+    );
 }
 
 /// Unwraps a [`ModelStreamItem::BlockStart`], panicking with the actual item
