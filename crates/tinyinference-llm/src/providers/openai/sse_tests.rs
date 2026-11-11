@@ -361,14 +361,16 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogBuffer {
 }
 
 /// A chunk that still does not fit the chunk schema is skipped, as before,
-/// but no longer silently: it is warned about with a truncated copy of the
-/// payload, and the rest of the stream still arrives.
+/// but no longer silently: it is warned about (provider, model, error), and the
+/// rest of the stream still arrives. The payload can hold answer or reasoning
+/// text, so it stays off the WARN line; a truncated copy is logged at DEBUG.
 #[tokio::test]
 async fn sse_stream_warns_about_a_chunk_it_cannot_read() {
     let logs = LogBuffer::default();
     let subscriber = tracing_subscriber::fmt()
         .with_writer(logs.clone())
         .with_ansi(false)
+        .with_max_level(tracing::Level::DEBUG)
         .finish();
     let _guard = tracing::subscriber::set_default(subscriber);
 
@@ -388,13 +390,19 @@ async fn sse_stream_warns_about_a_chunk_it_cannot_read() {
 
     assert_eq!(response.text(), "kept too");
     let logs = logs.contents();
-    assert!(logs.contains("WARN"), "{logs}");
+    let line = |level: &str| {
+        logs.lines()
+            .find(|line| line.contains(level) && line.contains("openai sse: skipped"))
+            .unwrap_or_else(|| panic!("no {level} line: {logs}"))
+    };
+    let warn = line("WARN");
+    assert!(warn.contains("model=gpt-4.1-mini"), "{warn}");
+    assert!(warn.contains("error="), "{warn}");
+    assert!(!warn.contains("xxxx"), "payload on the WARN line: {warn}");
+    let debug = line("DEBUG");
+    assert!(debug.contains(r#""index":"zero""#), "{debug}");
     assert!(
-        logs.contains(r#"\"index\":\"zero\""#) || logs.contains(r#""index":"zero""#),
-        "{logs}"
-    );
-    assert!(
-        !logs.contains(&"x".repeat(4_000)),
-        "payload not truncated: {logs}"
+        !debug.contains(&"x".repeat(4_000)),
+        "payload not truncated: {debug}"
     );
 }

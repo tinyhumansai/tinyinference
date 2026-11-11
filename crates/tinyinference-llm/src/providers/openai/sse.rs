@@ -725,13 +725,17 @@ impl SseState {
             Err(error) => {
                 // Still skipped, but never silently: a dropped chunk loses
                 // whatever text it carried, and a silent drop hides that the
-                // answer arrived truncated.
+                // answer arrived truncated. The payload can hold answer or
+                // reasoning text, so only DEBUG carries it, truncated.
                 tracing::warn!(
                     provider = %self.provider,
                     model = %self.model,
                     %error,
-                    payload = %log_preview(payload),
                     "openai sse: skipped a chunk that does not match the chunk schema"
+                );
+                tracing::debug!(
+                    payload = %log_preview(payload),
+                    "openai sse: skipped chunk payload"
                 );
                 None
             }
