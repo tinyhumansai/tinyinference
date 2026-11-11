@@ -788,6 +788,54 @@ async fn local_openai_invoke_streams_and_returns_the_whole_answer() {
     assert_eq!(origin.model, "glm-5.3-flash");
 }
 
+/// An invoke fulfilled by streaming still reports its success to the
+/// `on_response` observer, with a Chat Completions body assembled from the
+/// stream that parses back to the same answer.
+#[tokio::test]
+async fn streamed_invoke_reports_an_assembled_body_to_the_response_observer() {
+    let (base, server) = serve_by_stream_flag(1, THINKING_SSE, clipped_completion_body());
+    let observed: Arc<std::sync::Mutex<Vec<Value>>> = Arc::default();
+    let sink = Arc::clone(&observed);
+    let model = OpenAiModel::compatible_provider("local-openai", "k", &base, "glm-5.3-flash")
+        .with_invoke_via_stream(true)
+        .with_request_options(crate::providers::ProviderRequestOptions {
+            on_response: Some(Arc::new(move |body: &Value| {
+                sink.lock().unwrap().push(body.clone());
+            })),
+            ..Default::default()
+        });
+
+    let response = ChatModel::<()>::invoke(
+        &model,
+        &(),
+        ModelRequest::new(vec![Message::user("say it")]),
+    )
+    .await
+    .unwrap();
+    server.join().unwrap();
+
+    let observed = observed.lock().unwrap();
+    assert_eq!(
+        observed.len(),
+        1,
+        "observer called once per successful invoke"
+    );
+    let body = &observed[0];
+    assert_eq!(body["object"], json!("chat.completion"));
+    assert_eq!(
+        body["choices"][0]["message"]["content"],
+        json!("ALPHA BRAVO CHARLIE DELTA ECHO")
+    );
+    let reparsed = parse_chat_response(body.clone(), None).unwrap();
+    assert_eq!(reparsed.text(), response.text());
+    assert_eq!(reparsed.message.content, response.message.content);
+    assert_eq!(reparsed.finish_reason, response.finish_reason);
+    assert_eq!(
+        reparsed.usage.map(|usage| usage.total_tokens),
+        response.usage.map(|usage| usage.total_tokens)
+    );
+}
+
 /// A gateway that refuses `stream: true` still answers: the invoke falls back
 /// to one non-streaming request.
 #[tokio::test]

@@ -493,7 +493,9 @@ impl OpenAiModel {
     /// streams whole. With this on, `invoke` returns what the stream carried:
     /// the same text, reasoning, tool calls, usage and finish reason a
     /// streaming caller collects. The unary request timeout still bounds the
-    /// whole call. A gateway that refuses `stream: true` (a 400, 404, 405,
+    /// whole call. A [`crate::providers::ProviderRequestOptions::on_response`] observer still
+    /// sees one body per successful call: a Chat Completions body assembled
+    /// from the stream. A gateway that refuses `stream: true` (a 400, 404, 405,
     /// 406, 415, 422 or 501 that is not a context overflow) is retried once
     /// without streaming. The Responses API path is unaffected.
     pub fn with_invoke_via_stream(mut self, enabled: bool) -> Self {
@@ -2330,6 +2332,12 @@ impl<State: Send + Sync> ChatModel<State> for OpenAiModel {
             match self.stream(state, streamed).await {
                 Ok(stream) => {
                     let mut response = crate::model::collect_model_stream(stream).await?;
+                    // The unary path shows its raw body to `on_response`; a
+                    // collected stream has none, so show the assembled one.
+                    if self.request_options.on_response.is_some() {
+                        self.request_options
+                            .observe_response(&assembled_completion_body(&response));
+                    }
                     self.stamp_origin(&mut response, &request, CHAT_COMPLETIONS_API);
                     return Ok(response.inherit_correlation(request.correlation));
                 }
