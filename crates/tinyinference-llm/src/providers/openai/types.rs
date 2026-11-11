@@ -106,9 +106,10 @@ pub struct ChunkChoiceWire {
 /// The incremental `delta` object inside a [`ChunkChoiceWire`].
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct ChunkDeltaWire {
-    /// Incremental text fragment, when present.
+    /// Incremental content fragment, when present: a string, or a list of
+    /// typed parts from a thinking model (see [`ResponseContentWire`]).
     #[serde(default)]
-    pub content: Option<String>,
+    pub content: Option<ResponseContentWire>,
     /// Incremental reasoning/thinking fragment used by some OpenAI-compatible
     /// providers (for example DeepSeek-compatible streams).
     #[serde(default)]
@@ -388,9 +389,10 @@ pub struct ChoiceWire {
 /// The assistant message inside a [`ChoiceWire`].
 #[derive(Clone, Debug, Deserialize)]
 pub struct ResponseMessageWire {
-    /// Textual content, when present.
+    /// Message content, when present: a string, or a list of typed parts
+    /// from a thinking model (see [`ResponseContentWire`]).
     #[serde(default)]
-    pub content: Option<String>,
+    pub content: Option<ResponseContentWire>,
     /// Reasoning/thinking content on non-streaming responses, when a compatible
     /// provider exposes it. Kept off visible assistant text by the translator.
     #[serde(default)]
@@ -401,6 +403,30 @@ pub struct ResponseMessageWire {
     /// Tool calls requested by the model.
     #[serde(default, deserialize_with = "deserialize_null_as_empty")]
     pub tool_calls: Vec<ToolCallWire>,
+}
+
+/// The `content` of a [`ResponseMessageWire`] or a streamed [`ChunkDeltaWire`].
+///
+/// OpenAI sends a plain string. Some OpenAI-compatible gateways serving a
+/// thinking model (Surplus with `glm-5.3-flash`, for one) send a list of typed
+/// parts instead, and the chunk that closes the thinking also carries the
+/// first visible text:
+///
+/// ```json
+/// [{"type": "thinking", "thinking": [{"type": "text", "text": "."}], "closed": true},
+///  {"type": "text", "text": "ALPHA BRAVO"}]
+/// ```
+///
+/// `text` parts are visible text; `thinking` and `reasoning` parts are
+/// reasoning and never visible. Parts stay raw JSON so a part of an unknown
+/// type or shape is skipped on its own instead of failing the whole chunk.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(untagged)]
+pub enum ResponseContentWire {
+    /// Plain-string content: all of it visible text.
+    Text(String),
+    /// A list of typed content parts.
+    Parts(Vec<Value>),
 }
 
 /// Token usage reported by OpenAI.
