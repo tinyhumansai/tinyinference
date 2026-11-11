@@ -676,6 +676,153 @@ async fn a_list_content_completion_is_read_as_reasoning_then_text() {
     );
 }
 
+/// The full answer as a thinking model streams it through Surplus
+/// (`glm-5.3-flash`), captured live: list-shaped thinking, a transition chunk
+/// carrying the first letters, plain string chunks, then usage.
+const THINKING_SSE: &str = concat!(
+    r#"data: {"id":"c1","model":"glm-5.3-flash","choices":[{"index":0,"delta":{"role":"assistant","content":[{"type":"thinking","thinking":[{"type":"text","text":"Reply verbatim"}],"closed":false}]}}]}"#,
+    "\n\n",
+    r#"data: {"id":"c1","model":"glm-5.3-flash","choices":[{"index":0,"delta":{"content":[{"type":"thinking","thinking":[{"type":"text","text":", or formatting."}],"closed":true},{"type":"text","text":"AL"}]}}]}"#,
+    "\n\n",
+    r#"data: {"id":"c1","model":"glm-5.3-flash","choices":[{"index":0,"delta":{"content":"PHA BRAVO CHARLIE"}}]}"#,
+    "\n\n",
+    r#"data: {"id":"c1","model":"glm-5.3-flash","choices":[{"index":0,"delta":{"content":" DELTA ECHO"},"finish_reason":"stop"}]}"#,
+    "\n\n",
+    r#"data: {"id":"c1","choices":[],"usage":{"prompt_tokens":31,"completion_tokens":40,"total_tokens":71}}"#,
+    "\n\n",
+    "data: [DONE]\n\n",
+);
+
+/// The same request answered without streaming, as the same sellers return it
+/// (captured live): the opening of the answer and all reasoning are gone.
+fn clipped_completion_body() -> String {
+    json!({
+        "id": "c2",
+        "object": "chat.completion",
+        "model": "glm-5.3-flash",
+        "choices": [{
+            "index": 0,
+            "message": { "role": "assistant", "content": "VO CHARLIE DELTA ECHO" },
+            "finish_reason": "stop"
+        }],
+        "usage": { "prompt_tokens": 31, "completion_tokens": 40, "total_tokens": 71 }
+    })
+    .to_string()
+}
+
+/// Serves `connections` requests, answering each by its `stream` flag:
+/// `sse` as `text/event-stream` to a streaming request, `unary` as JSON to any
+/// other. Returns the raw requests received.
+fn serve_by_stream_flag(
+    connections: usize,
+    sse: &'static str,
+    unary: String,
+) -> (String, std::thread::JoinHandle<Vec<String>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}/v1", listener.local_addr().unwrap());
+    let handle = std::thread::spawn(move || {
+        let mut received = Vec::new();
+        for _ in 0..connections {
+            let (mut sock, _) = listener.accept().unwrap();
+            let raw = String::from_utf8_lossy(&read_request(&mut sock)).into_owned();
+            let (content_type, body) = if request_body(&raw)["stream"] == json!(true) {
+                ("text/event-stream", sse.to_string())
+            } else {
+                ("application/json", unary.clone())
+            };
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = sock.write_all(response.as_bytes());
+            received.push(raw);
+        }
+        received
+    });
+    (base, handle)
+}
+
+fn local_runtime_model(provider: &str, base: &str) -> Arc<dyn ChatModel<()>> {
+    build_local_runtime_chat_model(
+        provider,
+        base,
+        "k",
+        AuthStyle::Bearer,
+        "glm-5.3-flash",
+        &[],
+        None,
+        None,
+    )
+}
+
+/// Some OpenAI-compatible sellers clip a non-streaming reply (the opening of
+/// the answer and all reasoning are lost) while the same reply streams whole.
+/// A `local-openai` model therefore fulfils `invoke` by streaming and
+/// collecting, and returns exactly what the stream carried: full text,
+/// reasoning, usage, finish reason, and the chat-completions origin.
+#[tokio::test]
+async fn local_openai_invoke_streams_and_returns_the_whole_answer() {
+    let (base, server) = serve_by_stream_flag(1, THINKING_SSE, clipped_completion_body());
+    let model = local_runtime_model("local-openai", &base);
+
+    let response = model
+        .invoke(&(), ModelRequest::new(vec![Message::user("say it")]))
+        .await
+        .unwrap();
+    let raw = server.join().unwrap();
+
+    assert_eq!(request_body(&raw[0])["stream"], json!(true));
+    assert_eq!(response.text(), "ALPHA BRAVO CHARLIE DELTA ECHO");
+    assert_eq!(
+        response.message.content.first().and_then(|block| block.as_thinking()),
+        Some(("Reply verbatim, or formatting.", None))
+    );
+    assert_eq!(response.finish_reason.as_deref(), Some("stop"));
+    assert_eq!(response.usage.map(|usage| usage.total_tokens), Some(71));
+    let origin = response.message.origin.expect("origin stamped");
+    assert_eq!(origin.api, "chat_completions");
+    assert_eq!(origin.model, "glm-5.3-flash");
+}
+
+/// A gateway that refuses `stream: true` still answers: the invoke falls back
+/// to one non-streaming request.
+#[tokio::test]
+async fn local_openai_invoke_falls_back_when_streaming_is_refused() {
+    let refused = json!({
+        "error": { "message": "streaming is not supported", "type": "invalid_request_error" }
+    })
+    .to_string();
+    let (base, server) = serve_sequence(vec![(400, refused), (200, completion_body())]);
+    let model = local_runtime_model("local-openai", &base);
+
+    let response = model
+        .invoke(&(), ModelRequest::new(vec![Message::user("say it")]))
+        .await
+        .unwrap();
+    let raw = server.join().unwrap();
+
+    assert_eq!(response.text(), "Hello!");
+    assert_eq!(raw.len(), 2, "one refused stream, one unary retry");
+    assert_eq!(request_body(&raw[0])["stream"], json!(true));
+    assert_ne!(request_body(&raw[1])["stream"], json!(true));
+}
+
+/// Other local runtimes keep the plain non-streaming invoke.
+#[tokio::test]
+async fn other_local_runtimes_invoke_without_streaming() {
+    let (base, server) = serve_sequence(vec![(200, completion_body())]);
+    let model = local_runtime_model("ollama", &base);
+
+    let response = model
+        .invoke(&(), ModelRequest::new(vec![Message::user("say it")]))
+        .await
+        .unwrap();
+    let raw = server.join().unwrap();
+
+    assert_eq!(response.text(), "Hello!");
+    assert_ne!(request_body(&raw[0])["stream"], json!(true));
+}
+
 #[tokio::test]
 async fn a_rejected_parameter_is_dropped_and_the_request_retried_once() {
     let (base, server) = serve_sequence(vec![
