@@ -408,11 +408,16 @@ pub(super) fn parse_chat_response(
         }
     }
 
+    // Thinking parts of a list `content` follow the side-channel reasoning.
+    let (text, content_reasoning) = choice
+        .message
+        .content
+        .map(split_response_content)
+        .unwrap_or_default();
+    reasoning.push_str(&content_reasoning);
+
     // Inline `<think>` extraction on the visible content, when enabled.
-    let visible = match (
-        choice.message.content.filter(|t| !t.is_empty()),
-        reasoning_tags,
-    ) {
+    let visible = match (Some(text).filter(|t| !t.is_empty()), reasoning_tags) {
         (Some(text), Some(config)) => {
             let (visible, inline) = extract_reasoning(config, &text);
             if !inline.is_empty() {
