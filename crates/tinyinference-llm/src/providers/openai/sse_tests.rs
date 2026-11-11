@@ -389,6 +389,12 @@ async fn sse_stream_warns_about_a_chunk_it_cannot_read() {
     assert_eq!(response.text(), "kept too");
     let logs = logs.contents();
     assert!(logs.contains("WARN"), "{logs}");
-    assert!(logs.contains(r#"\"index\":\"zero\""#) || logs.contains(r#""index":"zero""#), "{logs}");
-    assert!(!logs.contains(&"x".repeat(4_000)), "payload not truncated: {logs}");
+    assert!(
+        logs.contains(r#"\"index\":\"zero\""#) || logs.contains(r#""index":"zero""#),
+        "{logs}"
+    );
+    assert!(
+        !logs.contains(&"x".repeat(4_000)),
+        "payload not truncated: {logs}"
+    );
 }
