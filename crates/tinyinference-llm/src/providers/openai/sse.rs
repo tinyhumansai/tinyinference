@@ -724,8 +724,8 @@ impl SseState {
             Ok(chunk) => Some(chunk),
             Err(error) => {
                 // Still skipped, but never silently: a dropped chunk loses
-                // whatever text it carried, which once cost every third
-                // answer its opening words.
+                // whatever text it carried, and a silent drop hides that the
+                // answer arrived truncated.
                 tracing::warn!(
                     provider = %self.provider,
                     model = %self.model,
