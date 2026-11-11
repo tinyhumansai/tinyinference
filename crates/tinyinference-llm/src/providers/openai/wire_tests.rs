@@ -666,7 +666,10 @@ async fn a_list_content_completion_is_read_as_reasoning_then_text() {
     server.join().unwrap();
 
     assert_eq!(response.text(), "ALPHA BRAVO CHARLIE");
-    assert_eq!(response.reasoning(), ".");
+    assert_eq!(
+        response.message.content.first().and_then(|block| block.as_thinking()),
+        Some((".", None))
+    );
 }
 
 #[tokio::test]
