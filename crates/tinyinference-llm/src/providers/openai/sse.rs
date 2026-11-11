@@ -236,7 +236,17 @@ impl OpenAiStreamAcc {
             if let Some(reason) = choice.finish_reason {
                 self.finish_reason = Some(reason);
             }
-            let reasoning = delta_reasoning_text(&mut choice.delta);
+            // A list `content` can carry thinking and text parts in one chunk;
+            // its reasoning streams before its text, after any side-channel
+            // reasoning, so the block order stays thinking -> text.
+            let (content, content_reasoning) = choice
+                .delta
+                .content
+                .take()
+                .map(split_response_content)
+                .unwrap_or_default();
+            let mut reasoning = delta_reasoning_text(&mut choice.delta);
+            reasoning.push_str(&content_reasoning);
             if !reasoning.is_empty() {
                 self.reasoning.push_str(&reasoning);
                 self.push_block_delta(BlockRequest::Reasoning, &reasoning, pending);
