@@ -3066,7 +3066,10 @@ fn a_null_tool_calls_delta_is_read_as_no_fragments() {
     }))
     .expect("a null tool_calls must not fail the chunk");
     assert!(chunk.choices[0].delta.tool_calls.is_empty());
-    assert_eq!(chunk.choices[0].delta.content.as_deref(), Some("Hi"));
+    assert_eq!(
+        chunk.choices[0].delta.content,
+        Some(ResponseContentWire::Text("Hi".into()))
+    );
 }
 
 /// Unwraps a [`ModelStreamItem::BlockStart`], panicking with the actual item
