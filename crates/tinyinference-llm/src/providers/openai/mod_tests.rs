@@ -1232,9 +1232,65 @@ async fn an_assembled_completion_body_keeps_the_streamed_usage() {
     let usage = response.usage.expect("streamed usage");
     assert_eq!(usage.cache_creation_tokens, 7);
 
-    let reparsed = parse_chat_response(assembled_completion_body(&response), None).unwrap();
+    let reparsed = parse_chat_response(assembled_completion_body(&response, "m"), None).unwrap();
     assert_eq!(reparsed.usage, Some(usage));
     assert_eq!(reparsed.message.content, response.message.content);
+}
+
+/// A streamed tool call whose arguments cannot be parsed stays invalid when
+/// the assembled body is parsed back: its original text is not re-encoded
+/// into a valid JSON string.
+#[tokio::test]
+async fn an_assembled_completion_body_keeps_invalid_tool_arguments_invalid() {
+    let raw: Vec<Vec<u8>> = vec![
+        b"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"function\":{\"name\":\"lookup\",\"arguments\":\"not json\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n".to_vec(),
+        b"data: [DONE]\n\n".to_vec(),
+    ];
+    let response = collect_sse(raw)
+        .await
+        .into_iter()
+        .find_map(|item| match item {
+            ModelStreamItem::Completed(response) => Some(response),
+            _ => None,
+        })
+        .expect("stream ends with Completed");
+    assert!(response.tool_calls()[0].invalid.is_some());
+
+    let reparsed = parse_chat_response(assembled_completion_body(&response, "m"), None).unwrap();
+    let call = &reparsed.tool_calls()[0];
+    assert!(
+        call.invalid.is_some(),
+        "re-parsed call lost its invalid marker: {call:?}"
+    );
+    assert_eq!(call.arguments, response.tool_calls()[0].arguments);
+}
+
+/// The assembled body names the model the request used.
+#[test]
+fn an_assembled_completion_body_names_the_model() {
+    let response = parse_chat_response(
+        json!({ "choices": [{ "message": { "role": "assistant", "content": "hi" }, "finish_reason": "stop" }] }),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        assembled_completion_body(&response, "glm-5.3-flash")["model"],
+        json!("glm-5.3-flash")
+    );
+}
+
+/// A non-streaming retry after a refused stream gets only what is left of the
+/// call's time budget, and none once it is spent.
+#[test]
+fn remaining_budget_subtracts_elapsed_time() {
+    use std::time::Duration;
+    let ms = Duration::from_millis;
+    assert_eq!(
+        super::transport::remaining_budget(ms(1000), ms(400)),
+        Some(ms(600))
+    );
+    assert_eq!(super::transport::remaining_budget(ms(1000), ms(1000)), None);
+    assert_eq!(super::transport::remaining_budget(ms(1000), ms(1500)), None);
 }
 
 #[tokio::test]

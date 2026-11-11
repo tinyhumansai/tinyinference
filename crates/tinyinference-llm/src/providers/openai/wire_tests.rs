@@ -836,6 +836,34 @@ async fn streamed_invoke_reports_an_assembled_body_to_the_response_observer() {
     );
 }
 
+/// A streamed invoke returns the assembled completion body on `raw`, as the
+/// unary path returns its body there, naming the request's effective model.
+#[tokio::test]
+async fn streamed_invoke_returns_the_assembled_body_on_raw() {
+    let (base, server) = serve_by_stream_flag(1, THINKING_SSE, clipped_completion_body());
+    let model = local_runtime_model("local-openai", &base);
+
+    let response = model
+        .invoke(
+            &(),
+            ModelRequest::new(vec![Message::user("say it")]).with_model("glm-override"),
+        )
+        .await
+        .unwrap();
+    server.join().unwrap();
+
+    let raw = response
+        .raw
+        .as_ref()
+        .expect("raw body on a streamed invoke");
+    assert_eq!(
+        raw["choices"][0]["message"]["content"],
+        json!("ALPHA BRAVO CHARLIE DELTA ECHO")
+    );
+    assert_eq!(raw["usage"]["total_tokens"], json!(71));
+    assert_eq!(raw["model"], json!("glm-override"));
+}
+
 /// A gateway that refuses `stream: true` still answers: the invoke falls back
 /// to one non-streaming request.
 #[tokio::test]

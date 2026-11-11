@@ -627,11 +627,13 @@ fn usd_cost_nanos(cost: &serde_json::Value) -> Option<i64> {
 /// A Chat Completions body for a reply collected from a stream, in the shape
 /// [`parse_chat_response`] reads: visible text as `content`, thinking as
 /// `reasoning_content`, tool calls with stringified arguments, the finish
-/// reason, usage, and any gateway extension fields kept on `raw`.
+/// reason, usage, the request's effective `model`, and any gateway extension
+/// fields kept on `raw`. An invalid tool call keeps its original argument text,
+/// so it reads back as invalid.
 ///
 /// It lets a response observer see one body per successful call whether or
 /// not the call streamed; parsing it back yields the same answer.
-pub(super) fn assembled_completion_body(response: &ModelResponse) -> Value {
+pub(super) fn assembled_completion_body(response: &ModelResponse, model: &str) -> Value {
     let reasoning: String = response
         .message
         .content
@@ -646,10 +648,14 @@ pub(super) fn assembled_completion_body(response: &ModelResponse) -> Value {
         .tool_calls()
         .iter()
         .map(|call| {
+            let arguments = match (&call.invalid, &call.arguments) {
+                (Some(_), Value::String(original)) => original.clone(),
+                _ => call.arguments.to_string(),
+            };
             json!({
                 "id": call.id,
                 "type": "function",
-                "function": { "name": call.name, "arguments": call.arguments.to_string() }
+                "function": { "name": call.name, "arguments": arguments }
             })
         })
         .collect();
@@ -658,6 +664,7 @@ pub(super) fn assembled_completion_body(response: &ModelResponse) -> Value {
     }
     let mut body = json!({
         "object": "chat.completion",
+        "model": model,
         "choices": [{ "index": 0, "message": message, "finish_reason": response.finish_reason }]
     });
     if let Some(id) = &response.message.id {
