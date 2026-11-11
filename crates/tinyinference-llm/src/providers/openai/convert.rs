@@ -644,6 +644,43 @@ pub(super) fn reasoning_value_text(value: Value) -> Option<String> {
     }
 }
 
+/// Splits a response or delta `content` into `(visible text, reasoning)`.
+///
+/// A string is all visible text. In a list of parts, `text` parts are visible
+/// text, concatenated in order; `thinking` / `reasoning` parts are reasoning,
+/// read from their `thinking` field (a string or a list of text parts) or else
+/// their `text` field, and normalized like `reasoning_content`. Parts of any
+/// other type, and anything that is not an object, are skipped.
+pub(super) fn split_response_content(content: ResponseContentWire) -> (String, String) {
+    let parts = match content {
+        ResponseContentWire::Text(text) => return (text, String::new()),
+        ResponseContentWire::Parts(parts) => parts,
+    };
+    let mut text = String::new();
+    let mut reasoning = String::new();
+    for part in &parts {
+        match part.get("type").and_then(Value::as_str) {
+            Some("text") => {
+                if let Some(fragment) = part.get("text").and_then(Value::as_str) {
+                    text.push_str(fragment);
+                }
+            }
+            Some("thinking" | "reasoning") => {
+                if let Some(fragment) = part
+                    .get("thinking")
+                    .or_else(|| part.get("text"))
+                    .cloned()
+                    .and_then(reasoning_value_text)
+                {
+                    reasoning.push_str(&fragment);
+                }
+            }
+            _ => {}
+        }
+    }
+    (text, reasoning)
+}
+
 /// Extracts the reasoning/thinking text from a streamed delta, accepting the
 /// common OpenAI-compatible aliases.
 pub(super) fn delta_reasoning_text(delta: &mut ChunkDeltaWire) -> String {
