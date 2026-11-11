@@ -720,7 +720,23 @@ impl SseState {
                 self.acc.keep_usage_extensions(usage);
             }
         }
-        if let Ok(chunk) = serde_json::from_value::<ChatCompletionChunk>(value) {
+        let chunk = match serde_json::from_value::<ChatCompletionChunk>(value) {
+            Ok(chunk) => Some(chunk),
+            Err(error) => {
+                // Still skipped, but never silently: a dropped chunk loses
+                // whatever text it carried, which once cost every third
+                // answer its opening words.
+                tracing::warn!(
+                    provider = %self.provider,
+                    model = %self.model,
+                    %error,
+                    payload = %log_preview(payload),
+                    "openai sse: skipped a chunk that does not match the chunk schema"
+                );
+                None
+            }
+        };
+        if let Some(chunk) = chunk {
             // `resolve_slot` grows the slot vector up to the wire index, so an
             // out-of-range index is rejected before it can size an allocation.
             if let Some(index) = chunk
