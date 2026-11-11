@@ -774,7 +774,11 @@ async fn local_openai_invoke_streams_and_returns_the_whole_answer() {
     assert_eq!(request_body(&raw[0])["stream"], json!(true));
     assert_eq!(response.text(), "ALPHA BRAVO CHARLIE DELTA ECHO");
     assert_eq!(
-        response.message.content.first().and_then(|block| block.as_thinking()),
+        response
+            .message
+            .content
+            .first()
+            .and_then(|block| block.as_thinking()),
         Some(("Reply verbatim, or formatting.", None))
     );
     assert_eq!(response.finish_reason.as_deref(), Some("stop"));
@@ -855,8 +859,18 @@ async fn local_openai_streamed_invoke_recovers_tool_calls_like_a_unary_invoke() 
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].name, "lookup");
     assert_eq!(calls[0].arguments, json!({ "q": "hi" }));
-    assert_eq!(calls, plain.tool_calls());
+    // Recovered ids are minted from a process-wide sequence, so they differ
+    // by design; everything else must match.
+    let without_id = |calls: Vec<crate::tool::ToolCall>| {
+        calls
+            .into_iter()
+            .map(|call| (call.name, call.arguments, call.invalid))
+            .collect::<Vec<_>>()
+    };
+    assert!(calls[0].id.starts_with("text-"), "{}", calls[0].id);
+    assert_eq!(without_id(calls), without_id(plain.tool_calls()));
     assert_eq!(streamed.text(), plain.text());
+    assert_eq!(streamed.finish_reason, plain.finish_reason);
 }
 
 /// Other local runtimes keep the plain non-streaming invoke.
