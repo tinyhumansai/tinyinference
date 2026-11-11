@@ -831,6 +831,18 @@ impl SseState {
     }
 }
 
+/// Characters of an SSE payload kept when one is logged.
+const LOG_PREVIEW_CHARS: usize = 512;
+
+/// The first [`LOG_PREVIEW_CHARS`] characters of `payload` (UTF-8 safe),
+/// marked with `...` when cut, so a log line stays bounded.
+fn log_preview(payload: &str) -> String {
+    match payload.char_indices().nth(LOG_PREVIEW_CHARS) {
+        Some((end, _)) => format!("{}...", &payload[..end]),
+        None => payload.to_string(),
+    }
+}
+
 /// Advances the SSE [`SseState`] by one item for [`futures::stream::unfold`].
 pub(super) async fn sse_next(mut state: SseState) -> Option<(ModelStreamItem, SseState)> {
     loop {
