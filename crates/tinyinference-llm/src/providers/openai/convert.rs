@@ -624,6 +624,82 @@ fn usd_cost_nanos(cost: &serde_json::Value) -> Option<i64> {
     Some((value * 1_000_000_000.0).round() as i64)
 }
 
+/// A Chat Completions body for a reply collected from a stream, in the shape
+/// [`parse_chat_response`] reads: visible text as `content`, thinking as
+/// `reasoning_content`, tool calls with stringified arguments, the finish
+/// reason, usage, the request's effective `model`, and any gateway extension
+/// fields kept on `raw`. An invalid tool call keeps its original argument text,
+/// so it reads back as invalid.
+///
+/// It lets a response observer see one body per successful call whether or
+/// not the call streamed; parsing it back yields the same answer.
+pub(super) fn assembled_completion_body(response: &ModelResponse, model: &str) -> Value {
+    let reasoning: String = response
+        .message
+        .content
+        .iter()
+        .filter_map(|block| block.as_thinking().map(|(text, _)| text))
+        .collect();
+    let mut message = json!({ "role": "assistant", "content": response.text() });
+    if !reasoning.is_empty() {
+        message["reasoning_content"] = json!(reasoning);
+    }
+    let tool_calls: Vec<Value> = response
+        .tool_calls()
+        .iter()
+        .map(|call| {
+            let arguments = match (&call.invalid, &call.arguments) {
+                (Some(_), Value::String(original)) => original.clone(),
+                _ => call.arguments.to_string(),
+            };
+            json!({
+                "id": call.id,
+                "type": "function",
+                "function": { "name": call.name, "arguments": arguments }
+            })
+        })
+        .collect();
+    if !tool_calls.is_empty() {
+        message["tool_calls"] = json!(tool_calls);
+    }
+    let mut body = json!({
+        "object": "chat.completion",
+        "model": model,
+        "choices": [{ "index": 0, "message": message, "finish_reason": response.finish_reason }]
+    });
+    if let Some(id) = &response.message.id {
+        body["id"] = json!(id);
+    }
+    if let Some(usage) = response.usage {
+        body["usage"] = json!({
+            "prompt_tokens": usage.input_tokens,
+            "completion_tokens": usage.output_tokens,
+            "total_tokens": usage.total_tokens,
+            "prompt_tokens_details": {
+                "cached_tokens": usage.cache_read_tokens,
+                "cache_write_tokens": usage.cache_creation_tokens
+            },
+            "completion_tokens_details": { "reasoning_tokens": usage.reasoning_tokens }
+        });
+    }
+    if let (Value::Object(body), Some(Value::Object(raw))) = (&mut body, &response.raw) {
+        for (key, value) in raw {
+            match (body.get_mut(key), value) {
+                (Some(Value::Object(known)), Value::Object(extra)) => {
+                    for (field, item) in extra {
+                        known.entry(field.clone()).or_insert_with(|| item.clone());
+                    }
+                }
+                (None, _) => {
+                    body.insert(key.clone(), value.clone());
+                }
+                _ => {}
+            }
+        }
+    }
+    body
+}
+
 /// Normalizes provider-specific reasoning/thinking payloads into text.
 ///
 /// OpenAI-compatible gateways do not agree on this field: some stream a plain
