@@ -93,6 +93,7 @@ pub mod server;
 pub mod server_http;
 mod sse;
 mod transport;
+pub(crate) use transport::is_reasoning_model;
 
 pub use config::{
     OpenAiConfig, build_local_runtime_chat_model, build_local_runtime_chat_model_with_native_tools,
