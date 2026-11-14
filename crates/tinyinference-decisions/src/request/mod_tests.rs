@@ -321,6 +321,16 @@ fn an_unreferenced_asset_is_rejected() {
 }
 
 #[test]
+fn asset_references_with_json_escapes_match_decoded_state() {
+    for key in ["C:\\shots\\a.png", "say \"cheese\".png", "tab\there.png"] {
+        let mut request = image_request(json!({ "photo": key }));
+        let image = request.assets.remove("a3f1-photo").unwrap();
+        request.assets.insert(key.to_owned(), image);
+        request.validate().unwrap();
+    }
+}
+
+#[test]
 fn asset_references_must_be_nonempty_and_short() {
     let mut request = image_request(json!({"photo": "a3f1-photo"}));
     let image = request.assets.remove("a3f1-photo").unwrap();
