@@ -78,6 +78,44 @@ pub enum Answer {
     Score(ScoreAnswer),
     /// Probability of yes.
     Noul(NoulAnswer),
+    /// Where the asked-for thing is in the image.
+    Box(BoxAnswer),
+}
+
+/// Answer to a Box question.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+pub struct BoxAnswer {
+    /// The box, as fractions of the image's width and height.
+    #[serde(rename = "box")]
+    pub edges: BoxEdges,
+    /// Confidence in the box, from zero to one.
+    pub confidence: f64,
+}
+
+/// The edges of a box, each a fraction (0 to 1) of the image measured from its
+/// top-left corner: `top` and `bottom` of its height, `left` and `right` of
+/// its width.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+pub struct BoxEdges {
+    /// Top edge, a fraction of the height.
+    pub top: f64,
+    /// Bottom edge, a fraction of the height.
+    pub bottom: f64,
+    /// Left edge, a fraction of the width.
+    pub left: f64,
+    /// Right edge, a fraction of the width.
+    pub right: f64,
+}
+
+impl BoxEdges {
+    /// The centre of the box as `(x, y)` fractions of width and height.
+    #[must_use]
+    pub fn centre(&self) -> (f64, f64) {
+        (
+            f64::midpoint(self.left, self.right),
+            f64::midpoint(self.top, self.bottom),
+        )
+    }
 }
 
 /// Answer to a Choice question.

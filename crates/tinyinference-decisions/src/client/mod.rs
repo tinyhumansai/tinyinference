@@ -16,6 +16,9 @@ use crate::{Error, EvaluationRequest, EvaluationResponse, Result};
 
 const MAX_RETRIES: u32 = 100;
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+/// Header the provider requires on every request that carries an image or a
+/// Box question; without it such a request is rejected with 400.
+const IMAGE_OPT_IN_HEADER: &str = "TypeSafe-Danger-Zone-Images";
 
 impl Client {
     /// Construct a client from an explicit configuration.
@@ -143,6 +146,9 @@ impl Client {
             )
         });
         let mut builder = self.http.post(&url).json(request);
+        if request.needs_image_opt_in() {
+            builder = builder.header(IMAGE_OPT_IN_HEADER, "true");
+        }
         let api_key = self.config.api_key.expose();
         if !(self.config.provider == Provider::SelfHosted && api_key.trim().is_empty()) {
             builder = builder.bearer_auth(api_key);

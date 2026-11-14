@@ -4,9 +4,13 @@
 #[path = "mod_tests.rs"]
 mod test;
 
+mod image;
 mod types;
 
-pub use types::{Choice, EvaluationRequest, Noul, NoulCriteria, Question, Score};
+pub use types::{
+    Asset, BoxQuestion, Choice, EvaluationRequest, ImageAsset, ImageFormat, Noul, NoulCriteria,
+    Question, Score,
+};
 
 use crate::{Error, Result};
 
@@ -40,6 +44,41 @@ impl EvaluationRequest {
             }
             question.validate()?;
         }
+        self.validate_assets()
+    }
+
+    fn validate_assets(&self) -> Result<()> {
+        if self.assets.is_empty() {
+            return Ok(());
+        }
+        // Every reference must appear somewhere the model reads, or the
+        // provider rejects the request; the wire text of state and questions
+        // is exactly where it looks.
+        let readable = serde_json::to_string(&(&self.state, &self.questions))
+            .map_err(|_| Error::invalid_request("state and questions must serialise"))?;
+        let mut total = 0_usize;
+        for (key, asset) in &self.assets {
+            if key.trim().is_empty() {
+                return Err(Error::invalid_request("asset references must not be empty"));
+            }
+            if key.len() > image::MAX_REFERENCE_BYTES {
+                return Err(Error::invalid_request(
+                    "asset references must be at most 1024 bytes",
+                ));
+            }
+            if !readable.contains(key.as_str()) {
+                return Err(Error::invalid_request(format!(
+                    "asset `{key}` is not referenced by the state or any question"
+                )));
+            }
+            let Asset::Image(image) = asset;
+            total = total.saturating_add(image.checked_len()?);
+        }
+        if total > image::MAX_TOTAL_IMAGE_BYTES {
+            return Err(Error::invalid_request(
+                "images must total at most 32 MiB per request",
+            ));
+        }
         Ok(())
     }
 }
@@ -50,6 +89,7 @@ impl Question {
             Self::Choice(question) => question.validate(),
             Self::Score(question) => question.validate(),
             Self::Noul(question) => question.validate(),
+            Self::Box(question) => validate_instructions(&question.instructions),
         }
     }
 }
