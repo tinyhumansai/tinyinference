@@ -99,7 +99,10 @@ fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
             at += 2;
             continue;
         }
-        let length = usize::from(u16::from_be_bytes([*bytes.get(at + 2)?, *bytes.get(at + 3)?]));
+        let length = usize::from(u16::from_be_bytes([
+            *bytes.get(at + 2)?,
+            *bytes.get(at + 3)?,
+        ]));
         // Start-of-frame markers carry the size; C4, C8 and CC do not.
         if matches!(marker, 0xC0..=0xCF) && !matches!(marker, 0xC4 | 0xC8 | 0xCC) {
             let height = u16::from_be_bytes([*bytes.get(at + 5)?, *bytes.get(at + 6)?]);

@@ -55,7 +55,11 @@ fn rejects_sides_outside_the_documented_range() {
             .unwrap_err();
         assert!(error.to_string().contains("280 to 1568"), "{error}");
     }
-    assert!(ImageAsset::png(&png_header(280, 1568)).checked_len().is_ok());
+    assert!(
+        ImageAsset::png(&png_header(280, 1568))
+            .checked_len()
+            .is_ok()
+    );
 }
 
 #[test]
@@ -79,7 +83,13 @@ fn rejects_invalid_base64_and_oversized_files() {
         format: ImageFormat::Png,
         data_base64: "data:image/png;base64,AAAA".into(),
     };
-    assert!(asset.checked_len().unwrap_err().to_string().contains("base64"));
+    assert!(
+        asset
+            .checked_len()
+            .unwrap_err()
+            .to_string()
+            .contains("base64")
+    );
 
     let mut huge = png_header(400, 400);
     huge.resize(MAX_IMAGE_BYTES + 1, 0);

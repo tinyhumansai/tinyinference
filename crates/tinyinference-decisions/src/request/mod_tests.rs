@@ -297,7 +297,12 @@ fn an_image_request_pins_the_documented_asset_shape() {
     let asset = &wire["assets"]["a3f1-photo"];
     assert_eq!(asset["type"], "image");
     assert_eq!(asset["format"], "png");
-    assert!(asset["data_base64"].as_str().unwrap().starts_with("iVBORw0KGgo"));
+    assert!(
+        asset["data_base64"]
+            .as_str()
+            .unwrap()
+            .starts_with("iVBORw0KGgo")
+    );
     assert_eq!(
         serde_json::from_value::<EvaluationRequest>(wire).unwrap(),
         request
@@ -320,13 +325,25 @@ fn asset_references_must_be_nonempty_and_short() {
     let mut request = image_request(json!({"photo": "a3f1-photo"}));
     let image = request.assets.remove("a3f1-photo").unwrap();
     request.assets.insert(" ".into(), image.clone());
-    assert!(request.validate().unwrap_err().to_string().contains("must not be empty"));
+    assert!(
+        request
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("must not be empty")
+    );
 
     let long = "k".repeat(1025);
     let mut request = image_request(json!({ "photo": long.clone() }));
     request.assets.clear();
     request.assets.insert(long, image);
-    assert!(request.validate().unwrap_err().to_string().contains("1024 bytes"));
+    assert!(
+        request
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("1024 bytes")
+    );
 }
 
 #[test]

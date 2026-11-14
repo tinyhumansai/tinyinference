@@ -4,7 +4,7 @@
 #[path = "mod_tests.rs"]
 mod test;
 
-mod image;
+pub(crate) mod image;
 mod types;
 
 pub use types::{
