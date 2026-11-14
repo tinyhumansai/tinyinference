@@ -53,8 +53,10 @@ impl EvaluationRequest {
         }
         // Every reference must appear somewhere the model reads, or the
         // provider rejects the request; the wire text of state and questions
-        // is exactly where it looks.
-        let readable = serde_json::to_string(&(&self.state, &self.questions))
+        // is exactly where it looks. Search the decoded string values and
+        // object keys, not the escaped JSON text, so keys containing `\`, `"`
+        // or control characters match.
+        let readable = serde_json::to_value((&self.state, &self.questions))
             .map_err(|_| Error::invalid_request("state and questions must serialise"))?;
         let mut total = 0_usize;
         for (key, asset) in &self.assets {
@@ -66,7 +68,7 @@ impl EvaluationRequest {
                     "asset references must be at most 1024 bytes",
                 ));
             }
-            if !readable.contains(key.as_str()) {
+            if !value_mentions(&readable, key) {
                 return Err(Error::invalid_request(format!(
                     "asset `{key}` is not referenced by the state or any question"
                 )));
@@ -80,6 +82,18 @@ impl EvaluationRequest {
             ));
         }
         Ok(())
+    }
+}
+
+/// Whether any decoded string value or object key inside `value` contains `needle`.
+fn value_mentions(value: &serde_json::Value, needle: &str) -> bool {
+    match value {
+        serde_json::Value::String(text) => text.contains(needle),
+        serde_json::Value::Array(items) => items.iter().any(|item| value_mentions(item, needle)),
+        serde_json::Value::Object(map) => map
+            .iter()
+            .any(|(key, item)| key.contains(needle) || value_mentions(item, needle)),
+        _ => false,
     }
 }
 
