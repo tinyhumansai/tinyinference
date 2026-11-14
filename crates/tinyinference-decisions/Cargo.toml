@@ -13,6 +13,8 @@ categories = ["api-bindings", "asynchronous"]
 
 [dependencies]
 async-trait = { workspace = true }
+# Encodes attached images for the System One `assets` map.
+base64 = "0.23"
 httpdate = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
