@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Security: re-pin `tinystoragedrivers-*` to 2.1.3, which moves `rusqlite` to 0.41.1
+  and `libsqlite3-sys` to 0.39.x (SQLite 3.54). Clears RUSTSEC-2026-0459 from the
+  dev-dependency tree of `tinyinference-image`; no advisory ignore was added.
+
 ## 0.5.0
 
 - TinyHumans managed model: `TinyHumansModel::new_with_credential` takes a
