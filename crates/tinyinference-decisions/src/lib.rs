@@ -54,5 +54,10 @@ pub use client::{
     Client, ClientConfig, EvaluationFailure, EvaluationResult, Provider, RetryPolicy,
 };
 pub use error::{Error, Result};
-pub use request::{Choice, EvaluationRequest, Noul, NoulCriteria, Question, Score};
-pub use response::{Answer, ChoiceAnswer, EvaluationResponse, NoulAnswer, ScoreAnswer, Usage};
+pub use request::{
+    Asset, BoxQuestion, Choice, EvaluationRequest, ImageAsset, ImageFormat, Noul, NoulCriteria,
+    Question, Score,
+};
+pub use response::{
+    Answer, BoxAnswer, BoxEdges, ChoiceAnswer, EvaluationResponse, NoulAnswer, ScoreAnswer, Usage,
+};

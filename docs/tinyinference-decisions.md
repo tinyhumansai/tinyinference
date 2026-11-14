@@ -38,6 +38,48 @@ TYPESAFE_API_KEY='<key>' cargo run -p tinyinference-decisions --example basic
 
 The crate is part of the TinyInference workspace and is licensed GPL-3.0-only.
 
+## Images and Box questions
+
+Jev 1.13 and later read images, and Jev 1.14 (`jev-preview`) adds the Box
+question, which returns where one thing is in an image. Attach an image with
+`EvaluationRequest::with_image(key, ImageAsset::png(&bytes))` and put `key`
+somewhere in `state` (for example `{"page": key}`), so the model knows where it
+belongs. Questions point at the state field in backticks.
+
+```rust,no_run
+use std::collections::BTreeMap;
+use serde_json::json;
+use tinyinference_decisions::{
+    Answer, BoxQuestion, Client, EvaluationRequest, ImageAsset, Question,
+};
+
+# async fn run(png: Vec<u8>) -> Result<(), Box<dyn std::error::Error>> {
+let request = EvaluationRequest::new(
+    "jev-preview",
+    json!({"page": "shot-1"}),
+    BTreeMap::from([(
+        "button".to_owned(),
+        Question::Box(BoxQuestion { instructions: json!("the Verify button in `page`") }),
+    )]),
+)
+.with_image("shot-1", ImageAsset::png(&png));
+let result = Client::from_env()?.evaluate(&request).await?;
+if let Some(Answer::Box(answer)) = result.response.answers.get("button") {
+    let (x, y) = answer.edges.centre(); // fractions of width and height
+    println!("{x} {y} at confidence {}", answer.confidence);
+}
+# Ok(())
+# }
+```
+
+The client sends `TypeSafe-Danger-Zone-Images: true` on any request with an
+image or a Box question, as the provider requires. `validate` checks the
+documented limits before anything is sent: PNG or JPEG whose header matches the
+declared format, 280 to 1568 pixels per side, 16 MiB per image and 32 MiB in
+all, and every asset key referenced by the state or a question. Images are
+neither resized nor rotated; that stays with the caller. A Box answer is always
+one box, so ask a Noul alongside it when the thing may be absent.
+
 ## Local decision models
 
 Use `ClientConfig::self_hosted` for a locally served OpenJEV, Decider, Surogate

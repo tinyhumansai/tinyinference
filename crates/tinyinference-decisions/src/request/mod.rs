@@ -4,9 +4,13 @@
 #[path = "mod_tests.rs"]
 mod test;
 
+pub(crate) mod image;
 mod types;
 
-pub use types::{Choice, EvaluationRequest, Noul, NoulCriteria, Question, Score};
+pub use types::{
+    Asset, BoxQuestion, Choice, EvaluationRequest, ImageAsset, ImageFormat, Noul, NoulCriteria,
+    Question, Score,
+};
 
 use crate::{Error, Result};
 
@@ -40,7 +44,56 @@ impl EvaluationRequest {
             }
             question.validate()?;
         }
+        self.validate_assets()
+    }
+
+    fn validate_assets(&self) -> Result<()> {
+        if self.assets.is_empty() {
+            return Ok(());
+        }
+        // Every reference must appear somewhere the model reads, or the
+        // provider rejects the request; the wire text of state and questions
+        // is exactly where it looks. Search the decoded string values and
+        // object keys, not the escaped JSON text, so keys containing `\`, `"`
+        // or control characters match.
+        let readable = serde_json::to_value((&self.state, &self.questions))
+            .map_err(|_| Error::invalid_request("state and questions must serialise"))?;
+        let mut total = 0_usize;
+        for (key, asset) in &self.assets {
+            if key.trim().is_empty() {
+                return Err(Error::invalid_request("asset references must not be empty"));
+            }
+            if key.len() > image::MAX_REFERENCE_BYTES {
+                return Err(Error::invalid_request(
+                    "asset references must be at most 1024 bytes",
+                ));
+            }
+            if !value_mentions(&readable, key) {
+                return Err(Error::invalid_request(format!(
+                    "asset `{key}` is not referenced by the state or any question"
+                )));
+            }
+            let Asset::Image(image) = asset;
+            total = total.saturating_add(image.checked_len()?);
+        }
+        if total > image::MAX_TOTAL_IMAGE_BYTES {
+            return Err(Error::invalid_request(
+                "images must total at most 32 MiB per request",
+            ));
+        }
         Ok(())
+    }
+}
+
+/// Whether any decoded string value or object key inside `value` contains `needle`.
+fn value_mentions(value: &serde_json::Value, needle: &str) -> bool {
+    match value {
+        serde_json::Value::String(text) => text.contains(needle),
+        serde_json::Value::Array(items) => items.iter().any(|item| value_mentions(item, needle)),
+        serde_json::Value::Object(map) => map
+            .iter()
+            .any(|(key, item)| key.contains(needle) || value_mentions(item, needle)),
+        _ => false,
     }
 }
 
@@ -50,6 +103,7 @@ impl Question {
             Self::Choice(question) => question.validate(),
             Self::Score(question) => question.validate(),
             Self::Noul(question) => question.validate(),
+            Self::Box(question) => validate_instructions(&question.instructions),
         }
     }
 }

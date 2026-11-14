@@ -6,7 +6,9 @@ mod test;
 
 mod types;
 
-pub use types::{Answer, ChoiceAnswer, EvaluationResponse, NoulAnswer, ScoreAnswer, Usage};
+pub use types::{
+    Answer, BoxAnswer, BoxEdges, ChoiceAnswer, EvaluationResponse, NoulAnswer, ScoreAnswer, Usage,
+};
 
 use std::collections::BTreeSet;
 
@@ -157,6 +159,18 @@ fn validate_pair(question: &Question, answer: &Answer) -> Result<()> {
         }
         (Question::Noul(_), Answer::Noul(answer)) => {
             validate_probability(answer.noul, "noul")?;
+        }
+        (Question::Box(_), Answer::Box(answer)) => {
+            validate_probability(answer.confidence, "box confidence")?;
+            let edges = answer.edges;
+            for edge in [edges.top, edges.bottom, edges.left, edges.right] {
+                validate_probability(edge, "box edge")?;
+            }
+            if edges.left > edges.right || edges.top > edges.bottom {
+                return Err(Error::invalid_response(
+                    "box edges must satisfy left <= right and top <= bottom",
+                ));
+            }
         }
         _ => {
             return Err(Error::invalid_response(

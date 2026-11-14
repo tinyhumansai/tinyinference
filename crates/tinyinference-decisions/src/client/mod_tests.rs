@@ -164,6 +164,28 @@ async fn sends_the_documented_endpoint_and_bearer_header() {
 }
 
 #[tokio::test]
+async fn sends_the_image_opt_in_header_only_with_an_image() {
+    let (client, requests) = mock_client(
+        config("http://127.0.0.1:1".into()),
+        vec![response(200, &success(), ""), response(200, &success(), "")],
+    );
+    client.evaluate(&request()).await.unwrap();
+    let image = crate::request::image::tests::png_header(400, 300);
+    let mut with_image = request();
+    with_image.state = json!({"message": "review this", "photo": "img-1"});
+    let with_image = with_image.with_image("img-1", crate::ImageAsset::png(&image));
+    client.evaluate(&with_image).await.unwrap();
+    let requests = requests.lock().await;
+    assert!(requests[0].headers.get(IMAGE_OPT_IN_HEADER).is_none());
+    assert!(!requests[0].body.contains("assets"));
+    assert_eq!(
+        requests[1].headers.get(IMAGE_OPT_IN_HEADER).unwrap(),
+        "true"
+    );
+    assert!(requests[1].body.contains("\"assets\":{\"img-1\""));
+}
+
+#[tokio::test]
 async fn an_exact_endpoint_override_is_not_extended_with_a_provider_path() {
     let endpoint = "https://example.com/api/alpha/decisions";
     let config = ClientConfig::openrouter("secret-test-key").with_endpoint_url(endpoint);
