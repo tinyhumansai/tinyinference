@@ -81,7 +81,10 @@ fn a_key_contained_in_a_longer_named_key_is_not_ambiguous() {
 fn the_source_is_the_asset_held_by_a_backticked_state_field() {
     let request = request(
         json!({"page": "shot-a", "logo": "shot-b"}),
-        vec![("button", boxed(json!({"find": "the Verify button in `page`"})))],
+        vec![(
+            "button",
+            boxed(json!({"find": "the Verify button in `page`"})),
+        )],
     )
     .with_image("shot-a", png(300, 300))
     .with_image("shot-b", png(300, 300));
@@ -108,7 +111,11 @@ fn an_unnamed_or_ambiguous_source_is_a_request_error() {
         .with_image("shot-a", png(300, 300))
         .with_image("shot-b", png(300, 300))
     };
-    for instructions in ["the Verify button", "the button in shot-a or shot-b", "`a` or `b`"] {
+    for instructions in [
+        "the Verify button",
+        "the button in shot-a or shot-b",
+        "`a` or `b`",
+    ] {
         let error = source_of(&two(instructions)).unwrap_err();
         assert!(
             matches!(&error, Error::InvalidRequest { reason } if reason.contains("`button`")),
@@ -163,7 +170,10 @@ fn the_first_round_asks_one_noul_per_grid_cell_with_its_own_crop() {
         panic!("probes must be Noul questions");
     };
     let text = question.instructions.as_str().unwrap();
-    assert!(text.contains("`__tinyinference_box0_round0_r1c1`"), "{text}");
+    assert!(
+        text.contains("`__tinyinference_box0_round0_r1c1`"),
+        "{text}"
+    );
     assert!(text.contains("the Verify button in `page`"), "{text}");
     assert_eq!(probes[5].asset.format, ImageFormat::Png);
     assert_eq!(probes[5].bytes, probes[5].asset.checked_len().unwrap());

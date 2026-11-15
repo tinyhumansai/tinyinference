@@ -47,7 +47,11 @@ impl HttpTransport for EchoTransport {
                         .decode(data)
                         .unwrap();
                     let crop = image::load_from_memory(&bytes).unwrap().to_rgba8();
-                    let noul = if crop.pixels().any(is_red) { 0.95 } else { 0.05 };
+                    let noul = if crop.pixels().any(is_red) {
+                        0.95
+                    } else {
+                        0.05
+                    };
                     json!({"type": "noul", "noul": noul})
                 }
                 _ => json!({"type": "noul", "noul": 0.7}),
@@ -173,12 +177,11 @@ async fn surplus_answers_box_questions_from_refined_crop_probes() {
 
 #[tokio::test]
 async fn without_refinement_the_box_is_the_first_round_cell() {
-    let config = ClientConfig::surplus("key").with_box_support(BoxSupport::Emulated(
-        BoxEmulation {
+    let config =
+        ClientConfig::surplus("key").with_box_support(BoxSupport::Emulated(BoxEmulation {
             grid: 4,
             refine: false,
-        },
-    ));
+        }));
     let (client, transport) = echo_client(config, "typesafe/jev-1.14");
     let result = client.evaluate(&page_request()).await.unwrap();
     assert_eq!(transport.bodies.lock().unwrap().len(), 2);
@@ -232,21 +235,14 @@ fn box_support_defaults_follow_the_provider() {
     assert_eq!(ClientConfig::new("key").box_support(), BoxSupport::Native);
     let mut retargeted = ClientConfig::new("key");
     retargeted.provider = Provider::Surplus;
-    assert!(matches!(
-        retargeted.box_support(),
-        BoxSupport::Emulated(_)
-    ));
+    assert!(matches!(retargeted.box_support(), BoxSupport::Emulated(_)));
 }
 
 #[test]
 fn the_emulation_grid_is_bounded() {
     for grid in [0, 1, 9] {
-        let config = ClientConfig::surplus("key").with_box_support(BoxSupport::Emulated(
-            BoxEmulation {
-                grid,
-                refine: true,
-            },
-        ));
+        let config = ClientConfig::surplus("key")
+            .with_box_support(BoxSupport::Emulated(BoxEmulation { grid, refine: true }));
         assert!(
             matches!(Client::new(config), Err(Error::InvalidConfig { .. })),
             "grid {grid}"

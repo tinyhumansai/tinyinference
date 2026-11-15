@@ -289,8 +289,13 @@ impl<'a> BoxEmulator<'a> {
     ///
     /// Returns [`Error::InvalidResponse`] when a probe was not answered with a
     /// Noul.
-    pub(crate) fn picks(&self, probes: &[Probe], responses: &Responses) -> Result<Vec<Option<Pick>>> {
-        let mut cells: Vec<(Vec<Rect>, Vec<f64>)> = vec![(Vec::new(), Vec::new()); self.targets.len()];
+    pub(crate) fn picks(
+        &self,
+        probes: &[Probe],
+        responses: &Responses,
+    ) -> Result<Vec<Option<Pick>>> {
+        let mut cells: Vec<(Vec<Rect>, Vec<f64>)> =
+            vec![(Vec::new(), Vec::new()); self.targets.len()];
         for probe in probes {
             let Some(Answer::Noul(answer)) = responses.answers.get(&probe.id) else {
                 return Err(Error::invalid_response(format!(
