@@ -52,7 +52,8 @@ mod response;
 pub mod sage;
 
 pub use client::{
-    Client, ClientConfig, EvaluationFailure, EvaluationResult, Provider, RetryPolicy,
+    BoxEmulation, BoxSupport, Client, ClientConfig, EvaluationFailure, EvaluationResult, Provider,
+    RetryPolicy,
 };
 pub use error::{Error, Result};
 pub use request::{
