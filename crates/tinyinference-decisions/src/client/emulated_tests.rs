@@ -72,7 +72,7 @@ impl HttpTransport for EchoTransport {
     }
 }
 
-fn client(config: ClientConfig, model: &str) -> (Client, Arc<EchoTransport>) {
+fn echo_client(config: ClientConfig, model: &str) -> (Client, Arc<EchoTransport>) {
     let transport = Arc::new(EchoTransport {
         model: model.to_owned(),
         bodies: Mutex::new(Vec::new()),
@@ -82,7 +82,7 @@ fn client(config: ClientConfig, model: &str) -> (Client, Arc<EchoTransport>) {
 }
 
 fn surplus() -> (Client, Arc<EchoTransport>) {
-    client(ClientConfig::surplus("key"), "typesafe/jev-1.14-20261014")
+    echo_client(ClientConfig::surplus("key"), "typesafe/jev-1.14-20261014")
 }
 
 /// An 800 by 800 page with a red square at x 420..470, y 220..260.
@@ -179,7 +179,7 @@ async fn without_refinement_the_box_is_the_first_round_cell() {
             refine: false,
         },
     ));
-    let (client, transport) = client(config, "typesafe/jev-1.14");
+    let (client, transport) = echo_client(config, "typesafe/jev-1.14");
     let result = client.evaluate(&page_request()).await.unwrap();
     assert_eq!(transport.bodies.lock().unwrap().len(), 2);
     let Answer::Box(answer) = result.response.answers["square"] else {
@@ -198,7 +198,7 @@ async fn without_refinement_the_box_is_the_first_round_cell() {
 
 #[tokio::test]
 async fn native_providers_send_box_questions_unchanged() {
-    let (client, transport) = client(ClientConfig::new("key"), "jev-1.14");
+    let (client, transport) = echo_client(ClientConfig::new("key"), "jev-1.14");
     let result = client.evaluate(&page_request()).await.unwrap();
     assert!(sent_box(&transport));
     assert_eq!(transport.bodies.lock().unwrap().len(), 1);
@@ -209,13 +209,13 @@ async fn native_providers_send_box_questions_unchanged() {
 async fn box_support_can_be_overridden_either_way() {
     let native = ClientConfig::surplus("key").with_box_support(BoxSupport::Native);
     assert_eq!(native.box_support(), BoxSupport::Native);
-    let (client, transport) = client(native, "typesafe/jev-1.14");
+    let (client, transport) = echo_client(native, "typesafe/jev-1.14");
     client.evaluate(&page_request()).await.unwrap();
     assert!(sent_box(&transport));
 
     let emulated =
         ClientConfig::new("key").with_box_support(BoxSupport::Emulated(BoxEmulation::default()));
-    let (client, transport) = client(emulated, "jev-1.14");
+    let (client, transport) = echo_client(emulated, "jev-1.14");
     client.evaluate(&page_request()).await.unwrap();
     assert!(!sent_box(&transport));
 }
@@ -278,7 +278,7 @@ async fn a_box_question_without_an_image_fails_before_any_request() {
 
 #[tokio::test]
 async fn a_sub_response_from_another_model_fails_with_its_attempts() {
-    let (client, transport) = client(ClientConfig::surplus("key"), "typesafe/jev-1.13");
+    let (client, transport) = echo_client(ClientConfig::surplus("key"), "typesafe/jev-1.13");
     let Err(Error::EvaluationFailure(failure)) = client.evaluate(&page_request()).await else {
         panic!("expected an evaluation failure");
     };
