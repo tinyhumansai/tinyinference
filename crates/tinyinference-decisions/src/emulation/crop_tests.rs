@@ -93,3 +93,13 @@ fn an_undecodable_image_names_its_asset() {
         "{error:?}"
     );
 }
+
+#[test]
+fn an_empty_crop_is_a_request_error_not_a_panic() {
+    let source = picture(400, 300, rect(0, 0, 1, 1));
+    let image = decode("page", &ImageAsset::png(&encode(&source, Codec::Png))).unwrap();
+    assert!(matches!(
+        crop(&image, rect(10, 10, 10, 50)),
+        Err(Error::InvalidRequest { .. })
+    ));
+}
