@@ -825,3 +825,89 @@ async fn self_hosted_preserves_all_decision_types_and_rejects_invalid_answers() 
     assert_eq!(failure.attempts, 0);
     assert!(requests.lock().await.is_empty());
 }
+
+fn surplus_request() -> EvaluationRequest {
+    let mut request = request();
+    request.model = "jev-1.14".into();
+    request
+}
+
+/// The live Surplus response shape (2026-11-15): an OpenRouter-style resolved
+/// model id plus generation id, provider, and cost fields the crate ignores.
+fn surplus_success(model: &str) -> String {
+    json!({
+        "model": model,
+        "answers": {
+            "route": {
+                "type": "choice",
+                "choice": "bob",
+                "probabilities": {"alice": 0.2, "bob": 0.8},
+                "confidence": 0.6
+            }
+        },
+        "usage": {
+            "input_tokens": 292,
+            "output_tokens": 20,
+            "cost": 0.000_012_2,
+            "cost_details": {"upstream_inference_cost": 0.000_012_2},
+            "is_byok": false
+        },
+        "id": "gen-dec-123",
+        "provider": "TypeSafe"
+    })
+    .to_string()
+}
+
+#[tokio::test]
+async fn surplus_posts_to_v1_decisions_and_accepts_a_namespaced_jev_release() {
+    let mut config = ClientConfig::surplus("secret-test-key");
+    config.retry.max_retries = 0;
+    let (client, requests) = mock_client(
+        config,
+        vec![response(
+            200,
+            &surplus_success("typesafe/jev-1.14-20261014"),
+            "",
+        )],
+    );
+
+    let result = client.evaluate(&surplus_request()).await.unwrap();
+
+    assert_eq!(result.response.model, "typesafe/jev-1.14-20261014");
+    assert_eq!(result.response.usage.input_tokens, Some(292));
+    assert_eq!(result.response.usage.cost_usd_nanos, Some(12_200));
+    let requests = requests.lock().await;
+    let url = reqwest::Url::parse(&requests[0].url).unwrap();
+    assert_eq!(url.host_str(), Some("api.surplusintelligence.ai"));
+    assert_eq!(url.path(), "/v1/decisions");
+    assert_eq!(
+        requests[0].headers.get("authorization").unwrap(),
+        "Bearer secret-test-key"
+    );
+    assert!(requests[0].body.contains("\"model\":\"jev-1.14\""));
+}
+
+#[tokio::test]
+async fn surplus_rejects_a_response_from_another_jev_release() {
+    let mut config = ClientConfig::surplus("secret-test-key");
+    config.retry.max_retries = 0;
+    let (client, _) = mock_client(
+        config,
+        vec![response(200, &surplus_success("typesafe/jev-1.13"), "")],
+    );
+    let failure = evaluation_failure(client.evaluate(&surplus_request()).await);
+    assert!(matches!(*failure.error, Error::InvalidResponse { .. }));
+}
+
+#[test]
+fn surplus_is_the_only_provider_without_native_box_questions() {
+    assert!(!Provider::Surplus.answers_box());
+    for provider in [
+        Provider::TypeSafe,
+        Provider::OpenRouter,
+        Provider::OpenJev,
+        Provider::SelfHosted,
+    ] {
+        assert!(provider.answers_box(), "{provider:?}");
+    }
+}

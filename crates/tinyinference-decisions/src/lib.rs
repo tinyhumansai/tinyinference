@@ -38,6 +38,8 @@
 //! ```
 //!
 //! [`sage`] contains Levanto Sage's Yes/No, Choice, Scale, Sort, and Tags API.
+//! [`ClientConfig::surplus`] targets Surplus Intelligence; Box questions sent
+//! to a provider without them are emulated (see [`BoxSupport`]).
 //! Use [`ClientConfig::self_hosted`] with [`EvaluationRequest::new`] to target
 //! a user-managed OpenJEV or other Jev-compatible decisions endpoint with an
 //! explicit model id and optional bearer authentication.
@@ -45,13 +47,15 @@
 //! decision probability.
 
 mod client;
+mod emulation;
 mod error;
 mod request;
 mod response;
 pub mod sage;
 
 pub use client::{
-    Client, ClientConfig, EvaluationFailure, EvaluationResult, Provider, RetryPolicy,
+    BoxEmulation, BoxSupport, Client, ClientConfig, EvaluationFailure, EvaluationResult, Provider,
+    RetryPolicy,
 };
 pub use error::{Error, Result};
 pub use request::{

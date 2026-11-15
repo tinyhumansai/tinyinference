@@ -4,15 +4,19 @@
 #[path = "mod_tests.rs"]
 mod test;
 
+mod emulated;
 mod types;
 
-pub use types::{Client, ClientConfig, EvaluationFailure, EvaluationResult, Provider, RetryPolicy};
+pub use types::{
+    BoxEmulation, BoxSupport, Client, ClientConfig, EvaluationFailure, EvaluationResult, Provider,
+    RetryPolicy,
+};
 
 use std::time::Duration;
 
 use reqwest::{StatusCode, header::RETRY_AFTER};
 
-use crate::{Error, EvaluationRequest, EvaluationResponse, Result};
+use crate::{Error, EvaluationRequest, EvaluationResponse, Question, Result};
 
 const MAX_RETRIES: u32 = 100;
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
@@ -92,27 +96,50 @@ impl Client {
             .validate()
             .map_err(|error| evaluation_failure(error, 0, started.elapsed()))?;
         let mut attempts = 0_u32;
+        let asks_box = request
+            .questions
+            .values()
+            .any(|question| matches!(question, Question::Box(_)));
+        let outcome = match self.config.box_support() {
+            BoxSupport::Emulated(settings) if asks_box => {
+                self.evaluate_emulated(request, settings, &mut attempts)
+                    .await
+            }
+            _ => self.send_validated(request, &mut attempts).await,
+        };
+        match outcome {
+            Ok((response, request_id)) => Ok(EvaluationResult {
+                response,
+                request_id,
+                attempts,
+                latency: started.elapsed(),
+            }),
+            Err(error) => Err(evaluation_failure(error, attempts, started.elapsed())),
+        }
+    }
+
+    /// Send one already validated request with the retry policy and validate
+    /// its response, adding every HTTP attempt to `attempts`.
+    async fn send_validated(
+        &self,
+        request: &EvaluationRequest,
+        attempts: &mut u32,
+    ) -> Result<(EvaluationResponse, Option<String>)> {
+        let mut tries = 0_u32;
         loop {
-            attempts = attempts.saturating_add(1);
+            tries = tries.saturating_add(1);
+            *attempts = attempts.saturating_add(1);
             match self.send_once(request).await {
                 Ok((response, request_id)) => {
-                    self.validate_response(&response, request)
-                        .map_err(|error| evaluation_failure(error, attempts, started.elapsed()))?;
-                    return Ok(EvaluationResult {
-                        response,
-                        request_id,
-                        attempts,
-                        latency: started.elapsed(),
-                    });
+                    self.validate_response(&response, request)?;
+                    return Ok((response, request_id));
                 }
-                Err(Failure::Terminal(error)) => {
-                    return Err(evaluation_failure(error, attempts, started.elapsed()));
-                }
+                Err(Failure::Terminal(error)) => return Err(error),
                 Err(Failure::Retryable { error, retry_after }) => {
-                    if attempts > self.config.retry.max_retries {
-                        return Err(evaluation_failure(error, attempts, started.elapsed()));
+                    if tries > self.config.retry.max_retries {
+                        return Err(error);
                     }
-                    let delay = retry_after.unwrap_or_else(|| self.config.retry.delay(attempts));
+                    let delay = retry_after.unwrap_or_else(|| self.config.retry.delay(tries));
                     tokio::time::sleep(delay.min(self.config.retry.max_backoff)).await;
                 }
             }
@@ -170,7 +197,7 @@ impl Client {
             Provider::TypeSafe | Provider::OpenJev | Provider::SelfHosted => {
                 response.validate_for(request)
             }
-            Provider::OpenRouter => response.validate_for_openrouter(request),
+            Provider::OpenRouter | Provider::Surplus => response.validate_for_openrouter(request),
         }
     }
 }
@@ -300,6 +327,13 @@ impl ClientConfig {
         if self.retry.initial_backoff.is_zero() || self.retry.max_backoff.is_zero() {
             return Err(Error::InvalidConfig {
                 reason: "retry backoffs must be greater than zero".to_owned(),
+            });
+        }
+        if let BoxSupport::Emulated(settings) = self.box_support()
+            && !(2..=8).contains(&settings.grid)
+        {
+            return Err(Error::InvalidConfig {
+                reason: "box emulation grid must be from 2 to 8 cells per side".to_owned(),
             });
         }
         if self.retry.max_retries > MAX_RETRIES {

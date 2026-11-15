@@ -16,6 +16,9 @@ async-trait = { workspace = true }
 # Encodes attached images for the System One `assets` map.
 base64 = "0.23"
 httpdate = { workspace = true }
+# Decodes, crops, and re-encodes images to emulate Box questions on providers
+# that only answer Noul; PNG and JPEG are the formats the provider accepts.
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -86,7 +86,7 @@ impl EvaluationRequest {
 }
 
 /// Whether any decoded string value or object key inside `value` contains `needle`.
-fn value_mentions(value: &serde_json::Value, needle: &str) -> bool {
+pub(crate) fn value_mentions(value: &serde_json::Value, needle: &str) -> bool {
     match value {
         serde_json::Value::String(text) => text.contains(needle),
         serde_json::Value::Array(items) => items.iter().any(|item| value_mentions(item, needle)),
