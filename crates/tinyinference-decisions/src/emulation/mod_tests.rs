@@ -78,6 +78,34 @@ fn a_key_contained_in_a_longer_named_key_is_not_ambiguous() {
 }
 
 #[test]
+fn independently_named_prefix_keys_stay_ambiguous() {
+    let request = request(
+        json!({"a": "img-1", "b": "img-10"}),
+        vec![(
+            "button",
+            boxed(json!({"source": "img-1", "comparison": "img-10"})),
+        )],
+    )
+    .with_image("img-1", png(300, 300))
+    .with_image("img-10", png(300, 300));
+    assert!(matches!(
+        source_of(&request),
+        Err(Error::InvalidRequest { .. })
+    ));
+}
+
+#[test]
+fn a_short_key_inside_ordinary_words_is_not_a_reference() {
+    let request = request(
+        json!({"page": "b", "other": "a"}),
+        vec![("button", boxed(json!("the red square in `page`")))],
+    )
+    .with_image("a", png(300, 300))
+    .with_image("b", png(300, 300));
+    assert_eq!(source_of(&request).unwrap(), "b");
+}
+
+#[test]
 fn the_source_is_the_asset_held_by_a_backticked_state_field() {
     let request = request(
         json!({"page": "shot-a", "logo": "shot-b"}),

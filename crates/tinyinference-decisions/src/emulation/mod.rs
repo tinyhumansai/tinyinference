@@ -445,9 +445,9 @@ fn scan<'a>(text: &str, keys: impl Iterator<Item = &'a String>, found: &mut BTre
         }
     }
     for &(start, end, key) in &spans {
-        let nested = spans.iter().any(|&(s, e, other)| {
-            other.len() > key.len() && s <= start && end <= e
-        });
+        let nested = spans
+            .iter()
+            .any(|&(s, e, other)| other.len() > key.len() && s <= start && end <= e);
         if !nested {
             found.insert(key);
         }
