@@ -361,8 +361,8 @@ pub(crate) fn refine(first: Vec<Pick>, second: Vec<Option<Pick>>) -> Vec<Pick> {
 
 /// The asset key of the image a Box question is about.
 ///
-/// In order: the one asset key its instructions mention (a key contained in a
-/// longer mentioned key does not count); else the one asset held by a
+/// In order: the one asset key its instructions mention as a whole token (see
+/// [`referenced`]); else the one asset held by a
 /// top-level state field its instructions name in backticks; else the
 /// request's only image.
 fn source_asset(request: &EvaluationRequest, id: &str, instructions: &Value) -> Result<String> {
@@ -371,19 +371,12 @@ fn source_asset(request: &EvaluationRequest, id: &str, instructions: &Value) -> 
             "box question `{id}` names more than one image; emulating Box needs exactly one"
         ))
     };
+    let mut found = BTreeSet::new();
+    referenced(instructions, request.assets.keys(), &mut found);
     let mentioned: Vec<&String> = request
         .assets
         .keys()
-        .filter(|key| value_mentions(instructions, key))
-        .collect();
-    let mentioned: Vec<&String> = mentioned
-        .iter()
-        .filter(|key| {
-            !mentioned
-                .iter()
-                .any(|other| other != *key && other.contains(key.as_str()))
-        })
-        .copied()
+        .filter(|key| found.contains(key.as_str()))
         .collect();
     match mentioned.as_slice() {
         [key] => return Ok((*key).clone()),
@@ -409,6 +402,56 @@ fn source_asset(request: &EvaluationRequest, id: &str, instructions: &Value) -> 
         "box question `{id}` must identify one image to emulate Box: mention its asset key, or \
          name a state field holding the key in backticks"
     )))
+}
+
+/// Collect into `found` the asset keys that `value` references.
+///
+/// A reference is an occurrence of the key that is not glued to a neighbouring
+/// word character (`a` is not found in `square`, `img-1` not in `img-10`) and
+/// does not sit inside the occurrence of a longer key (`img` in `img.png`
+/// when both are keys). Each string is judged on its own, so `img-1` and
+/// `img-10` named in separate values are both found.
+fn referenced<'a>(
+    value: &Value,
+    keys: impl Iterator<Item = &'a String> + Clone,
+    found: &mut BTreeSet<&'a str>,
+) {
+    match value {
+        Value::String(text) => scan(text, keys, found),
+        Value::Array(items) => items
+            .iter()
+            .for_each(|item| referenced(item, keys.clone(), found)),
+        Value::Object(map) => map.iter().for_each(|(name, item)| {
+            scan(name, keys.clone(), found);
+            referenced(item, keys.clone(), found);
+        }),
+        _ => {}
+    }
+}
+
+fn scan<'a>(text: &str, keys: impl Iterator<Item = &'a String>, found: &mut BTreeSet<&'a str>) {
+    let word = |c: char| c.is_alphanumeric() || c == '_' || c == '-';
+    let mut spans: Vec<(usize, usize, &'a str)> = Vec::new();
+    for key in keys.filter(|key| !key.is_empty()) {
+        for (start, _) in text.match_indices(key.as_str()) {
+            let end = start + key.len();
+            let glued = (word(key.chars().next().unwrap_or(' '))
+                && text[..start].chars().next_back().is_some_and(word))
+                || (word(key.chars().next_back().unwrap_or(' '))
+                    && text[end..].chars().next().is_some_and(word));
+            if !glued {
+                spans.push((start, end, key.as_str()));
+            }
+        }
+    }
+    for &(start, end, key) in &spans {
+        let nested = spans.iter().any(|&(s, e, other)| {
+            other.len() > key.len() && s <= start && end <= e
+        });
+        if !nested {
+            found.insert(key);
+        }
+    }
 }
 
 /// Every span between backticks in the string values of `value`.
