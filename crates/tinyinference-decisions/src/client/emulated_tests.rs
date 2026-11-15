@@ -6,10 +6,14 @@ use base64::Engine as _;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
 
+use super::super::{
+    BoxSupport, ClientConfig, Failure, HttpTransport, IMAGE_OPT_IN_HEADER, Provider,
+    TransportResponse,
+};
 use super::*;
 use crate::emulation::crop::tests::{encode, is_red, picture};
 use crate::emulation::geometry::Rect;
-use crate::{Answer, BoxQuestion, ImageAsset, Noul, Question};
+use crate::{Answer, BoxQuestion, Error, ImageAsset, Noul, Question};
 
 /// Answers every question from the request itself: a probe is positive when
 /// its crop shows red, a Box is answered with a fixed box, a Noul with 0.7.
