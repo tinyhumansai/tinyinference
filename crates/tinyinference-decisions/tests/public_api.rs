@@ -33,3 +33,19 @@ fn public_types_build_a_valid_jev_request() {
     );
     request.validate().expect("public request should validate");
 }
+
+#[test]
+fn surplus_emulates_box_questions_by_default_and_callers_can_override_it() {
+    use tinyinference_decisions::{BoxEmulation, BoxSupport, ClientConfig, Provider};
+
+    let surplus = ClientConfig::surplus("key");
+    assert_eq!(surplus.provider, Provider::Surplus);
+    assert!(!Provider::Surplus.answers_box());
+    assert_eq!(
+        surplus.box_support(),
+        BoxSupport::Emulated(BoxEmulation::default())
+    );
+    let native = surplus.with_box_support(BoxSupport::Native);
+    assert_eq!(native.box_support(), BoxSupport::Native);
+    Client::new(native).expect("surplus configuration should be valid");
+}

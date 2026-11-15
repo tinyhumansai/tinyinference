@@ -50,6 +50,7 @@ fn edges_are_fractions_of_the_whole_image() {
 #[test]
 fn pick_unions_the_positive_component_around_the_best_cell() {
     let cells = grid(rect(0, 0, 400, 400), 4);
+    // One row of the 4x4 grid per line.
     #[rustfmt::skip]
     let probabilities = [
         0.1, 0.6, 0.0, 0.0,
@@ -67,6 +68,7 @@ fn pick_unions_the_positive_component_around_the_best_cell() {
 #[test]
 fn pick_joins_diagonal_neighbours() {
     let cells = grid(rect(0, 0, 400, 400), 4);
+    // One row of the 4x4 grid per line.
     #[rustfmt::skip]
     let probabilities = [
         0.9, 0.0, 0.0, 0.0,
