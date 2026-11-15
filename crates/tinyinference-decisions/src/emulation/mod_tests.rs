@@ -7,7 +7,7 @@ use serde_json::json;
 
 use super::crop::tests::{encode, picture};
 use super::*;
-use crate::{BoxQuestion, Noul, NoulAnswer};
+use crate::{BoxQuestion, ImageFormat, Noul, NoulAnswer};
 
 fn rect(left: u32, top: u32, right: u32, bottom: u32) -> Rect {
     Rect {
