@@ -32,6 +32,11 @@ pub(crate) fn decode(key: &str, asset: &ImageAsset) -> Result<DynamicImage> {
 /// break the maximum side, which then clamps the longer side.
 pub(crate) fn crop(image: &DynamicImage, rect: Rect) -> Result<(ImageAsset, usize)> {
     let (width, height) = (rect.width(), rect.height());
+    if width == 0 || height == 0 {
+        return Err(Error::invalid_request(
+            "an emulated Box image crop must not be empty",
+        ));
+    }
     let mut crop = image.crop_imm(rect.left, rect.top, width, height);
     let shorter = width.min(height);
     if shorter < MIN_SIDE {

@@ -76,8 +76,9 @@ The client sends `TypeSafe-Danger-Zone-Images: true` on any request with an
 image or a Box question, as the provider requires. `validate` checks the
 documented limits before anything is sent: PNG or JPEG whose header matches the
 declared format, 280 to 1568 pixels per side, 16 MiB per image and 32 MiB in
-all, and every asset key referenced by the state or a question. Images are
-neither resized nor rotated; that stays with the caller. A Box answer is always
+all, and every asset key referenced by the state or a question. Attached
+images are sent as given, never resized or rotated (emulated Box questions,
+below, send crops alongside rather than altering them). A Box answer is always
 one box, so ask a Noul alongside it when the thing may be absent.
 
 ## Emulated Box questions
