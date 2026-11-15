@@ -45,6 +45,7 @@
 //! decision probability.
 
 mod client;
+mod emulation;
 mod error;
 mod request;
 mod response;
