@@ -8,8 +8,8 @@
 //! refinement round grids that box again. Probes never reach the caller: the
 //! response carries exactly the caller's question ids.
 
-mod crop;
-mod geometry;
+pub(crate) mod crop;
+pub(crate) mod geometry;
 
 use std::collections::{BTreeMap, BTreeSet};
 

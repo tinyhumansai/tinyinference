@@ -48,6 +48,56 @@ impl Provider {
     }
 }
 
+/// How the client answers [`Question::Box`](crate::Question::Box).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BoxSupport {
+    /// Send Box questions to the provider as they are.
+    Native,
+    /// Replace each Box question with Noul questions about crops of its image
+    /// and build the Box answer from theirs. The caller still sends Box
+    /// questions and receives [`Answer::Box`](crate::Answer::Box) answers.
+    Emulated(BoxEmulation),
+}
+
+impl BoxSupport {
+    /// The default for `provider`: [`Self::Native`] when it
+    /// [answers Box](Provider::answers_box), else emulation with
+    /// [`BoxEmulation::default`].
+    #[must_use]
+    pub fn for_provider(provider: Provider) -> Self {
+        if provider.answers_box() {
+            Self::Native
+        } else {
+            Self::Emulated(BoxEmulation::default())
+        }
+    }
+}
+
+/// Settings for emulating Box questions with Noul questions over image crops.
+///
+/// Each Box question's image is cut into a `grid` by `grid` set of cells, and
+/// every cell is asked about as its own image. With `refine`, the box found is
+/// cut into the same grid again in a second, sequential round of requests.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BoxEmulation {
+    /// Cells per side, from 2 to 8; each round asks `grid * grid` Noul
+    /// questions per Box question.
+    pub grid: u32,
+    /// Whether to run the second, refining round.
+    pub refine: bool,
+}
+
+impl Default for BoxEmulation {
+    /// A 4 by 4 grid with refinement: up to 32 Noul questions per Box
+    /// question, and a box as fine as one sixteenth of a cell per side.
+    fn default() -> Self {
+        Self {
+            grid: 4,
+            refine: true,
+        }
+    }
+}
+
 /// Async Jev-compatible System One client.
 #[derive(Clone)]
 pub struct Client {
@@ -82,6 +132,8 @@ pub struct ClientConfig {
     pub retry: RetryPolicy,
     /// Sanitized product attribution for the exact `TinyHumans` proxy endpoint.
     pub(super) sdk_name: Option<String>,
+    /// Caller override of the provider's Box support.
+    pub(super) box_support: Option<BoxSupport>,
 }
 
 impl ClientConfig {
@@ -97,6 +149,7 @@ impl ClientConfig {
             timeout: Duration::from_secs(30),
             retry: RetryPolicy::default(),
             sdk_name: None,
+            box_support: None,
         }
     }
 
@@ -112,6 +165,7 @@ impl ClientConfig {
             timeout: Duration::from_secs(30),
             retry: RetryPolicy::default(),
             sdk_name: None,
+            box_support: None,
         }
     }
 
@@ -127,6 +181,7 @@ impl ClientConfig {
             timeout: Duration::from_secs(30),
             retry: RetryPolicy::default(),
             sdk_name: None,
+            box_support: None,
         }
     }
 
@@ -147,6 +202,7 @@ impl ClientConfig {
             timeout: Duration::from_secs(30),
             retry: RetryPolicy::default(),
             sdk_name: None,
+            box_support: None,
         }
     }
 
@@ -172,6 +228,7 @@ impl ClientConfig {
             timeout: Duration::from_secs(30),
             retry: RetryPolicy::default(),
             sdk_name: None,
+            box_support: None,
         }
     }
 
@@ -190,6 +247,7 @@ impl ClientConfig {
             timeout: Duration::from_secs(30),
             retry: RetryPolicy::default(),
             sdk_name: None,
+            box_support: None,
         }
     }
 
@@ -226,6 +284,22 @@ impl ClientConfig {
         self
     }
 
+    /// Answer Box questions as `support` says instead of as the provider's
+    /// default ([`BoxSupport::for_provider`]).
+    #[must_use]
+    pub fn with_box_support(mut self, support: BoxSupport) -> Self {
+        self.box_support = Some(support);
+        self
+    }
+
+    /// How this configuration answers Box questions: the override from
+    /// [`Self::with_box_support`], else the provider's default.
+    #[must_use]
+    pub fn box_support(&self) -> BoxSupport {
+        self.box_support
+            .unwrap_or_else(|| BoxSupport::for_provider(self.provider))
+    }
+
     /// Returns the exact endpoint override, when configured.
     #[must_use]
     pub fn endpoint_url(&self) -> Option<&str> {
@@ -247,6 +321,7 @@ impl fmt::Debug for ClientConfig {
             .field("timeout", &self.timeout)
             .field("retry", &self.retry)
             .field("sdk_name", &self.sdk_name)
+            .field("box_support", &self.box_support())
             .finish()
     }
 }
