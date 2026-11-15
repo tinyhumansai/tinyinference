@@ -170,7 +170,7 @@ impl Client {
             Provider::TypeSafe | Provider::OpenJev | Provider::SelfHosted => {
                 response.validate_for(request)
             }
-            Provider::OpenRouter => response.validate_for_openrouter(request),
+            Provider::OpenRouter | Provider::Surplus => response.validate_for_openrouter(request),
         }
     }
 }

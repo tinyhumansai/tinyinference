@@ -7,6 +7,8 @@ use crate::{Error, EvaluationResponse};
 const DEFAULT_SYSTEM_ONE_PATH: &str = "v1/systemone";
 const TINYHUMANS_SYSTEM_ONE_PATH: &str = "agent-integrations/openrouter/systemone";
 const OPENJEV_BASE_URL: &str = "https://api.openjev.sh";
+const SURPLUS_BASE_URL: &str = "https://api.surplusintelligence.ai";
+const SURPLUS_DECISIONS_PATH: &str = "v1/decisions";
 
 /// Hosted or self-hosted System One API provider.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -26,6 +28,24 @@ pub enum Provider {
     /// key may be empty for an unauthenticated local server, in which case no
     /// `Authorization` header is sent.
     SelfHosted,
+    /// Surplus Intelligence's decisions API, which serves `TypeSafe`'s Jev at
+    /// `/v1/decisions`.
+    ///
+    /// Responses name the resolved release in the `typesafe/` namespace, as
+    /// with `OpenRouter`. Surplus rejects Box questions, so the client
+    /// emulates them (see [`BoxSupport`]).
+    Surplus,
+}
+
+impl Provider {
+    /// Whether this provider answers [`Question::Box`](crate::Question::Box)
+    /// natively. A provider that does not gets Box questions emulated with
+    /// Noul questions over image crops unless the caller overrides it with
+    /// [`ClientConfig::with_box_support`].
+    #[must_use]
+    pub fn answers_box(self) -> bool {
+        !matches!(self, Self::Surplus)
+    }
 }
 
 /// Async Jev-compatible System One client.
@@ -104,6 +124,26 @@ impl ClientConfig {
             system_one_path: DEFAULT_SYSTEM_ONE_PATH,
             endpoint_url: None,
             provider: Provider::OpenJev,
+            timeout: Duration::from_secs(30),
+            retry: RetryPolicy::default(),
+            sdk_name: None,
+        }
+    }
+
+    /// Create configuration for Surplus Intelligence's decisions API at
+    /// `https://api.surplusintelligence.ai/v1/decisions`.
+    ///
+    /// Surplus serves Jev under release ids such as `jev-1.14`; set
+    /// [`EvaluationRequest::model`](crate::EvaluationRequest::model)
+    /// accordingly. Box questions are emulated because Surplus rejects them.
+    #[must_use]
+    pub fn surplus(api_key: impl Into<String>) -> Self {
+        Self {
+            api_key: ApiKey(api_key.into()),
+            base_url: SURPLUS_BASE_URL.to_owned(),
+            system_one_path: SURPLUS_DECISIONS_PATH,
+            endpoint_url: None,
+            provider: Provider::Surplus,
             timeout: Duration::from_secs(30),
             retry: RetryPolicy::default(),
             sdk_name: None,
