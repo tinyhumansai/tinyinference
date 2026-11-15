@@ -56,7 +56,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match result.response.answers.get("square") {
         Some(Answer::Box(found)) => println!(
             "box:      left {:.3} right {:.3} top {:.3} bottom {:.3} (confidence {:.2})",
-            found.edges.left, found.edges.right, found.edges.top, found.edges.bottom, found.confidence,
+            found.edges.left,
+            found.edges.right,
+            found.edges.top,
+            found.edges.bottom,
+            found.confidence,
         ),
         other => println!("unexpected answer: {other:?}"),
     }
