@@ -25,7 +25,10 @@ use crate::model::ModelResponse;
 /// provider-specific fields (for example a beta header's JSON companion, or
 /// an organization id) without the harness knowing about them. `on_response`
 /// runs after a successful response is parsed into JSON, before the adapter
-/// normalizes it, so a host can log or inspect the raw payload. `http`
+/// normalizes it, so a host can log or inspect the raw payload. An OpenAI
+/// `invoke` fulfilled by streaming (`OpenAiModel::with_invoke_via_stream`)
+/// has no single raw payload; it passes a Chat Completions body assembled from
+/// the collected stream instead, which parses back to the same answer. `http`
 /// overrides the adapter's own [`reqwest::Client`] (for a custom proxy,
 /// timeout, or TLS configuration) when set.
 ///
@@ -36,7 +39,9 @@ use crate::model::ModelResponse;
 pub struct ProviderRequestOptions {
     /// Invoked with the mutable wire payload immediately before it is sent.
     pub on_payload: Option<PayloadHook>,
-    /// Invoked with the raw response payload after a successful call.
+    /// Invoked with the raw response payload after a successful call (for an
+    /// OpenAI invoke fulfilled by streaming, a Chat Completions body assembled
+    /// from the stream).
     pub on_response: Option<ResponseHook>,
     /// HTTP client to use in place of the adapter's own, when set.
     pub http: Option<reqwest::Client>,

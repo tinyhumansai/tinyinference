@@ -408,11 +408,16 @@ pub(super) fn parse_chat_response(
         }
     }
 
+    // Thinking parts of a list `content` follow the side-channel reasoning.
+    let (text, content_reasoning) = choice
+        .message
+        .content
+        .map(split_response_content)
+        .unwrap_or_default();
+    reasoning.push_str(&content_reasoning);
+
     // Inline `<think>` extraction on the visible content, when enabled.
-    let visible = match (
-        choice.message.content.filter(|t| !t.is_empty()),
-        reasoning_tags,
-    ) {
+    let visible = match (Some(text).filter(|t| !t.is_empty()), reasoning_tags) {
         (Some(text), Some(config)) => {
             let (visible, inline) = extract_reasoning(config, &text);
             if !inline.is_empty() {
@@ -619,6 +624,82 @@ fn usd_cost_nanos(cost: &serde_json::Value) -> Option<i64> {
     Some((value * 1_000_000_000.0).round() as i64)
 }
 
+/// A Chat Completions body for a reply collected from a stream, in the shape
+/// [`parse_chat_response`] reads: visible text as `content`, thinking as
+/// `reasoning_content`, tool calls with stringified arguments, the finish
+/// reason, usage, the request's effective `model`, and any gateway extension
+/// fields kept on `raw`. An invalid tool call keeps its original argument text,
+/// so it reads back as invalid.
+///
+/// It lets a response observer see one body per successful call whether or
+/// not the call streamed; parsing it back yields the same answer.
+pub(super) fn assembled_completion_body(response: &ModelResponse, model: &str) -> Value {
+    let reasoning: String = response
+        .message
+        .content
+        .iter()
+        .filter_map(|block| block.as_thinking().map(|(text, _)| text))
+        .collect();
+    let mut message = json!({ "role": "assistant", "content": response.text() });
+    if !reasoning.is_empty() {
+        message["reasoning_content"] = json!(reasoning);
+    }
+    let tool_calls: Vec<Value> = response
+        .tool_calls()
+        .iter()
+        .map(|call| {
+            let arguments = match (&call.invalid, &call.arguments) {
+                (Some(_), Value::String(original)) => original.clone(),
+                _ => call.arguments.to_string(),
+            };
+            json!({
+                "id": call.id,
+                "type": "function",
+                "function": { "name": call.name, "arguments": arguments }
+            })
+        })
+        .collect();
+    if !tool_calls.is_empty() {
+        message["tool_calls"] = json!(tool_calls);
+    }
+    let mut body = json!({
+        "object": "chat.completion",
+        "model": model,
+        "choices": [{ "index": 0, "message": message, "finish_reason": response.finish_reason }]
+    });
+    if let Some(id) = &response.message.id {
+        body["id"] = json!(id);
+    }
+    if let Some(usage) = response.usage {
+        body["usage"] = json!({
+            "prompt_tokens": usage.input_tokens,
+            "completion_tokens": usage.output_tokens,
+            "total_tokens": usage.total_tokens,
+            "prompt_tokens_details": {
+                "cached_tokens": usage.cache_read_tokens,
+                "cache_write_tokens": usage.cache_creation_tokens
+            },
+            "completion_tokens_details": { "reasoning_tokens": usage.reasoning_tokens }
+        });
+    }
+    if let (Value::Object(body), Some(Value::Object(raw))) = (&mut body, &response.raw) {
+        for (key, value) in raw {
+            match (body.get_mut(key), value) {
+                (Some(Value::Object(known)), Value::Object(extra)) => {
+                    for (field, item) in extra {
+                        known.entry(field.clone()).or_insert_with(|| item.clone());
+                    }
+                }
+                (None, _) => {
+                    body.insert(key.clone(), value.clone());
+                }
+                _ => {}
+            }
+        }
+    }
+    body
+}
+
 /// Normalizes provider-specific reasoning/thinking payloads into text.
 ///
 /// OpenAI-compatible gateways do not agree on this field: some stream a plain
@@ -642,6 +723,43 @@ pub(super) fn reasoning_value_text(value: Value) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// Splits a response or delta `content` into `(visible text, reasoning)`.
+///
+/// A string is all visible text. In a list of parts, `text` parts are visible
+/// text, concatenated in order; `thinking` / `reasoning` parts are reasoning,
+/// read from their `thinking` field (a string or a list of text parts) or else
+/// their `text` field, and normalized like `reasoning_content`. Parts of any
+/// other type, and anything that is not an object, are skipped.
+pub(super) fn split_response_content(content: ResponseContentWire) -> (String, String) {
+    let parts = match content {
+        ResponseContentWire::Text(text) => return (text, String::new()),
+        ResponseContentWire::Parts(parts) => parts,
+    };
+    let mut text = String::new();
+    let mut reasoning = String::new();
+    for part in &parts {
+        match part.get("type").and_then(Value::as_str) {
+            Some("text") => {
+                if let Some(fragment) = part.get("text").and_then(Value::as_str) {
+                    text.push_str(fragment);
+                }
+            }
+            Some("thinking" | "reasoning") => {
+                if let Some(fragment) = part
+                    .get("thinking")
+                    .or_else(|| part.get("text"))
+                    .cloned()
+                    .and_then(reasoning_value_text)
+                {
+                    reasoning.push_str(&fragment);
+                }
+            }
+            _ => {}
+        }
+    }
+    (text, reasoning)
 }
 
 /// Extracts the reasoning/thinking text from a streamed delta, accepting the

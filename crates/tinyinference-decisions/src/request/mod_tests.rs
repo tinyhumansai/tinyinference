@@ -257,3 +257,142 @@ fn rejects_blank_score_and_noul_descriptions() {
     );
     assert!(noul.validate().is_err());
 }
+
+fn image_request(state: serde_json::Value) -> EvaluationRequest {
+    EvaluationRequest::new(
+        "jev-preview",
+        state,
+        BTreeMap::from([(
+            "found".to_owned(),
+            Question::Noul(Noul {
+                instructions: json!("Does `photo` show a bus?"),
+                criteria: None,
+            }),
+        )]),
+    )
+    .with_image(
+        "a3f1-photo",
+        ImageAsset::png(&super::image::tests::png_header(400, 300)),
+    )
+}
+
+#[test]
+fn a_text_request_has_no_assets_on_the_wire() {
+    let request = EvaluationRequest::jev(json!({"message": "review this"}), questions());
+    let wire = serde_json::to_value(&request).unwrap();
+    assert!(wire.get("assets").is_none());
+    assert!(!request.needs_image_opt_in());
+    assert_eq!(
+        serde_json::from_value::<EvaluationRequest>(wire).unwrap(),
+        request
+    );
+}
+
+#[test]
+fn an_image_request_pins_the_documented_asset_shape() {
+    let request = image_request(json!({"photo": "a3f1-photo"}));
+    request.validate().unwrap();
+    assert!(request.needs_image_opt_in());
+    let wire = serde_json::to_value(&request).unwrap();
+    let asset = &wire["assets"]["a3f1-photo"];
+    assert_eq!(asset["type"], "image");
+    assert_eq!(asset["format"], "png");
+    assert!(
+        asset["data_base64"]
+            .as_str()
+            .unwrap()
+            .starts_with("iVBORw0KGgo")
+    );
+    assert_eq!(
+        serde_json::from_value::<EvaluationRequest>(wire).unwrap(),
+        request
+    );
+    let jpeg: ImageFormat = serde_json::from_value(json!("jpeg")).unwrap();
+    assert_eq!(jpeg, ImageFormat::Jpg);
+    assert_eq!(serde_json::to_value(jpeg).unwrap(), json!("jpg"));
+}
+
+#[test]
+fn an_unreferenced_asset_is_rejected() {
+    let error = image_request(json!({"photo": "something else"}))
+        .validate()
+        .unwrap_err();
+    assert!(error.to_string().contains("not referenced"), "{error}");
+}
+
+#[test]
+fn asset_references_with_json_escapes_match_decoded_state() {
+    for key in ["C:\\shots\\a.png", "say \"cheese\".png", "tab\there.png"] {
+        let mut request = image_request(json!({ "photo": key }));
+        let image = request.assets.remove("a3f1-photo").unwrap();
+        request.assets.insert(key.to_owned(), image);
+        request.validate().unwrap();
+    }
+}
+
+#[test]
+fn asset_references_must_be_nonempty_and_short() {
+    let mut request = image_request(json!({"photo": "a3f1-photo"}));
+    let image = request.assets.remove("a3f1-photo").unwrap();
+    request.assets.insert(" ".into(), image.clone());
+    assert!(
+        request
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("must not be empty")
+    );
+
+    let long = "k".repeat(1025);
+    let mut request = image_request(json!({ "photo": long.clone() }));
+    request.assets.clear();
+    request.assets.insert(long, image);
+    assert!(
+        request
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("1024 bytes")
+    );
+}
+
+#[test]
+fn images_may_not_total_more_than_the_request_limit() {
+    let mut big = super::image::tests::png_header(400, 400);
+    big.resize(12 * 1024 * 1024, 0);
+    let mut request = image_request(json!({"a": "img-a", "b": "img-b", "c": "img-c"}));
+    request.assets.clear();
+    for key in ["img-a", "img-b", "img-c"] {
+        request = request.with_image(key, ImageAsset::png(&big));
+    }
+    let error = request.validate().unwrap_err();
+    assert!(error.to_string().contains("32 MiB"), "{error}");
+}
+
+#[test]
+fn a_box_question_needs_the_opt_in_and_nonempty_instructions() {
+    let request = EvaluationRequest::new(
+        "jev-preview",
+        json!({"page": "p1"}),
+        BTreeMap::from([(
+            "button".to_owned(),
+            Question::Box(BoxQuestion {
+                instructions: json!("the verify button in `page`"),
+            }),
+        )]),
+    );
+    assert!(request.needs_image_opt_in());
+    request.validate().unwrap();
+    assert_eq!(
+        serde_json::to_value(&request).unwrap()["questions"]["button"],
+        json!({"type": "box", "instructions": "the verify button in `page`"})
+    );
+    let mut empty = request;
+    empty.questions.insert(
+        "button".into(),
+        Question::Box(BoxQuestion {
+            instructions: json!(" "),
+        }),
+    );
+    assert!(empty.validate().is_err());
+}

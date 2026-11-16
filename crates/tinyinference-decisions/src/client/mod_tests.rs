@@ -164,6 +164,28 @@ async fn sends_the_documented_endpoint_and_bearer_header() {
 }
 
 #[tokio::test]
+async fn sends_the_image_opt_in_header_only_with_an_image() {
+    let (client, requests) = mock_client(
+        config("http://127.0.0.1:1".into()),
+        vec![response(200, &success(), ""), response(200, &success(), "")],
+    );
+    client.evaluate(&request()).await.unwrap();
+    let image = crate::request::image::tests::png_header(400, 300);
+    let mut with_image = request();
+    with_image.state = json!({"message": "review this", "photo": "img-1"});
+    let with_image = with_image.with_image("img-1", crate::ImageAsset::png(&image));
+    client.evaluate(&with_image).await.unwrap();
+    let requests = requests.lock().await;
+    assert!(requests[0].headers.get(IMAGE_OPT_IN_HEADER).is_none());
+    assert!(!requests[0].body.contains("assets"));
+    assert_eq!(
+        requests[1].headers.get(IMAGE_OPT_IN_HEADER).unwrap(),
+        "true"
+    );
+    assert!(requests[1].body.contains("\"assets\":{\"img-1\""));
+}
+
+#[tokio::test]
 async fn an_exact_endpoint_override_is_not_extended_with_a_provider_path() {
     let endpoint = "https://example.com/api/alpha/decisions";
     let config = ClientConfig::openrouter("secret-test-key").with_endpoint_url(endpoint);
@@ -802,4 +824,90 @@ async fn self_hosted_preserves_all_decision_types_and_rejects_invalid_answers() 
     assert!(matches!(*failure.error, Error::InvalidRequest { .. }));
     assert_eq!(failure.attempts, 0);
     assert!(requests.lock().await.is_empty());
+}
+
+fn surplus_request() -> EvaluationRequest {
+    let mut request = request();
+    request.model = "jev-1.14".into();
+    request
+}
+
+/// The live Surplus response shape (2026-11-15): an OpenRouter-style resolved
+/// model id plus generation id, provider, and cost fields the crate ignores.
+fn surplus_success(model: &str) -> String {
+    json!({
+        "model": model,
+        "answers": {
+            "route": {
+                "type": "choice",
+                "choice": "bob",
+                "probabilities": {"alice": 0.2, "bob": 0.8},
+                "confidence": 0.6
+            }
+        },
+        "usage": {
+            "input_tokens": 292,
+            "output_tokens": 20,
+            "cost": 0.000_012_2,
+            "cost_details": {"upstream_inference_cost": 0.000_012_2},
+            "is_byok": false
+        },
+        "id": "gen-dec-123",
+        "provider": "TypeSafe"
+    })
+    .to_string()
+}
+
+#[tokio::test]
+async fn surplus_posts_to_v1_decisions_and_accepts_a_namespaced_jev_release() {
+    let mut config = ClientConfig::surplus("secret-test-key");
+    config.retry.max_retries = 0;
+    let (client, requests) = mock_client(
+        config,
+        vec![response(
+            200,
+            &surplus_success("typesafe/jev-1.14-20261014"),
+            "",
+        )],
+    );
+
+    let result = client.evaluate(&surplus_request()).await.unwrap();
+
+    assert_eq!(result.response.model, "typesafe/jev-1.14-20261014");
+    assert_eq!(result.response.usage.input_tokens, Some(292));
+    assert_eq!(result.response.usage.cost_usd_nanos, Some(12_200));
+    let requests = requests.lock().await;
+    let url = reqwest::Url::parse(&requests[0].url).unwrap();
+    assert_eq!(url.host_str(), Some("api.surplusintelligence.ai"));
+    assert_eq!(url.path(), "/v1/decisions");
+    assert_eq!(
+        requests[0].headers.get("authorization").unwrap(),
+        "Bearer secret-test-key"
+    );
+    assert!(requests[0].body.contains("\"model\":\"jev-1.14\""));
+}
+
+#[tokio::test]
+async fn surplus_rejects_a_response_from_another_jev_release() {
+    let mut config = ClientConfig::surplus("secret-test-key");
+    config.retry.max_retries = 0;
+    let (client, _) = mock_client(
+        config,
+        vec![response(200, &surplus_success("typesafe/jev-1.13"), "")],
+    );
+    let failure = evaluation_failure(client.evaluate(&surplus_request()).await);
+    assert!(matches!(*failure.error, Error::InvalidResponse { .. }));
+}
+
+#[test]
+fn surplus_is_the_only_provider_without_native_box_questions() {
+    assert!(!Provider::Surplus.answers_box());
+    for provider in [
+        Provider::TypeSafe,
+        Provider::OpenRouter,
+        Provider::OpenJev,
+        Provider::SelfHosted,
+    ] {
+        assert!(provider.answers_box(), "{provider:?}");
+    }
 }

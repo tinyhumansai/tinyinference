@@ -20,7 +20,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 # The host decides which driver backs this storage port.
-tinystoragedrivers-api = { version = "2.1.2", git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "6226b9484c8bd01c58741718cd89ba90a13a36bb" }
+tinystoragedrivers-api = { version = "2.1.2", git = "https://github.com/tinyhumansai/tinystoragedrivers", rev = "6355ea266e6701c3b90b0f357cdaba8baa7f260d" }
 tracing = { workspace = true }
 url = { workspace = true }
 zeroize = "1"

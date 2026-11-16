@@ -135,10 +135,17 @@ pub(crate) fn build_openai_model_with(
     Arc::new(configure_openai_model(model, config, http))
 }
 
+/// Provider name of the generic OpenAI-compatible local runtime.
+const LOCAL_OPENAI_PROVIDER: &str = "local-openai";
+
 /// Builds a local OpenAI-compatible model from a completed config: no
 /// Anthropic cache markers, and every system message sent as one leading
 /// `system` message, because local chat templates commonly reject a `system`
 /// turn anywhere but first (tinyhumansai/openhuman#7440).
+///
+/// A `local-openai` model (any OpenAI-compatible endpoint, often a reseller or
+/// marketplace) fulfils `invoke` by streaming; see
+/// [`OpenAiModel::with_invoke_via_stream`].
 pub(crate) fn build_local_openai_model_with(
     config: OpenAiConfig<'_>,
     http: Option<reqwest::Client>,
@@ -151,7 +158,8 @@ pub(crate) fn build_local_openai_model_with(
     )
     .with_auth_style(config.auth_style.clone())
     .with_anthropic_cache_control(false)
-    .with_single_system_message();
+    .with_single_system_message()
+    .with_invoke_via_stream(config.provider_name == LOCAL_OPENAI_PROVIDER);
 
     Arc::new(configure_openai_model(model, config, http))
 }
@@ -255,6 +263,41 @@ pub fn build_local_runtime_chat_model(
     temperature_override: Option<f64>,
     num_ctx: Option<u32>,
 ) -> Arc<dyn ChatModel<()>> {
+    build_local_runtime_chat_model_with_native_tools(
+        provider_name,
+        endpoint,
+        api_key,
+        auth_style,
+        model,
+        temperature_unsupported_models,
+        temperature_override,
+        num_ctx,
+        false,
+    )
+}
+
+/// [`build_local_runtime_chat_model`] with native tool calling chosen by the
+/// host instead of always off.
+///
+/// Off is the safe default for a model on a local runtime, which often cannot
+/// take `tools`. But `local-openai` also fronts hosted OpenAI-compatible
+/// gateways whose models call tools natively and whose servers parse
+/// `<tool_call>` text in the model's own template: prompted with the JSON-in-tag
+/// protocol there, the gateway reads the JSON as the tool's name. A host that
+/// knows its endpoint supports native calls passes `true`; nothing else about
+/// the local-runtime profile changes.
+#[allow(clippy::too_many_arguments)]
+pub fn build_local_runtime_chat_model_with_native_tools(
+    provider_name: &str,
+    endpoint: &str,
+    api_key: &str,
+    auth_style: AuthStyle,
+    model: &str,
+    temperature_unsupported_models: &[String],
+    temperature_override: Option<f64>,
+    num_ctx: Option<u32>,
+    native_tool_calling: bool,
+) -> Arc<dyn ChatModel<()>> {
     let default_provider_options = num_ctx.map(|value| {
         json!({
             "options": { "num_ctx": value }
@@ -271,7 +314,7 @@ pub fn build_local_runtime_chat_model(
             temperature_override,
             merge_system_into_user: false,
             extra_headers: &[],
-            native_tool_calling: Some(false),
+            native_tool_calling: Some(native_tool_calling),
             vision: Some(false),
             default_provider_options,
             responses_api_primary: false,

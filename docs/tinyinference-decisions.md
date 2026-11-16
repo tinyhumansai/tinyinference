@@ -26,9 +26,9 @@ println!("{:?}", result.response.answers["route"]);
 # }
 ```
 
-The API key is read from `TYPESAFE_API_KEY` or supplied through `ClientConfig`. Keys are redacted from `Debug` output and never included in errors. The client supports TypeSafe, OpenRouter, and OpenJEV endpoints, bounded retries, request and response validation, and explicit per-call failure metadata.
+The API key is read from `TYPESAFE_API_KEY` or supplied through `ClientConfig`. Keys are redacted from `Debug` output and never included in errors. The client supports TypeSafe, OpenRouter, OpenJEV, and Surplus Intelligence endpoints, bounded retries, request and response validation, and explicit per-call failure metadata.
 
-For OpenRouter, construct `ClientConfig::openrouter("<key>")`. Tiny Humans proxy users can use `ClientConfig::tinyhumans_openrouter("<key>")`. For OpenJEV, use `ClientConfig::openjev("<key>")` with `EvaluationRequest::openjev(...)`, which selects OpenJEV's `openjev` model id. Custom endpoints can be configured with `.with_endpoint_url(...)`. For a self-hosted Jev-compatible decision model, use `ClientConfig::self_hosted("<endpoint>", "<key or empty>")` and set `EvaluationRequest::model` to the model the server answers as; the response must echo it.
+For OpenRouter, construct `ClientConfig::openrouter("<key>")`. Tiny Humans proxy users can use `ClientConfig::tinyhumans_openrouter("<key>")`. For OpenJEV, use `ClientConfig::openjev("<key>")` with `EvaluationRequest::openjev(...)`, which selects OpenJEV's `openjev` model id. For Surplus Intelligence, use `ClientConfig::surplus("<key>")` with an explicit release such as `EvaluationRequest::new("jev-1.14", ...)`; it posts to `https://api.surplusintelligence.ai/v1/decisions`, and the response may name the resolved release (`typesafe/jev-1.14-20261014`), as on OpenRouter. Custom endpoints can be configured with `.with_endpoint_url(...)`. For a self-hosted Jev-compatible decision model, use `ClientConfig::self_hosted("<endpoint>", "<key or empty>")` and set `EvaluationRequest::model` to the model the server answers as; the response must echo it.
 
 The live example spends a real API call:
 
@@ -37,6 +37,98 @@ TYPESAFE_API_KEY='<key>' cargo run -p tinyinference-decisions --example basic
 ```
 
 The crate is part of the TinyInference workspace and is licensed GPL-3.0-only.
+
+## Images and Box questions
+
+Jev 1.13 and later read images, and Jev 1.14 (`jev-preview`) adds the Box
+question, which returns where one thing is in an image. Attach an image with
+`EvaluationRequest::with_image(key, ImageAsset::png(&bytes))` and put `key`
+somewhere in `state` (for example `{"page": key}`), so the model knows where it
+belongs. Questions point at the state field in backticks.
+
+```rust,no_run
+use std::collections::BTreeMap;
+use serde_json::json;
+use tinyinference_decisions::{
+    Answer, BoxQuestion, Client, EvaluationRequest, ImageAsset, Question,
+};
+
+# async fn run(png: Vec<u8>) -> Result<(), Box<dyn std::error::Error>> {
+let request = EvaluationRequest::new(
+    "jev-preview",
+    json!({"page": "shot-1"}),
+    BTreeMap::from([(
+        "button".to_owned(),
+        Question::Box(BoxQuestion { instructions: json!("the Verify button in `page`") }),
+    )]),
+)
+.with_image("shot-1", ImageAsset::png(&png));
+let result = Client::from_env()?.evaluate(&request).await?;
+if let Some(Answer::Box(answer)) = result.response.answers.get("button") {
+    let (x, y) = answer.edges.centre(); // fractions of width and height
+    println!("{x} {y} at confidence {}", answer.confidence);
+}
+# Ok(())
+# }
+```
+
+The client sends `TypeSafe-Danger-Zone-Images: true` on any request with an
+image or a Box question, as the provider requires. `validate` checks the
+documented limits before anything is sent: PNG or JPEG whose header matches the
+declared format, 280 to 1568 pixels per side, 16 MiB per image and 32 MiB in
+all, and every asset key referenced by the state or a question. Attached
+images are sent as given, never resized or rotated (emulated Box questions,
+below, send crops alongside rather than altering them). A Box answer is always
+one box, so ask a Noul alongside it when the thing may be absent.
+
+## Emulated Box questions
+
+Some providers serve Jev without the Box question: Surplus Intelligence
+answers a request containing one with 400 (`questions.<id> has a type that is
+not one of noul | choice | score`), while Noul questions about images work.
+`Provider::answers_box()` reports this, and `ClientConfig::box_support()`
+resolves it to `BoxSupport::Native` or `BoxSupport::Emulated(BoxEmulation)`.
+`ClientConfig::with_box_support(...)` overrides the provider's default in
+either direction. Callers do not change anything else: they send Box
+questions and receive `Answer::Box` answers whose ids match their questions.
+
+Emulation works inside `Client::evaluate`:
+
+1. Each Box question's image is the asset whose key its instructions mention;
+   else the asset held by a top-level state field it names in backticks
+   (`` `page` `` with `{"page": "shot-1"}`); else the request's only image.
+   Anything else is an `Error::InvalidRequest` naming the question, raised
+   before any request is sent.
+2. The image is decoded and cut into a `grid` by `grid` set of cells (4 by 4
+   by default). Each cell is upscaled (bilinear) until its shorter side is
+   280 pixels, encoded as PNG, and asked about as a Noul: does this tile show
+   all or part of the original instructions?
+3. Probes are packed into requests holding at most 32 MiB of images; a crop is
+   at most 16 MiB. They share a request with the caller's other questions
+   unless that request carries the image the crops were cut from, so a tile
+   is never judged next to the whole picture. Sub-requests run one after
+   another, each with the normal retry policy and response validation.
+4. The box is the bounding rectangle of the cells with probability 0.5 or more
+   that connect (diagonals included) to the best cell, so a second instance
+   elsewhere does not stretch it. With no such cell it is the best cell
+   alone. Confidence is the best cell's probability. Edges are fractions of
+   the original image.
+5. With `refine` (the default), the box is cut into the same grid again and
+   asked about in one more round. The refined box replaces the first only when
+   one of its cells reaches 0.5. Refinement is skipped when the box already
+   covers the whole image or its cells would be under 32 pixels; a box more
+   than 4 times longer than wide (or the reverse) is first grown about its
+   centre so its cells can be upscaled within the 1568-pixel maximum.
+
+Probe question ids and asset keys start with `__tinyinference_box`, which
+emulating requests reserve. The result's `usage` sums every sub-request (a
+field stays absent only when no sub-request reported it), `attempts` counts
+every HTTP attempt, `latency` covers them all, and `request_id` is the first
+one returned. A Box question costs up to `2 * grid * grid` Noul questions with
+an image each, and up to three sequential HTTP requests in the usual case
+(the caller's other questions with the original image, then each round). The
+precision is one cell, or one cell of a cell after refinement; this is a
+coarse locator, not a native detector.
 
 ## Local decision models
 

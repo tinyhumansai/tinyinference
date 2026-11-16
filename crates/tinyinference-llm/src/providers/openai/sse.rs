@@ -236,7 +236,17 @@ impl OpenAiStreamAcc {
             if let Some(reason) = choice.finish_reason {
                 self.finish_reason = Some(reason);
             }
-            let reasoning = delta_reasoning_text(&mut choice.delta);
+            // A list `content` can carry thinking and text parts in one chunk;
+            // its reasoning streams before its text, after any side-channel
+            // reasoning, so the block order stays thinking -> text.
+            let (content, content_reasoning) = choice
+                .delta
+                .content
+                .take()
+                .map(split_response_content)
+                .unwrap_or_default();
+            let mut reasoning = delta_reasoning_text(&mut choice.delta);
+            reasoning.push_str(&content_reasoning);
             if !reasoning.is_empty() {
                 self.reasoning.push_str(&reasoning);
                 self.push_block_delta(BlockRequest::Reasoning, &reasoning, pending);
@@ -246,7 +256,7 @@ impl OpenAiStreamAcc {
                     tool_call: None,
                 }));
             }
-            if let Some(content) = choice.delta.content.filter(|c| !c.is_empty()) {
+            if !content.is_empty() {
                 // Retain the raw content so the terminal response can recompute
                 // an authoritative inline-tag split (see `into_response`).
                 self.text.push_str(&content);
@@ -710,7 +720,27 @@ impl SseState {
                 self.acc.keep_usage_extensions(usage);
             }
         }
-        if let Ok(chunk) = serde_json::from_value::<ChatCompletionChunk>(value) {
+        let chunk = match serde_json::from_value::<ChatCompletionChunk>(value) {
+            Ok(chunk) => Some(chunk),
+            Err(error) => {
+                // Still skipped, but never silently: a dropped chunk loses
+                // whatever text it carried, and a silent drop hides that the
+                // answer arrived truncated. The payload can hold answer or
+                // reasoning text, so only DEBUG carries it, truncated.
+                tracing::warn!(
+                    provider = %self.provider,
+                    model = %self.model,
+                    %error,
+                    "openai sse: skipped a chunk that does not match the chunk schema"
+                );
+                tracing::debug!(
+                    payload = %log_preview(payload),
+                    "openai sse: skipped chunk payload"
+                );
+                None
+            }
+        };
+        if let Some(chunk) = chunk {
             // `resolve_slot` grows the slot vector up to the wire index, so an
             // out-of-range index is rejected before it can size an allocation.
             if let Some(index) = chunk
@@ -802,6 +832,18 @@ impl SseState {
             error.partial_message = Some(partial);
         }
         ModelStreamItem::ProviderFailed(error)
+    }
+}
+
+/// Characters of an SSE payload kept when one is logged.
+const LOG_PREVIEW_CHARS: usize = 512;
+
+/// The first [`LOG_PREVIEW_CHARS`] characters of `payload` (UTF-8 safe),
+/// marked with `...` when cut, so a log line stays bounded.
+fn log_preview(payload: &str) -> String {
+    match payload.char_indices().nth(LOG_PREVIEW_CHARS) {
+        Some((end, _)) => format!("{}...", &payload[..end]),
+        None => payload.to_string(),
     }
 }
 

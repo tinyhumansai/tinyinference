@@ -27,3 +27,11 @@ The endpoint is used exactly as given and must pass the same URL checks. There
 is no default model, so callers set `EvaluationRequest::model`; the response
 must echo that model id. An empty key is allowed for unauthenticated local
 servers and then no `Authorization` header is sent.
+
+`ClientConfig::surplus` targets Surplus Intelligence at
+`https://api.surplusintelligence.ai/v1/decisions` and validates the response
+model like OpenRouter. Surplus rejects Box questions, so its default
+`BoxSupport` is `Emulated`: `emulated.rs` sends the probe requests planned by
+`crate::emulation` one after another through the same retry loop and
+response validation, then validates the synthesized response against the
+caller's request. `with_box_support` overrides the provider default.

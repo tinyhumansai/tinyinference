@@ -376,3 +376,75 @@ fn response_answer_types_round_trip_with_optional_usage() {
         without_usage
     );
 }
+
+fn box_request() -> EvaluationRequest {
+    EvaluationRequest::new(
+        "jev-preview",
+        json!({"page": "p1"}),
+        BTreeMap::from([(
+            "button".to_owned(),
+            Question::Box(crate::BoxQuestion {
+                instructions: json!("the verify button in `page`"),
+            }),
+        )]),
+    )
+}
+
+fn box_response(edges: serde_json::Value, confidence: f64) -> EvaluationResponse {
+    serde_json::from_value(json!({
+        "model": "jev-preview",
+        "answers": {"button": {"type": "box", "box": edges, "confidence": confidence}},
+        "usage": {"input_tokens": 900, "output_tokens": 0}
+    }))
+    .unwrap()
+}
+
+#[test]
+fn a_box_answer_decodes_and_reports_its_centre() {
+    let response = box_response(
+        json!({"top": 0.8, "bottom": 0.9, "left": 0.7, "right": 0.9}),
+        0.93,
+    );
+    response.validate_for(&box_request()).unwrap();
+    let Answer::Box(answer) = &response.answers["button"] else {
+        panic!("expected a box answer");
+    };
+    let (x, y) = answer.edges.centre();
+    assert!((x - 0.8).abs() < 1e-9 && (y - 0.85).abs() < 1e-9);
+}
+
+#[test]
+fn a_box_answer_with_inverted_or_out_of_range_edges_is_rejected() {
+    let inverted = box_response(
+        json!({"top": 0.9, "bottom": 0.1, "left": 0.1, "right": 0.2}),
+        0.5,
+    );
+    assert!(inverted.validate_for(&box_request()).is_err());
+    let outside = box_response(
+        json!({"top": 0.1, "bottom": 1.2, "left": 0.1, "right": 0.2}),
+        0.5,
+    );
+    assert!(outside.validate_for(&box_request()).is_err());
+    let unsure = box_response(
+        json!({"top": 0.1, "bottom": 0.2, "left": 0.1, "right": 0.2}),
+        1.5,
+    );
+    assert!(unsure.validate_for(&box_request()).is_err());
+}
+
+#[test]
+fn a_box_answer_to_a_noul_question_is_a_type_mismatch() {
+    let mut request = box_request();
+    request.questions.insert(
+        "button".into(),
+        Question::Noul(Noul {
+            instructions: json!("Is there a button?"),
+            criteria: None,
+        }),
+    );
+    let response = box_response(
+        json!({"top": 0.1, "bottom": 0.2, "left": 0.1, "right": 0.2}),
+        0.5,
+    );
+    assert!(response.validate_for(&request).is_err());
+}

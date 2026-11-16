@@ -47,7 +47,7 @@ jobs:
         run: cargo +stable doc --no-deps --all-features
 
   msrv:
-    name: Rust 1.88 MSRV
+    name: Rust 1.89 MSRV
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -55,10 +55,10 @@ jobs:
           persist-credentials: false
 
       - name: Install declared MSRV
-        run: rustup toolchain install 1.88.0 --profile minimal
+        run: rustup toolchain install 1.89.0 --profile minimal
 
       - name: Build with the declared MSRV
-        run: cargo +1.88.0 build --all-targets --all-features
+        run: cargo +1.89.0 build --all-targets --all-features
 
   supply-chain:
     name: Supply chain

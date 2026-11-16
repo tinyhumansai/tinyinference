@@ -50,6 +50,45 @@ fn local_runtime_builder_disables_native_tools_and_vision() {
 }
 
 #[test]
+fn local_runtime_builder_can_opt_into_native_tools() {
+    // An OpenAI-compatible endpoint behind `local-openai` may serve a model
+    // with working native tool calls (GLM on a hosted gateway). Prompting it
+    // with the text protocol instead lets the gateway's own tool parser read
+    // the JSON-in-tag call as a tool *name*, so the host must be able to
+    // turn native calls on for it.
+    let model = build_local_runtime_chat_model_with_native_tools(
+        "local-openai",
+        "https://gateway.example/v1",
+        "secret",
+        AuthStyle::Bearer,
+        "glm-5.3-flash",
+        &[],
+        None,
+        None,
+        true,
+    );
+    let profile = model.profile().expect("openai models expose a profile");
+    assert!(profile.tool_calling);
+    // Everything else stays the local-runtime profile.
+    assert!(!profile.modalities.image_in);
+    assert!(!profile.mid_conversation_system_messages);
+    assert!(profile.hoists_system_messages);
+
+    let off = build_local_runtime_chat_model_with_native_tools(
+        "local-openai",
+        "https://gateway.example/v1",
+        "secret",
+        AuthStyle::Bearer,
+        "glm-5.3-flash",
+        &[],
+        None,
+        None,
+        false,
+    );
+    assert!(!off.profile().expect("profile").tool_calling);
+}
+
+#[test]
 fn openrouter_endpoints_are_recognized() {
     assert!(endpoint_is_openrouter("https://openrouter.ai/api/v1"));
     assert!(endpoint_is_openrouter("HTTPS://OpenRouter.ai:443/api/v1/"));
