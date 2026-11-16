@@ -22,7 +22,9 @@ use serde_json::Value;
 
 use super::response::{parse_usage, tool_call};
 use crate::message::{AssistantMessage, ContentBlock, MessageDelta, MessageOrigin};
-use crate::model::{ModelResponse, ModelStream, ModelStreamItem, ProviderError};
+use crate::model::{
+    ModelResponse, ModelStream, ModelStreamItem, ProviderError, canonical_finish_reason,
+};
 use crate::tool::{ToolCall, ToolDelta};
 use crate::usage::Usage;
 use crate::{Error, Result};
@@ -203,7 +205,7 @@ impl Acc {
                 origin: None,
             },
             usage: self.usage,
-            finish_reason: self.finish,
+            finish_reason: self.finish.map(canonical_finish_reason),
             raw: None,
             resolved_model: None,
             continue_turn: None,

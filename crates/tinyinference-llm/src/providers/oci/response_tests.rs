@@ -101,3 +101,20 @@ fn total_tokens_falls_back_to_the_sum() {
     let usage = parse_usage(&json!({"promptTokens": 2, "completionTokens": 3}));
     assert_eq!(usage.total_tokens, 5);
 }
+
+#[test]
+fn output_limit_finish_reasons_are_canonical() {
+    let cohere = json!({"chatResponse": {
+        "apiFormat": "COHERE",
+        "text": "Cut",
+        "finishReason": "MAX_TOKENS"
+    }});
+    let generic = json!({"chatResponse": {"apiFormat": "GENERIC", "choices": [{
+        "message": {"role": "ASSISTANT", "content": [{"type": "TEXT", "text": "Cut"}]},
+        "finishReason": "length"
+    }]}});
+    for body in [cohere, generic] {
+        let response = parse_response(body).unwrap();
+        assert_eq!(response.finish_reason.as_deref(), Some("length"));
+    }
+}

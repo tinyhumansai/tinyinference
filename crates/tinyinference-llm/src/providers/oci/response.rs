@@ -4,7 +4,7 @@
 use serde_json::Value;
 
 use crate::message::{AssistantMessage, ContentBlock};
-use crate::model::ModelResponse;
+use crate::model::{ModelResponse, canonical_finish_reason};
 use crate::tool::ToolCall;
 use crate::usage::Usage;
 use crate::{Error, Result};
@@ -67,7 +67,7 @@ pub(crate) fn parse_response(body: Value) -> Result<ModelResponse> {
             origin: None,
         },
         usage,
-        finish_reason,
+        finish_reason: finish_reason.map(canonical_finish_reason),
         raw: Some(body),
         resolved_model: None,
         continue_turn: None,

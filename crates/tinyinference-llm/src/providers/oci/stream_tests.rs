@@ -159,3 +159,13 @@ async fn error_event_and_bad_json_fail_the_stream() {
         Some(ModelStreamItem::ProviderFailed(_))
     ));
 }
+
+#[tokio::test]
+async fn output_limit_finish_reason_is_canonical() {
+    let items = collect(vec![
+        "data: {\"apiFormat\":\"COHERE\",\"text\":\"Cut\"}\n",
+        "data: {\"apiFormat\":\"COHERE\",\"text\":\"Cut\",\"finishReason\":\"MAX_TOKENS\"}\n",
+    ])
+    .await;
+    assert_eq!(completed(&items).finish_reason.as_deref(), Some("length"));
+}
