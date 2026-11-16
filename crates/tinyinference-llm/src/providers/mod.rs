@@ -15,6 +15,7 @@
 //! | [`MockModel`] | Implemented — deterministic, no network |
 //! | [`openai`] (and OpenAI-compatible endpoints) | Implemented |
 //! | [`anthropic`] (Messages API, including prompt caching) | Implemented |
+//! | [`oci`] (OCI Generative AI: OpenAI-compatible and native chat) | Implemented |
 //!
 //! [`MockModel`] is always compiled and needs no network, keeping the default
 //! build offline and deterministic. The [`openai`] module is always compiled
@@ -45,6 +46,7 @@ mod types;
 // added behind their own Cargo feature.
 pub mod anthropic;
 pub mod http;
+pub mod oci;
 pub mod omission;
 pub mod openai;
 pub mod overrides;
