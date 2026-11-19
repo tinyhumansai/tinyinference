@@ -28,6 +28,17 @@ pub fn context_window_with_local_fallback(
     }
     let kind = local_kind?;
     let profile = profile_for_kind(kind);
+    if matches!(kind, LocalProviderKind::Mlx | LocalProviderKind::Omlx)
+        && let Some(window) = model_dir_context_window(model)
+    {
+        tracing::debug!(
+            model,
+            provider = kind.as_str(),
+            context_window = window,
+            "using context window from the model directory's config.json"
+        );
+        return Some(window);
+    }
     if let Some(window) = profile.default_context_window {
         tracing::debug!(
             model,
@@ -45,6 +56,28 @@ pub fn context_window_with_local_fallback(
         "local provider has no context default; using conservative floor"
     );
     Some(CONSERVATIVE_LOCAL_CONTEXT_FLOOR)
+}
+
+/// Context window a local model directory declares in its `config.json`.
+///
+/// MLX servers (`mlx_lm`, `mlx_vlm`) report no limits, and their model id is
+/// the directory the weights were loaded from. When `model` is such a
+/// directory, reads `max_position_embeddings` from the top level or from a
+/// nested `text_config` (multimodal checkpoints). Returns `None` for anything
+/// that is not a readable directory with a positive value.
+///
+/// shortcut: the model's trained maximum, not what the host's memory can hold;
+/// a host that knows better sets an explicit override.
+pub fn model_dir_context_window(model: &str) -> Option<u64> {
+    let path = std::path::Path::new(model.trim()).join("config.json");
+    if !path.is_absolute() {
+        return None;
+    }
+    let config: serde_json::Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    [&config, &config["text_config"]]
+        .iter()
+        .find_map(|section| section["max_position_embeddings"].as_u64())
+        .filter(|window| *window > 0)
 }
 
 /// Identifies a local provider type.

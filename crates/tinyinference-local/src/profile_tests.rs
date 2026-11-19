@@ -1,5 +1,54 @@
 use super::*;
 
+fn model_dir(config: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("config.json"), config).unwrap();
+    dir
+}
+
+#[test]
+fn mlx_window_comes_from_the_model_directory_config() {
+    let flat = model_dir(r#"{"max_position_embeddings": 32768}"#);
+    let nested = model_dir(r#"{"text_config": {"max_position_embeddings": 262144}}"#);
+    let flat_id = flat.path().to_str().unwrap();
+    let nested_id = nested.path().to_str().unwrap();
+    assert_eq!(
+        context_window_with_local_fallback(flat_id, None, Some(LocalProviderKind::Mlx)),
+        Some(32_768)
+    );
+    assert_eq!(
+        context_window_with_local_fallback(nested_id, None, Some(LocalProviderKind::Omlx)),
+        Some(262_144)
+    );
+    // An explicit window still wins, and other runtimes ignore the directory.
+    assert_eq!(
+        context_window_with_local_fallback(flat_id, Some(8_000), Some(LocalProviderKind::Mlx)),
+        Some(8_000)
+    );
+    assert_eq!(
+        context_window_with_local_fallback(flat_id, None, Some(LocalProviderKind::Ollama)),
+        Some(8_192)
+    );
+}
+
+#[test]
+fn mlx_window_falls_back_when_the_model_directory_is_unusable() {
+    let missing_value = model_dir(r#"{"hidden_size": 4096}"#);
+    let broken = model_dir("not json");
+    for dir in [&missing_value, &broken] {
+        assert_eq!(
+            context_window_with_local_fallback(
+                dir.path().to_str().unwrap(),
+                None,
+                Some(LocalProviderKind::Mlx)
+            ),
+            Some(4_096)
+        );
+    }
+    assert_eq!(model_dir_context_window("relative/path"), None);
+    assert_eq!(model_dir_context_window("/no/such/dir"), None);
+}
+
 #[test]
 fn local_context_fallback_uses_profiles_and_conservative_floor() {
     assert_eq!(
