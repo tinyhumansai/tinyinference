@@ -132,9 +132,14 @@ fn first_number(text: &str, window: usize) -> Option<u64> {
 /// window.
 fn trailing_number(text: &str) -> Option<u64> {
     let trimmed = text.trim_end();
+    // Step past the whole character that precedes the digits: it can be
+    // multi-byte (a no-break space, a CJK character), and `index + 1` would
+    // land inside it.
     let begin = trimmed
-        .rfind(|character: char| !(character.is_ascii_digit() || character == ','))
-        .map_or(0, |index| index + 1);
+        .char_indices()
+        .rev()
+        .find(|&(_, character)| !(character.is_ascii_digit() || character == ','))
+        .map_or(0, |(index, character)| index + character.len_utf8());
     let digits = trimmed[begin..].trim_start_matches(',');
     if digits.is_empty() {
         return None;
